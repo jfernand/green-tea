@@ -27,5 +27,6 @@ swap_context:
 _bootstrap_entry:
 bootstrap_entry:
     mov rdi, r15 // task pointer from r15 -> first argument
+    and rsp, -16 // SysV ABI: rsp must be 16-byte aligned right before a call
     call r14 // call function pointer
     ud2 // trigger invalid opcode execution

@@ -53,6 +53,17 @@ extern "C" fn task_entry(task: *mut Task) -> ! {
 pub static mut MAIN: Context = unsafe { std::mem::zeroed() };
 pub static mut CURRENT: *mut Task = core::ptr::null_mut();
 
+/// Where a new task's `rsp` starts. The slot it points to holds the address the first
+/// `swap_context` will `ret` into (`bootstrap_entry`).
+///
+/// That slot must sit at an address ≡ 8 (mod 16): after `ret` pops it, rsp ≡ 0, and
+/// `call r14` then pushes to ≡ 8, which is what the SysV ABI expects at function entry.
+/// `bootstrap_entry` also does `and rsp, -16` before the call, so this is belt and braces.
+fn initial_sp(stack: &Stack) -> *mut u64 {
+    let top = (stack.top() as usize) & !0xF;
+    (top - 24) as *mut u64
+}
+
 pub fn spawn(func: impl FnOnce() + 'static) -> Box<Task> {
     let stack = Stack::new(32 * 1024);
     let mut task = Box::new(Task {
@@ -62,10 +73,7 @@ pub fn spawn(func: impl FnOnce() + 'static) -> Box<Task> {
         done: false,
     });
     unsafe {
-        let sp = (task
-            .stack
-            .top() as *mut u64)
-            .sub(2);
+        let sp = initial_sp(&task.stack);
         sp.write(bootstrap_entry as *const () as usize as u64);
         task.context
             .rsp = sp as u64;
@@ -83,7 +91,9 @@ pub fn yield_now() {
 
 #[cfg(test)]
 mod tests {
-    use crate::context::{Context, MAIN, Task, bootstrap_entry, swap_context, task_entry};
+    use crate::context::{
+        Context, MAIN, Task, bootstrap_entry, initial_sp, swap_context, task_entry,
+    };
     use crate::stack::Stack;
 
     #[test_log::test]
@@ -102,10 +112,7 @@ mod tests {
         });
 
         unsafe {
-            let sp = (task
-                .stack
-                .top() as *mut u64)
-                .sub(2);
+            let sp = initial_sp(&task.stack);
             sp.write(bootstrap_entry as *const () as usize as u64);
             task.context
                 .rsp = sp as u64;
@@ -168,10 +175,7 @@ mod tests {
 
         unsafe {
             (*std::ptr::addr_of_mut!(LOG)).clear();
-            let sp = (task
-                .stack
-                .top() as *mut u64)
-                .sub(2);
+            let sp = initial_sp(&task.stack);
             sp.write(bootstrap_entry as *const () as usize as u64);
             task.context
                 .rsp = sp as u64;
