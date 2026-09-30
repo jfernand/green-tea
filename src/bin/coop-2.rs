@@ -1,11 +1,5 @@
-use crate::context::{CURRENT, MAIN, spawn, swap_context, yield_now};
-use std::arch::global_asm;
+use green_tea::context::{CURRENT, MAIN, spawn, swap_context, yield_now};
 use tracing::Level;
-
-mod stack;
-mod context;
-
-global_asm!(include_str!("context.s"));
 
 fn main() {
     tracing_subscriber::fmt()
@@ -26,6 +20,3 @@ fn main() {
     }
     println!("main: all tasks finished");
 }
-
-
-

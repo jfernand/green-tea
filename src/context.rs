@@ -22,9 +22,9 @@ unsafe extern "C" {
 pub struct Task {
     #[allow(dead_code)]
     stack: Stack,
-    pub(crate) context: Context,
+    pub context: Context,
     func: Option<Box<dyn FnOnce()>>,
-    pub(crate) done: bool,
+    pub done: bool,
 }
 
 extern "C" fn task_entry(task: *mut Task) -> ! {
