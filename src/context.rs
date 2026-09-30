@@ -1,4 +1,5 @@
 use crate::stack::Stack;
+use std::collections::VecDeque;
 
 #[allow(dead_code)]
 #[derive(Debug, Default)]
@@ -79,6 +80,24 @@ pub fn spawn(func: impl FnOnce() + 'static) -> Box<Task> {
 
 pub fn yield_now() {
     unsafe { swap_context(&raw mut (*CURRENT).context, &raw const MAIN) };
+}
+
+/// Cooperative round-robin scheduler: run the task at the front of the queue until it
+/// yields or finishes, then put it at the back, or drop it (and its stack) if it's done.
+pub fn run(tasks: impl IntoIterator<Item = Box<Task>>) {
+    let mut queue: VecDeque<Box<Task>> = tasks
+        .into_iter()
+        .collect();
+    while let Some(mut task) = queue.pop_front() {
+        unsafe {
+            CURRENT = &raw mut *task;
+            swap_context(&raw mut MAIN, &raw const task.context);
+            CURRENT = core::ptr::null_mut();
+        }
+        if !task.done {
+            queue.push_back(task);
+        }
+    }
 }
 
 #[cfg(test)]
