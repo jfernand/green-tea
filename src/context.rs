@@ -4,9 +4,9 @@ use crate::stack::Stack;
 #[derive(Debug, Default)]
 #[repr(C)]
 pub struct Context {
-    rsp: u64, // stack pointer: where execution resumes
-    r15: u64, // callee saved register; Task *
-    r14: u64, // callee saved register; entry function pointer
+    rsp: u64, // [rdi + 0x00] stack pointer: where execution resumes
+    r15: u64, // [rdi + 0x08] callee saved register; Task *
+    r14: u64, // etc. callee saved register; entry function pointer
     r13: u64, // saved registers by calling convention.
     r12: u64,
     rbx: u64,
@@ -18,14 +18,6 @@ unsafe extern "C" {
     pub fn swap_context(from: *mut Context, to: *const Context);
     fn bootstrap_entry() -> !; // never returns, runs ud2 instruction
 }
-
-// #[allow(dead_code)]
-// unsafe fn swap_context(from: *mut Context, to: *const Context) {
-//     info!("swap_context from {:p} to {:p}", from, to);
-//     unsafe {
-//         _swap_context(from, to);
-//     }
-// }
 
 pub struct Task {
     #[allow(dead_code)]
