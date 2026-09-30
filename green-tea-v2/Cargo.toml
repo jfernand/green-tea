@@ -1,5 +1,5 @@
 [package]
-name = "green-tea"
+name = "green-tea-v2"
 version = "0.1.0"
 edition = "2024"
 
@@ -7,7 +7,6 @@ edition = "2024"
 libc = "1.0.0-alpha.4"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-test-log = { version = "0.2.21" , features = ["trace"]}
 
-[workspace]
-members = ["green-tea-v2"]
+[dev-dependencies]
+test-log = { version = "0.2.21", features = ["trace"] }
