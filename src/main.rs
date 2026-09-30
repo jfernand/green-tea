@@ -1,7 +1,6 @@
-use stack::Stack;
-use std::arch::global_asm;
-use tracing::{Level, info};
 use crate::context::{CURRENT, MAIN, spawn, swap_context, yield_now};
+use std::arch::global_asm;
+use tracing::Level;
 
 mod stack;
 mod context;
