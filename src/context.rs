@@ -43,6 +43,7 @@ extern "C" fn task_entry(task: *mut Task) -> ! {
         {
             func();
         }
+        (*task).done = true;
         let mut dummy = Context::default();
         swap_context(&mut dummy, &raw const MAIN);
         unreachable!()
