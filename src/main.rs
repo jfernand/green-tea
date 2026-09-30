@@ -1,7 +1,7 @@
 use stack::Stack;
 use std::arch::global_asm;
 use tracing::{Level, info};
-use crate::context::{spawn, yield_now, Context, Task, swap_context};
+use crate::context::{CURRENT, MAIN, spawn, swap_context, yield_now};
 
 mod stack;
 mod context;
@@ -9,9 +9,6 @@ mod context;
 global_asm!(include_str!("context.s"));
 
 fn main() {
-    static mut MAIN: Context = unsafe { std::mem::zeroed() }; // the scheduler's context
-    static mut CURRENT: *mut Task = std::ptr::null_mut();     // the task running right now
-
     tracing_subscriber::fmt()
         .with_max_level(Level::INFO)
         .init();

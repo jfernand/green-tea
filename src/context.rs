@@ -49,8 +49,8 @@ extern "C" fn task_entry(task: *mut Task) -> ! {
     }
 }
 
-static mut MAIN: Context = unsafe { std::mem::zeroed() };
-static mut CURRENT: *mut Task = core::ptr::null_mut();
+pub static mut MAIN: Context = unsafe { std::mem::zeroed() };
+pub static mut CURRENT: *mut Task = core::ptr::null_mut();
 
 pub fn spawn(func: impl FnOnce() + 'static) -> Box<Task> {
     let stack = Stack::new(32 * 1024);
