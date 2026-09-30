@@ -1,4 +1,16 @@
-//! Green threads on x86_64, built up in layers. So far: the machine-specific mechanism.
+//! Green threads on x86_64, in layers:
+//!
+//! - [`arch`](raw): save/restore registers and prime a fresh stack (the mechanism).
+//! - [`Task`](raw::Task): an asymmetric coroutine with its own stack (resume / yield).
 
 mod arch;
 mod stack;
+mod task;
+
+pub use task::yield_now;
+
+/// The lower layers, for driving tasks by hand.
+pub mod raw {
+    pub use crate::arch::{Context, Entry, swap_context};
+    pub use crate::task::{Task, yield_now};
+}
