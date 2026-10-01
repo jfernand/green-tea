@@ -3,6 +3,8 @@
 Green threads (user-space cooperative tasks) in Rust, built from scratch to learn how
 context switching works on x86_64, aarch64 and riscv64.
 
+Write-up: [Multitasking](https://jotafernand.casaroja.es/posts/019-multitasking/)
+
 Inspired by https://dzania.github.io/green-threads-from-scratch/
 
 With minimal help from R. Claude and R. Junie
