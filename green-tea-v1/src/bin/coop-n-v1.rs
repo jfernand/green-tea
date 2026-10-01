@@ -1,4 +1,4 @@
-use green_tea::context::{run, spawn, yield_now};
+use green_tea_v1::context::{run, spawn, yield_now};
 use tracing::Level;
 
 fn main() {

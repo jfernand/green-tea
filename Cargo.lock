@@ -96,7 +96,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "green-tea"
+name = "green-tea-v1"
 version = "0.1.0"
 dependencies = [
  "libc",

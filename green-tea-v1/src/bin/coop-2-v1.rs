@@ -1,4 +1,4 @@
-use green_tea::context::{CURRENT, MAIN, spawn, swap_context, yield_now};
+use green_tea_v1::context::{CURRENT, MAIN, spawn, swap_context, yield_now};
 use tracing::Level;
 
 fn main() {

@@ -1,0 +1,10 @@
+[package]
+name = "green-tea-v1"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+libc = "1.0.0-alpha.4"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+test-log = { version = "0.2.21" , features = ["trace"]}
