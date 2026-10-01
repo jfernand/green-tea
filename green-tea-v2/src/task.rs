@@ -150,6 +150,52 @@ mod tests {
         assert_eq!(*log.borrow(), ["inner 1", "outer", "test", "inner 2"]);
     }
 
+    /// Eight f64s that stay live across every `pause()`. A value live across a call has to
+    /// sit in a callee-saved register (d8–d15 on aarch64, fs0–fs11 on riscv64) or on the
+    /// stack; with optimizations the compiler picks the registers. `pause` is a function
+    /// pointer so the call can't be inlined away.
+    #[inline(never)]
+    fn float_work(seed: f64, rounds: u32, pause: fn()) -> f64 {
+        let (mut a, mut b, mut c, mut d) = (seed, seed * 2.0, seed * 3.0, seed * 4.0);
+        let (mut e, mut f, mut g, mut h) = (seed * 5.0, seed * 6.0, seed * 7.0, seed * 8.0);
+        for _ in 0..rounds {
+            pause();
+            (a, b, c, d) = (a * 0.5 + b, b * 0.75 + c, c * 0.5 + d, d * 0.25 + e);
+            (e, f, g, h) = (e * 0.5 + f, f * 0.75 + g, g * 0.5 + h, h * 0.25 + a);
+        }
+        a + b + c + d + e + f + g + h
+    }
+
+    /// Two tasks interleave float work. If `swap_context` didn't save the callee-saved float
+    /// registers, each task would resume with the other's values. Only meaningful in release:
+    /// unoptimized code keeps everything on the stack anyway.
+    #[test_log::test]
+    fn float_registers_survive_switches() {
+        let rounds = 50;
+        let expected = |seed| float_work(seed, rounds, || {});
+        let results = Rc::new(RefCell::new(Vec::new()));
+        let mut tasks: Vec<Task> = [1.0, -3.0]
+            .into_iter()
+            .map(|seed| {
+                let r = results.clone();
+                Task::new(move || {
+                    let got = float_work(seed, rounds, yield_now);
+                    r.borrow_mut().push((seed, got));
+                })
+            })
+            .collect();
+        while tasks.iter().any(|t| !t.is_done()) {
+            for task in tasks.iter_mut().filter(|t| !t.is_done()) {
+                task.resume();
+            }
+        }
+        let results = results.borrow();
+        assert_eq!(results.len(), 2);
+        for &(seed, got) in results.iter() {
+            assert_eq!(got.to_bits(), expected(seed).to_bits(), "seed {seed}");
+        }
+    }
+
     #[test]
     #[should_panic(expected = "yield_now called outside a task")]
     fn yield_outside_a_task_panics() {
