@@ -1,5 +1,7 @@
 # green-tea
 
+[![CI](https://github.com/jfernand/green-tea/actions/workflows/ci.yml/badge.svg)](https://github.com/jfernand/green-tea/actions/workflows/ci.yml)
+
 Green threads (user-space cooperative tasks) in Rust, built from scratch to learn how
 context switching works on x86_64, aarch64 and riscv64.
 
