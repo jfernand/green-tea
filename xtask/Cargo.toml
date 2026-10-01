@@ -1,8 +1,11 @@
 [package]
 name = "xtask"
-version = "0.1.0"
-edition = "2024"
-publish = false
+description = "Project automation: cargo xtask test runs green-tea-v2 across targets."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
 
 # No dependencies, so `cargo xtask` compiles in a second.
 [dependencies]

@@ -1,7 +1,11 @@
 [package]
 name = "green-tea-v2"
-version = "0.1.0"
-edition = "2024"
+description = "Green threads on x86_64, aarch64 and riscv64: arch / task / runtime layers."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
 
 [dependencies]
 libc = "1.0.0-alpha.4"
