@@ -1,4 +1,4 @@
-//! Green threads on x86_64 and aarch64 (e.g. Apple Silicon), in three layers:
+//! Green threads on x86_64, aarch64 (e.g. Apple Silicon) and riscv64, in three layers:
 //!
 //! - [`arch`](raw): save/restore registers and prime a fresh stack (the mechanism).
 //! - [`Task`](raw::Task): an asymmetric coroutine with its own stack (resume / yield).
