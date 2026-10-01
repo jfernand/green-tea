@@ -1,0 +1,18 @@
+[alias]
+xtask = "run --quiet --package xtask --"
+
+# Cross-compile and run under qemu user-mode emulation, e.g.
+#   cargo xtask test                    # the whole matrix (see xtask/src/main.rs)
+#   cargo test -p green-tea-v2 --target riscv64gc-unknown-linux-gnu
+#   cargo run  -p green-tea-v2 --target aarch64-unknown-linux-gnu --bin coop-n-v2
+# Needs: sudo apt install qemu-user gcc-aarch64-linux-gnu libc6-dev-arm64-cross \
+#                         gcc-riscv64-linux-gnu libc6-dev-riscv64-cross
+#        rustup target add aarch64-unknown-linux-gnu riscv64gc-unknown-linux-gnu
+
+[target.aarch64-unknown-linux-gnu]
+linker = "aarch64-linux-gnu-gcc"
+runner = "qemu-aarch64 -L /usr/aarch64-linux-gnu"
+
+[target.riscv64gc-unknown-linux-gnu]
+linker = "riscv64-linux-gnu-gcc"
+runner = "qemu-riscv64 -L /usr/riscv64-linux-gnu"
