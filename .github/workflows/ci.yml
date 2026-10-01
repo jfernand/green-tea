@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    name: Linux (host + qemu aarch64/riscv64)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu, riscv64gc-unknown-linux-gnu, aarch64-apple-darwin
+      - name: Install qemu and cross linkers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user gcc-aarch64-linux-gnu libc6-dev-arm64-cross \
+                                  gcc-riscv64-linux-gnu libc6-dev-riscv64-cross
+      - name: Test the workspace on the host
+        run: cargo test --workspace
+      - name: Test v2 across targets
+        run: cargo xtask test
+
+  macos:
+    name: macOS (Apple Silicon, native)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # v1 is x86_64-only, so only v2 runs here.
+      - name: Test v2 natively
+        run: cargo xtask test --target host
