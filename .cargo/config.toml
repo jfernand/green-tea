@@ -16,3 +16,9 @@ runner = "qemu-aarch64 -L /usr/aarch64-linux-gnu"
 [target.riscv64gc-unknown-linux-gnu]
 linker = "riscv64-linux-gnu-gcc"
 runner = "qemu-riscv64 -L /usr/riscv64-linux-gnu"
+
+# The bare-metal kernel (green-tea-kernel) runs through `cargo xtask kernel`, which builds
+# it for each architecture and starts QEMU. Its x86_64 boot code uses absolute addresses,
+# so turn off the target's default position-independent code.
+[target.x86_64-unknown-none]
+rustflags = ["-C", "relocation-model=static"]

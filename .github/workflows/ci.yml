@@ -9,22 +9,31 @@ env:
 
 jobs:
   linux:
-    name: Linux (host + qemu aarch64/riscv64)
+    name: Linux (host + qemu aarch64/riscv64, bare-metal kernel)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-unknown-linux-gnu, riscv64gc-unknown-linux-gnu, aarch64-apple-darwin
+          targets: aarch64-unknown-linux-gnu, riscv64gc-unknown-linux-gnu, aarch64-apple-darwin, riscv64gc-unknown-none-elf, aarch64-unknown-none, x86_64-unknown-none
       - name: Install qemu and cross linkers
         run: |
           sudo apt-get update
           sudo apt-get install -y qemu-user gcc-aarch64-linux-gnu libc6-dev-arm64-cross \
-                                  gcc-riscv64-linux-gnu libc6-dev-riscv64-cross
+                                  gcc-riscv64-linux-gnu libc6-dev-riscv64-cross \
+                                  qemu-system-misc qemu-system-arm qemu-system-x86
       - name: Test the workspace on the host
-        run: cargo test --workspace
+        run: cargo test --workspace --exclude green-tea-kernel
       - name: Test v2 across targets
         run: cargo xtask test
+      - name: Boot the bare-metal kernel on every architecture
+        run: cargo xtask kernel --headless --screenshot
+      - name: Keep the kernel's screenshots and serial logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-screens
+          path: target/kernel/
 
   macos:
     name: macOS (Apple Silicon, native)

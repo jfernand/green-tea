@@ -1,0 +1,18 @@
+[package]
+name = "green-tea-kernel"
+description = "A bare-metal kernel for riscv64, aarch64 and x86_64 that shows green-tea's context switches on a ramfb display."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+# Builds only for riscv64gc-unknown-none-elf, aarch64-unknown-none and x86_64-unknown-none
+# (all panic=abort). Run it with: cargo xtask kernel
+
+[[bin]]
+name = "green-tea-kernel"
+test = false
+bench = false

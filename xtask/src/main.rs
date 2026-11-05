@@ -4,12 +4,18 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
+mod kernel;
+
 const USAGE: &str = "\
 usage: cargo xtask test [--target <triple>]... [--profile debug|release]...
+       cargo xtask kernel [--target <arch>]... [--release] [--headless] [--screenshot]
 
-Runs green-tea-v2's tests and demo binaries on the host and, under qemu, on every
-cross target, in both profiles. Also checks that the library builds for targets we
-can compile for but not run (Apple Silicon). --target and --profile narrow the matrix.";
+test:   runs green-tea-v2's tests and demo binaries on the host and, under qemu, on every
+        cross target, in both profiles. Also checks that the library builds for targets
+        we can compile for but not run (Apple Silicon). --target and --profile narrow
+        the matrix.
+kernel: builds the bare-metal green-tea-kernel and boots it in QEMU on riscv64, aarch64
+        and x86_64 (see cargo xtask kernel --help).";
 
 /// A target in the matrix. `None` triple means the host, built without `--target`.
 struct Target {
@@ -51,6 +57,7 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Some("kernel") => kernel::main(&args[1..]),
         Some("-h" | "--help" | "help") => {
             println!("{USAGE}");
             ExitCode::SUCCESS
