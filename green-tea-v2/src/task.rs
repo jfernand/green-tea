@@ -97,8 +97,11 @@ extern "C" fn task_entry(arg: *mut ()) -> ! {
 #[cfg(test)]
 mod tests {
     use super::{Task, yield_now};
+    use libc::{c_int, c_void};
     use std::cell::RefCell;
     use std::rc::Rc;
+    use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+    use std::{mem, ptr};
 
     #[test_log::test]
     fn runs_to_completion() {
@@ -200,5 +203,86 @@ mod tests {
     #[should_panic(expected = "yield_now called outside a task")]
     fn yield_outside_a_task_panics() {
         yield_now();
+    }
+
+    /// Recurse with a 256-byte frame (well under a page, so it can't skip the guard page)
+    /// that stays live across the call, so the recursion can't become a loop.
+    #[inline(never)]
+    fn recurse(depth: u64) -> u64 {
+        let frame = std::hint::black_box([depth as u8; 256]);
+        if depth == u64::MAX {
+            return 0;
+        }
+        recurse(depth + 1) + u64::from(frame[0])
+    }
+
+    // Exit codes for the overflowing child.
+    const FAULT_IN_GUARD: i32 = 42;
+    const FAULT_ELSEWHERE: i32 = 43;
+    const NO_FAULT: i32 = 44;
+
+    /// The guard page of the task the child overflows, for the signal handler.
+    static GUARD_START: AtomicUsize = AtomicUsize::new(0);
+    static GUARD_END: AtomicUsize = AtomicUsize::new(0);
+
+    /// Runs on the alternate signal stack (the task's own stack is the one that's full).
+    /// Only async-signal-safe calls in here: atomics and `_exit`.
+    extern "C" fn on_fault(_signal: c_int, info: *mut libc::siginfo_t, _ctx: *mut c_void) {
+        let addr = unsafe { (*info).si_addr() } as usize;
+        let guard = GUARD_START.load(Relaxed)..GUARD_END.load(Relaxed);
+        unsafe {
+            libc::_exit(if guard.contains(&addr) { FAULT_IN_GUARD } else { FAULT_ELSEWHERE })
+        };
+    }
+
+    /// A task that overflows its stack must fault on its guard page, not just somewhere.
+    /// The overflow ends the process, so it happens in a forked child whose fault handler
+    /// reports, through its exit code, whether the faulting address was in the guard page.
+    ///
+    /// Everything that allocates (the task, its stack, the signal stack) happens before
+    /// the fork: the child of a multi-threaded process (the test harness) must not
+    /// allocate, since another thread may have held the allocator's lock at the fork.
+    #[test]
+    fn overflow_hits_the_guard_page() {
+        let mut task = Task::new(|| {
+            std::hint::black_box(recurse(0));
+        });
+        let guard = unsafe { (*task.inner.as_ptr())._stack.guard() };
+        GUARD_START.store(guard.start, Relaxed);
+        GUARD_END.store(guard.end, Relaxed);
+        let mut alt_stack = vec![0u8; 64 * 1024];
+
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork failed: {}", std::io::Error::last_os_error());
+        if pid == 0 {
+            unsafe {
+                let ss = libc::stack_t {
+                    ss_sp: alt_stack.as_mut_ptr().cast(),
+                    ss_flags: 0,
+                    ss_size: alt_stack.len(),
+                };
+                libc::sigaltstack(&ss, ptr::null_mut());
+                let mut action: libc::sigaction = mem::zeroed();
+                action.sa_sigaction = on_fault as extern "C" fn(_, _, _) as usize;
+                action.sa_flags = libc::SA_SIGINFO | libc::SA_ONSTACK;
+                // Linux raises SIGSEGV for a PROT_NONE page; macOS raises SIGBUS.
+                libc::sigaction(libc::SIGSEGV, &action, ptr::null_mut());
+                libc::sigaction(libc::SIGBUS, &action, ptr::null_mut());
+            }
+            task.resume();
+            unsafe { libc::_exit(NO_FAULT) };
+        }
+
+        let mut status = 0;
+        let rc = unsafe { libc::waitpid(pid, &mut status, 0) };
+        assert_eq!(rc, pid, "waitpid failed: {}", std::io::Error::last_os_error());
+        assert!(libc::WIFEXITED(status), "the child died unexpectedly (status {status:#x})");
+        match libc::WEXITSTATUS(status) {
+            FAULT_IN_GUARD => {}
+            FAULT_ELSEWHERE => panic!("the overflow faulted outside the guard page"),
+            NO_FAULT => panic!("the overflow went unnoticed"),
+            other => panic!("the child exited with {other}"),
+        }
+        drop(task); // only the child ran it; here it's still suspended at its start
     }
 }
