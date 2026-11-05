@@ -92,7 +92,8 @@ sudo apt install qemu-user gcc-aarch64-linux-gnu libc6-dev-arm64-cross \
 rustup target add aarch64-unknown-linux-gnu riscv64gc-unknown-linux-gnu aarch64-apple-darwin
 ```
 
-CI runs the same matrix, plus the v2 tests natively on an Apple Silicon runner.
+CI runs the same matrix on Linux, plus `cargo xtask kernel --headless`. Apple Silicon
+isn't covered by CI: on a Mac, run `cargo xtask test --target host`.
 
 ## License
 

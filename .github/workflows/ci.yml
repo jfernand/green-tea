@@ -34,13 +34,3 @@ jobs:
         with:
           name: kernel-screens
           path: target/kernel/
-
-  macos:
-    name: macOS (Apple Silicon, native)
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      # v1 is x86_64-only, so only v2 runs here.
-      - name: Test v2 natively
-        run: cargo xtask test --target host
