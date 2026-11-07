@@ -1,0 +1,13 @@
+[package]
+name = "green-tea-arch"
+description = "The machine layer of green-tea: save and restore registers, and prime a fresh stack, on x86_64, aarch64 and riscv64."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+# no_std and dependency-free, so both green-tea-v2 (on Linux and macOS) and the bare-metal
+# kernels can use it.

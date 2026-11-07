@@ -8,12 +8,15 @@
 //!   there's nothing to make a page fault, so an overflow silently runs into whatever
 //!   sits below the stack.
 //! - Each task has an `id`, so the demo can tell which one is about to run.
+//!
+//! Nothing here knows about interrupts. green-tea-preempt calls `yield_now` from its timer
+//! handler, and keeps interrupts off whenever a switch is under way.
 
-use crate::arch::{Context, swap_context};
 use crate::global::Global;
 use alloc::boxed::Box;
 use alloc::vec;
 use core::ptr::{self, NonNull};
+use green_tea_arch::{Context, swap_context};
 
 const STACK_SIZE: usize = 16 * 1024;
 
@@ -79,6 +82,12 @@ impl Drop for Task {
     fn drop(&mut self) {
         drop(unsafe { Box::from_raw(self.inner.as_ptr()) });
     }
+}
+
+/// Whether a task is running, as opposed to the code on the boot stack (`kmain`, the
+/// scheduler).
+pub fn in_task() -> bool {
+    !CURRENT.get().is_null()
 }
 
 /// Suspend the current task and switch back to whoever resumed it.

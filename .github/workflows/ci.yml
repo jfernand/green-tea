@@ -23,7 +23,7 @@ jobs:
                                   gcc-riscv64-linux-gnu libc6-dev-riscv64-cross \
                                   qemu-system-misc qemu-system-arm qemu-system-x86
       - name: Test the workspace on the host
-        run: cargo test --workspace --exclude green-tea-kernel
+        run: cargo test # the default members: everything that builds for the host
       - name: Test v2 across targets
         run: cargo xtask test
       - name: Boot the bare-metal kernel on every architecture

@@ -5,11 +5,11 @@
 //! data register, or write it with a DMA request. See qemu's docs/specs/fw_cfg.rst.
 //!
 //! How the registers are reached differs per machine (memory-mapped on riscv64 and
-//! aarch64, I/O ports on x86_64): each platform module provides `FW_CFG` with `select`,
-//! `read_u8` and `start_dma`. The protocol on top is the same everywhere.
+//! aarch64, I/O ports on x86_64): each board's `Platform::FW_CFG` is a [`FwCfgPort`]. The
+//! protocol on top is the same everywhere.
 
-use crate::platform::FW_CFG;
-use core::ptr::read_volatile;
+use crate::platform::{Board, FwCfgPort, Platform};
+use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{Ordering, fence};
 
 const KEY_SIGNATURE: u16 = 0x0000;
@@ -23,12 +23,12 @@ const DMA_SELECT: u32 = 1 << 3;
 const DMA_WRITE: u32 = 1 << 4;
 
 fn select(key: u16) {
-    FW_CFG.select(key);
+    Board::FW_CFG.select(key);
 }
 
 fn read(buf: &mut [u8]) {
     for byte in buf {
-        *byte = FW_CFG.read_u8();
+        *byte = Board::FW_CFG.read_u8();
     }
 }
 
@@ -116,7 +116,7 @@ pub fn dma_write(key: u16, data: &[u8]) -> Result<(), &'static str> {
     };
     let address = &raw mut access as u64;
     fence(Ordering::SeqCst); // the request and the data are in memory before QEMU looks
-    FW_CFG.start_dma(address);
+    Board::FW_CFG.start_dma(address);
     // QEMU clears the control field when it's done, leaving only the error bit if it failed.
     loop {
         let control = u32::from_be(unsafe { read_volatile(&raw const access.control) });
@@ -129,32 +129,27 @@ pub fn dma_write(key: u16, data: &[u8]) -> Result<(), &'static str> {
     }
 }
 
-/// The memory-mapped register layout used by riscv64 and aarch64 `virt`. The registers are
-/// big-endian: the bytes in memory order are the big-endian representation, so values are
-/// converted with `to_be` before a volatile store.
+/// The memory-mapped register layout used by riscv64 and aarch64 `virt`: data at +0x00,
+/// selector at +0x08, DMA address at +0x10. The registers are big-endian: the bytes in
+/// memory order are the big-endian representation, so values are converted with `to_be`
+/// before a volatile store.
 #[cfg_attr(target_arch = "x86_64", allow(dead_code))]
-pub mod mmio {
-    use core::ptr::{read_volatile, write_volatile};
+pub struct Mmio(pub usize);
 
-    /// fw_cfg at this base address: data at +0x00, selector at +0x08, DMA address at +0x10.
-    pub struct Mmio(pub usize);
+impl FwCfgPort for Mmio {
+    fn select(&self, key: u16) {
+        unsafe { write_volatile((self.0 + 0x08) as *mut u16, key.to_be()) };
+    }
 
-    impl Mmio {
-        pub fn select(&self, key: u16) {
-            unsafe { write_volatile((self.0 + 0x08) as *mut u16, key.to_be()) };
-        }
+    fn read_u8(&self) -> u8 {
+        unsafe { read_volatile(self.0 as *const u8) }
+    }
 
-        /// The selected item's next byte.
-        pub fn read_u8(&self) -> u8 {
-            unsafe { read_volatile(self.0 as *const u8) }
-        }
-
-        /// High half first: writing the low half starts the transfer.
-        pub fn start_dma(&self, address: u64) {
-            unsafe {
-                write_volatile((self.0 + 0x10) as *mut u32, ((address >> 32) as u32).to_be());
-                write_volatile((self.0 + 0x14) as *mut u32, (address as u32).to_be());
-            }
+    /// High half first: writing the low half starts the transfer.
+    fn start_dma(&self, address: u64) {
+        unsafe {
+            write_volatile((self.0 + 0x10) as *mut u32, ((address >> 32) as u32).to_be());
+            write_volatile((self.0 + 0x14) as *mut u32, (address as u32).to_be());
         }
     }
 }

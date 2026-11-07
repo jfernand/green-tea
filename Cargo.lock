@@ -96,8 +96,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "green-tea-kernel"
+name = "green-tea-arch"
 version = "0.1.0"
+
+[[package]]
+name = "green-tea-bare"
+version = "0.1.0"
+dependencies = [
+ "green-tea-arch",
+]
+
+[[package]]
+name = "green-tea-coop"
+version = "0.1.0"
+dependencies = [
+ "green-tea-bare",
+]
+
+[[package]]
+name = "green-tea-preempt"
+version = "0.1.0"
+dependencies = [
+ "green-tea-bare",
+]
 
 [[package]]
 name = "green-tea-v1"
@@ -113,6 +134,7 @@ dependencies = [
 name = "green-tea-v2"
 version = "0.1.0"
 dependencies = [
+ "green-tea-arch",
  "libc",
  "test-log",
  "tracing",

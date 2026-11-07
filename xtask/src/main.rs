@@ -8,14 +8,14 @@ mod kernel;
 
 const USAGE: &str = "\
 usage: cargo xtask test [--target <triple>]... [--profile debug|release]...
-       cargo xtask kernel [--target <arch>]... [--release] [--headless] [--screenshot]
+       cargo xtask kernel [--kernel coop|preempt]... [--target <arch>]... [--release] [--headless] [--screenshot]
 
 test:   runs green-tea-v2's tests and demo binaries on the host and, under qemu, on every
         cross target, in both profiles. Also checks that the library builds for targets
         we can compile for but not run (Apple Silicon). --target and --profile narrow
         the matrix.
-kernel: builds the bare-metal green-tea-kernel and boots it in QEMU on riscv64, aarch64
-        and x86_64 (see cargo xtask kernel --help).";
+kernel: builds the bare-metal kernels (green-tea-coop, green-tea-preempt) and boots them
+        in QEMU on riscv64, aarch64 and x86_64 (see cargo xtask kernel --help).";
 
 /// A target in the matrix. `None` triple means the host, built without `--target`.
 struct Target {

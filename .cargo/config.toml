@@ -17,8 +17,9 @@ runner = "qemu-aarch64 -L /usr/aarch64-linux-gnu"
 linker = "riscv64-linux-gnu-gcc"
 runner = "qemu-riscv64 -L /usr/riscv64-linux-gnu"
 
-# The bare-metal kernel (green-tea-kernel) runs through `cargo xtask kernel`, which builds
-# it for each architecture and starts QEMU. Its x86_64 boot code uses absolute addresses,
-# so turn off the target's default position-independent code.
+# The bare-metal kernels (green-tea-coop, green-tea-preempt) run through
+# `cargo xtask kernel`, which builds them for each architecture and starts QEMU. The x86_64
+# boot code (in green-tea-bare) uses absolute addresses, so turn off the target's default
+# position-independent code.
 [target.x86_64-unknown-none]
 rustflags = ["-C", "relocation-model=static"]

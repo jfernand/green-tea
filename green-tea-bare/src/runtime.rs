@@ -1,7 +1,7 @@
 //! A port of green-tea-v2/src/runtime.rs: a cooperative round-robin run queue on top of
 //! `Task`. The differences: `RUNTIME` is a [`Global`] instead of a `thread_local!`, and
-//! `run` takes a hook that sees each task just before it's resumed, which the demo uses
-//! to draw the switches.
+//! `run` takes a hook that sees each task just before it's resumed, which the demos use to
+//! draw the switches (and green-tea-preempt to start each task's time slice).
 
 use crate::global::Global;
 use crate::task::Task;

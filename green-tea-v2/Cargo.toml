@@ -10,6 +10,7 @@ homepage.workspace = true
 publish.workspace = true
 
 [dependencies]
+green-tea-arch = { path = "../green-tea-arch" }
 libc = "1.0.0-alpha.4"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

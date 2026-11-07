@@ -3,10 +3,12 @@
 //! accesses fault; the aarch64-unknown-none target compiles with +strict-align, so the
 //! compiler never makes any.
 
+use super::Platform;
+use crate::fw_cfg::Mmio;
 use core::arch::{asm, global_asm};
 use core::ptr::{read_volatile, write_volatile};
 
-pub const NAME: &str = "aarch64";
+pub struct AarchVirt;
 
 global_asm!(
     r#"
@@ -39,36 +41,40 @@ _start:
 "#
 );
 
-pub fn init() {}
+impl Platform for AarchVirt {
+    const NAME: &'static str = "aarch64";
 
-/// The PL011 UART: wait while the transmit FIFO is full, then write the byte.
-pub fn putc(byte: u8) {
-    const BASE: usize = 0x0900_0000;
-    const FR_TXFF: u32 = 1 << 5;
-    unsafe {
-        while read_volatile((BASE + 0x18) as *const u32) & FR_TXFF != 0 {}
-        write_volatile(BASE as *mut u32, u32::from(byte));
+    fn init() {}
+
+    /// The PL011 UART: wait while the transmit FIFO is full, then write the byte.
+    fn putc(byte: u8) {
+        const BASE: usize = 0x0900_0000;
+        const FR_TXFF: u32 = 1 << 5;
+        unsafe {
+            while read_volatile((BASE + 0x18) as *const u32) & FR_TXFF != 0 {}
+            write_volatile(BASE as *mut u32, u32::from(byte));
+        }
     }
-}
 
-pub use crate::fw_cfg::mmio::Mmio as FwCfg;
-pub const FW_CFG: FwCfg = FwCfg(0x0902_0000);
-
-/// The generic timer's virtual count.
-pub fn ticks() -> u64 {
-    let t: u64;
-    unsafe { asm!("mrs {}, cntvct_el0", out(reg) t) };
-    t
-}
-
-pub fn ticks_per_ms() -> u64 {
-    let freq: u64;
-    unsafe { asm!("mrs {}, cntfrq_el0", out(reg) freq) };
-    freq / 1000
-}
-
-pub fn halt() -> ! {
-    loop {
-        unsafe { asm!("wfi") };
+    /// The generic timer's virtual count.
+    fn ticks() -> u64 {
+        let t: u64;
+        unsafe { asm!("mrs {}, cntvct_el0", out(reg) t) };
+        t
     }
+
+    fn ticks_per_ms() -> u64 {
+        let freq: u64;
+        unsafe { asm!("mrs {}, cntfrq_el0", out(reg) freq) };
+        freq / 1000
+    }
+
+    fn halt() -> ! {
+        loop {
+            unsafe { asm!("wfi") };
+        }
+    }
+
+    type FwCfg = Mmio;
+    const FW_CFG: Mmio = Mmio(0x0902_0000);
 }

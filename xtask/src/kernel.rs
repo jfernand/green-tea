@@ -1,8 +1,9 @@
-//! `cargo xtask kernel`: build green-tea-kernel for each architecture and run it in QEMU.
+//! `cargo xtask kernel`: build the bare-metal kernels for each architecture they support
+//! and run them all in QEMU at once.
 //!
 //! Every QEMU gets its serial port written to a log file and its monitor on a pipe. The
-//! log is followed to echo the kernel's output (prefixed with the architecture) and to
-//! spot the kernel's last line, "all tasks finished after N switches (expected M)". The
+//! log is followed to echo the kernel's output (prefixed with kernel and architecture)
+//! and to spot its verdict: a line starting with "PASS: " or "FAIL: ", or a panic. The
 //! monitor is used to take a screenshot and, when headless, to quit.
 
 use crate::{on_path, workspace_root};
@@ -14,16 +15,34 @@ use std::time::{Duration, Instant};
 use std::{env, thread};
 
 pub const USAGE: &str = "\
-usage: cargo xtask kernel [--target riscv64|aarch64|x86_64]... [--release] [--headless] [--screenshot]
+usage: cargo xtask kernel [--kernel coop|preempt]... [--target riscv64|aarch64|x86_64]...
+                          [--release] [--headless] [--screenshot]
 
-Builds green-tea-kernel and boots it in QEMU, one window per architecture, all at once.
-Close the windows to finish. The kernel's serial output is echoed here, and the run
-passes when every kernel reports the switch count it expected.
+Builds the bare-metal kernels and boots each in QEMU on every architecture it supports,
+one window apiece, all at once. Close the windows to finish. The kernels' serial output
+is echoed here, and the run passes when every kernel reports PASS.
 
+  coop     green-tea-coop: tasks yield to each other (riscv64, aarch64, x86_64)
+  preempt  green-tea-preempt: a timer interrupt preempts tasks that never yield (riscv64)
+
+  --kernel      only these kernels (default: both)
   --target      only these architectures (default: all three)
   --release     build with optimizations
-  --headless    no windows: quit each QEMU as soon as its kernel finishes (for CI)
-  --screenshot  save the final screen to target/kernel/<arch>.png";
+  --headless    no windows: quit each QEMU as soon as its kernel finishes
+  --screenshot  save the final screen to target/kernel/<kernel>-<arch>.png";
+
+struct Kernel {
+    name: &'static str,
+    package: &'static str,
+    /// The architectures it builds for, by `Arch::name`.
+    arches: &'static [&'static str],
+}
+
+const KERNELS: &[Kernel] = &[
+    Kernel { name: "coop", package: "green-tea-coop", arches: &["riscv64", "aarch64", "x86_64"] },
+    // Needs a board with green-tea-bare's TimerInterrupt, which only riscv64 has so far.
+    Kernel { name: "preempt", package: "green-tea-preempt", arches: &["riscv64"] },
+];
 
 struct Arch {
     name: &'static str,
@@ -56,15 +75,27 @@ const ARCHES: &[Arch] = &[
 
 const HEADLESS_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// One kernel on one architecture.
+struct Job {
+    kernel: &'static Kernel,
+    arch: &'static Arch,
+}
+
+impl Job {
+    fn label(&self) -> String {
+        format!("{}-{}", self.kernel.name, self.arch.name)
+    }
+}
+
 struct Options {
-    arches: Vec<&'static Arch>,
+    jobs: Vec<Job>,
     release: bool,
     headless: bool,
     screenshot: bool,
 }
 
 pub fn main(args: &[String]) -> ExitCode {
-    let options = match parse(args) {
+    let mut options = match parse(args) {
         Ok(o) => o,
         Err(e) if e.is_empty() => {
             println!("{USAGE}");
@@ -75,7 +106,13 @@ pub fn main(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    if let Err(problems) = preflight(&options.arches) {
+    let arches = options.jobs.iter().fold(Vec::<&Arch>::new(), |mut v, j| {
+        if !v.iter().any(|a| a.name == j.arch.name) {
+            v.push(j.arch);
+        }
+        v
+    });
+    if let Err(problems) = preflight(&arches) {
         eprintln!("missing prerequisites:");
         for p in problems {
             eprintln!("  - {p}");
@@ -84,9 +121,9 @@ pub fn main(args: &[String]) -> ExitCode {
     }
 
     let profile = if options.release { "release" } else { "debug" };
-    for arch in &options.arches {
-        eprintln!("=== build {} {profile}", arch.name);
-        if !build(arch, options.release) {
+    for job in &options.jobs {
+        eprintln!("=== build {} {} {profile}", job.kernel.package, job.arch.name);
+        if !build(job, options.release) {
             return ExitCode::FAILURE;
         }
     }
@@ -97,12 +134,13 @@ pub fn main(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     }
     let mut runs = Vec::new();
-    for arch in &options.arches {
-        let elf = target_dir().join(arch.triple).join(profile).join("green-tea-kernel");
-        match Run::start(arch, &elf, &out_dir, options.headless) {
+    for job in options.jobs.drain(..) {
+        let elf = target_dir().join(job.arch.triple).join(profile).join(job.kernel.package);
+        let qemu = job.arch.qemu;
+        match Run::start(job, &elf, &out_dir, options.headless) {
             Ok(run) => runs.push(run),
             Err(e) => {
-                eprintln!("failed to start {}: {e}", arch.qemu);
+                eprintln!("failed to start {qemu}: {e}");
                 return ExitCode::FAILURE;
             }
         }
@@ -119,7 +157,7 @@ pub fn main(args: &[String]) -> ExitCode {
             Some(Ok(d) | Err(d)) => d.as_str(),
             None => "no result",
         };
-        eprintln!("{status:4}  {:8} {detail}", run.arch.name);
+        eprintln!("{status:4}  {:15} {detail}", run.job.label());
     }
     eprintln!("serial logs: {}", out_dir.display());
     if runs.iter().all(|r| r.outcome.as_ref().is_some_and(|o| o.is_ok())) {
@@ -130,7 +168,9 @@ pub fn main(args: &[String]) -> ExitCode {
 }
 
 fn parse(args: &[String]) -> Result<Options, String> {
-    let mut options = Options { arches: Vec::new(), release: false, headless: false, screenshot: false };
+    let mut options = Options { jobs: Vec::new(), release: false, headless: false, screenshot: false };
+    let mut kernels: Vec<&'static Kernel> = Vec::new();
+    let mut arches: Vec<&'static Arch> = Vec::new();
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -143,14 +183,38 @@ fn parse(args: &[String]) -> Result<Options, String> {
                     .iter()
                     .find(|a| a.name == value || a.triple == value)
                     .ok_or_else(|| format!("unknown target {value}; known: riscv64, aarch64, x86_64"))?;
-                options.arches.push(arch);
+                arches.push(arch);
+            }
+            "--kernel" => {
+                let value = args.next().ok_or("--kernel needs a value")?;
+                let kernel = KERNELS
+                    .iter()
+                    .find(|k| k.name == value || k.package == value)
+                    .ok_or_else(|| format!("unknown kernel {value}; known: coop, preempt"))?;
+                kernels.push(kernel);
             }
             "-h" | "--help" => return Err(String::new()),
             _ => return Err(format!("unknown option {arg}")),
         }
     }
-    if options.arches.is_empty() {
-        options.arches = ARCHES.iter().collect();
+    let explicit_arches = !arches.is_empty();
+    if kernels.is_empty() {
+        kernels = KERNELS.iter().collect();
+    }
+    if arches.is_empty() {
+        arches = ARCHES.iter().collect();
+    }
+    for kernel in kernels {
+        for &arch in &arches {
+            if kernel.arches.contains(&arch.name) {
+                options.jobs.push(Job { kernel, arch });
+            } else if explicit_arches {
+                eprintln!("note: skipping {} on {}, which it doesn't support", kernel.name, arch.name);
+            }
+        }
+    }
+    if options.jobs.is_empty() {
+        return Err("nothing to run: no chosen kernel supports the chosen targets".into());
     }
     Ok(options)
 }
@@ -178,10 +242,10 @@ fn preflight(arches: &[&Arch]) -> Result<(), Vec<String>> {
     if problems.is_empty() { Ok(()) } else { Err(problems) }
 }
 
-fn build(arch: &Arch, release: bool) -> bool {
+fn build(job: &Job, release: bool) -> bool {
     let mut cmd = Command::new(env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
     cmd.current_dir(workspace_root())
-        .args(["build", "-p", "green-tea-kernel", "--target", arch.triple]);
+        .args(["build", "-p", job.kernel.package, "--target", job.arch.triple]);
     if release {
         cmd.arg("--release");
     }
@@ -196,7 +260,7 @@ fn target_dir() -> PathBuf {
 
 /// One QEMU and what we've learned from it so far.
 struct Run {
-    arch: &'static Arch,
+    job: Job,
     qemu: Child,
     log: PathBuf,
     /// How much of the log has been echoed.
@@ -209,13 +273,13 @@ struct Run {
 }
 
 impl Run {
-    fn start(arch: &'static Arch, elf: &Path, out_dir: &Path, headless: bool) -> std::io::Result<Run> {
-        let log = out_dir.join(format!("{}.log", arch.name));
+    fn start(job: Job, elf: &Path, out_dir: &Path, headless: bool) -> std::io::Result<Run> {
+        let log = out_dir.join(format!("{}.log", job.label()));
         let _ = fs::remove_file(&log);
-        let mut cmd = Command::new(arch.qemu);
-        cmd.args(arch.machine)
+        let mut cmd = Command::new(job.arch.qemu);
+        cmd.args(job.arch.machine)
             .args(["-m", "128M", "-device", "ramfb"])
-            .args(["-name", &format!("green-tea-kernel ({})", arch.name)])
+            .args(["-name", &format!("{} ({})", job.kernel.package, job.arch.name)])
             .arg("-serial")
             .arg(format!("file:{}", log.display()))
             .args(["-monitor", "stdio"])
@@ -227,7 +291,7 @@ impl Run {
             cmd.args(["-display", "none"]);
         }
         Ok(Run {
-            arch,
+            job,
             qemu: cmd.spawn()?,
             log,
             read: 0,
@@ -254,11 +318,11 @@ impl Run {
         let text = String::from_utf8_lossy(&bytes[self.read..end]).into_owned();
         self.read = end;
         for line in text.lines().map(|l| l.trim_end_matches('\r')) {
-            if line.starts_with("green-tea-kernel on") {
+            if line.starts_with("green-tea-") {
                 self.seen_kernel = true;
             }
             if self.seen_kernel {
-                eprintln!("[{:7}] {line}", self.arch.name);
+                eprintln!("[{:15}] {line}", self.job.label());
             }
             if self.outcome.is_none() {
                 self.outcome = verdict(line);
@@ -267,19 +331,15 @@ impl Run {
     }
 }
 
-/// The kernel's last word: its switch count against the count it expected, or a panic.
+/// The kernel's last word: it judges its own run, and says PASS or FAIL. Or it panics.
 fn verdict(line: &str) -> Option<Result<String, String>> {
     if let Some(rest) = line.strip_prefix("panic: ") {
         return Some(Err(format!("kernel panicked: {rest}")));
     }
-    let rest = line.strip_prefix("all tasks finished after ")?;
-    let (got, rest) = rest.split_once(" switches (expected ")?;
-    let expected = rest.strip_suffix(')')?;
-    Some(if got == expected {
-        Ok(format!("{got} switches, as expected"))
-    } else {
-        Err(format!("{got} switches, expected {expected}"))
-    })
+    if let Some(rest) = line.strip_prefix("PASS: ") {
+        return Some(Ok(rest.to_string()));
+    }
+    line.strip_prefix("FAIL: ").map(|rest| Err(rest.to_string()))
 }
 
 fn watch(runs: &mut [Run], options: &Options, out_dir: &Path) {
@@ -290,9 +350,9 @@ fn watch(runs: &mut [Run], options: &Options, out_dir: &Path) {
             run.follow();
             if !had_outcome && run.outcome.is_some() {
                 if options.screenshot {
-                    let png = out_dir.join(format!("{}.png", run.arch.name));
+                    let png = out_dir.join(format!("{}.png", run.job.label()));
                     run.monitor(&format!("screendump {} -f png", png.display()));
-                    eprintln!("[{:7}] screenshot: {}", run.arch.name, png.display());
+                    eprintln!("[{:15}] screenshot: {}", run.job.label(), png.display());
                 }
                 if options.headless {
                     run.monitor("quit"); // after the screendump: the monitor runs them in order
@@ -316,17 +376,16 @@ fn watch(runs: &mut [Run], options: &Options, out_dir: &Path) {
 
 #[cfg(test)]
 mod tests {
-    use super::verdict;
+    use super::{parse, verdict};
 
     #[test]
-    fn matching_counts_pass() {
-        assert!(verdict("all tasks finished after 57 switches (expected 57)").unwrap().is_ok());
+    fn pass_passes() {
+        assert_eq!(verdict("PASS: 57 switches, as expected"), Some(Ok("57 switches, as expected".into())));
     }
 
     #[test]
-    fn mismatched_counts_fail() {
-        let v = verdict("all tasks finished after 56 switches (expected 57)").unwrap();
-        assert_eq!(v, Err("56 switches, expected 57".into()));
+    fn fail_fails() {
+        assert_eq!(verdict("FAIL: 56 switches, expected 57"), Some(Err("56 switches, expected 57".into())));
     }
 
     #[test]
@@ -337,5 +396,22 @@ mod tests {
     #[test]
     fn other_lines_are_not_a_verdict() {
         assert_eq!(verdict("running 5 workers; expecting 57 switches"), None);
+    }
+
+    fn labels(args: &[&str]) -> Vec<String> {
+        let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+        parse(&args).unwrap().jobs.iter().map(|j| j.label()).collect()
+    }
+
+    #[test]
+    fn by_default_every_kernel_runs_everywhere_it_can() {
+        assert_eq!(labels(&[]), ["coop-riscv64", "coop-aarch64", "coop-x86_64", "preempt-riscv64"]);
+    }
+
+    #[test]
+    fn unsupported_combinations_are_skipped() {
+        assert_eq!(labels(&["--target", "aarch64"]), ["coop-aarch64"]);
+        let args = ["--kernel".to_string(), "preempt".into(), "--target".into(), "x86_64".into()];
+        assert!(parse(&args).is_err());
     }
 }

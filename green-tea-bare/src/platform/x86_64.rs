@@ -6,10 +6,11 @@
 //! The x86_64-unknown-none target is soft-float (no SSE), so nothing needs enabling for
 //! floating point, and swap_context has no float registers to save anyway.
 
+use super::{FwCfgPort, Platform};
 use core::arch::{asm, global_asm};
 use core::ptr::{read_volatile, write_volatile};
 
-pub const NAME: &str = "x86_64";
+pub struct Q35;
 
 global_asm!(
     r#"
@@ -133,56 +134,62 @@ const HPET_CAPABILITIES: *const u64 = HPET as *const u64;
 const HPET_CONFIG: *mut u64 = (HPET + 0x10) as *mut u64;
 const HPET_COUNTER: *const u64 = (HPET + 0xf0) as *const u64;
 
-/// Start the HPET's main counter, which `ticks` reads.
-pub fn init() {
-    unsafe { write_volatile(HPET_CONFIG, read_volatile(HPET_CONFIG) | 1) };
-}
+impl Platform for Q35 {
+    const NAME: &'static str = "x86_64";
 
-/// COM1, a 16550 on I/O ports: wait for room, write the byte.
-pub fn putc(byte: u8) {
-    const COM1: u16 = 0x3f8;
-    const LSR_THR_EMPTY: u8 = 1 << 5;
-    unsafe {
-        while inb(COM1 + 5) & LSR_THR_EMPTY == 0 {}
-        outb(COM1, byte);
+    /// Start the HPET's main counter, which `ticks` reads.
+    fn init() {
+        unsafe { write_volatile(HPET_CONFIG, read_volatile(HPET_CONFIG) | 1) };
     }
+
+    /// COM1, a 16550 on I/O ports: wait for room, write the byte.
+    fn putc(byte: u8) {
+        const COM1: u16 = 0x3f8;
+        const LSR_THR_EMPTY: u8 = 1 << 5;
+        unsafe {
+            while inb(COM1 + 5) & LSR_THR_EMPTY == 0 {}
+            outb(COM1, byte);
+        }
+    }
+
+    /// The HPET's main counter.
+    fn ticks() -> u64 {
+        unsafe { read_volatile(HPET_COUNTER) }
+    }
+
+    fn ticks_per_ms() -> u64 {
+        let period_fs = unsafe { read_volatile(HPET_CAPABILITIES) } >> 32; // femtoseconds per tick
+        1_000_000_000_000 / period_fs
+    }
+
+    fn halt() -> ! {
+        loop {
+            unsafe { asm!("hlt") };
+        }
+    }
+
+    type FwCfg = IoPorts;
+    const FW_CFG: IoPorts = IoPorts;
 }
 
 /// fw_cfg on x86 lives on I/O ports rather than memory-mapped registers.
-pub struct FwCfg;
-pub const FW_CFG: FwCfg = FwCfg;
+pub struct IoPorts;
 
-impl FwCfg {
-    pub fn select(&self, key: u16) {
+impl FwCfgPort for IoPorts {
+    fn select(&self, key: u16) {
         unsafe { outw(0x510, key) }; // the port selector is little-endian, unlike MMIO
     }
 
-    pub fn read_u8(&self) -> u8 {
+    fn read_u8(&self) -> u8 {
         unsafe { inb(0x511) }
     }
 
     /// The DMA address register is big-endian: high half at 0x514, then low half at 0x518,
     /// which starts the transfer.
-    pub fn start_dma(&self, address: u64) {
+    fn start_dma(&self, address: u64) {
         unsafe {
             outl(0x514, ((address >> 32) as u32).to_be());
             outl(0x518, (address as u32).to_be());
         }
-    }
-}
-
-/// The HPET's main counter.
-pub fn ticks() -> u64 {
-    unsafe { read_volatile(HPET_COUNTER) }
-}
-
-pub fn ticks_per_ms() -> u64 {
-    let period_fs = unsafe { read_volatile(HPET_CAPABILITIES) } >> 32; // femtoseconds per tick
-    1_000_000_000_000 / period_fs
-}
-
-pub fn halt() -> ! {
-    loop {
-        unsafe { asm!("hlt") };
     }
 }

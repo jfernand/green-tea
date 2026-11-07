@@ -1,10 +1,12 @@
 //! Green threads on x86_64, aarch64 (e.g. Apple Silicon) and riscv64, in three layers:
 //!
-//! - [`arch`](raw): save/restore registers and prime a fresh stack (the mechanism).
+//! - [`arch`](raw): save/restore registers and prime a fresh stack (the mechanism), from
+//!   the green-tea-arch crate, which the bare-metal kernels share.
 //! - [`Task`](raw::Task): an asymmetric coroutine with its own stack (resume / yield).
 //! - [`run`] / [`spawn`]: a cooperative round-robin scheduler (the policy).
 
-mod arch;
+use green_tea_arch as arch;
+
 mod runtime;
 mod stack;
 mod task;

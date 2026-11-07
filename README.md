@@ -13,14 +13,18 @@ With minimal help from R. Claude and R. Junie
 
 ## Layout
 
-The workspace has two versions side by side, so you can compare them:
+The workspace has two versions side by side, so you can compare them, and two bare-metal
+kernels built on the same context switch:
 
 | crate | what it shows |
 |---|---|
 | [`green-tea-v1`](green-tea-v1) | The first working version, x86_64 only. One global `MAIN` context, `static mut` state, and a `VecDeque` `run()` scheduler. Its git history goes through the bugs: a shadowed `static`, a missing `done` flag, and a stack misaligned for the SysV ABI. |
 | [`green-tea-v2`](green-tea-v2) | The same ideas split into layers: `arch` (save/restore registers, prime a stack) → `Task` (an asymmetric coroutine that switches back to whoever resumed it) → `run`/`spawn` (a round-robin scheduler on a thread-local run queue). No `static mut`. Runs on x86_64, aarch64 (including Apple Silicon) and riscv64. |
-| [`green-tea-kernel`](green-tea-kernel) | A bare-metal kernel for QEMU on riscv64, aarch64 and x86_64: v2's arch layer and a port of its `Task` and scheduler, plus drivers for the serial port, QEMU's fw_cfg device and the ramfb display, so you can watch the context switches on screen. |
-| [`xtask`](xtask) | `cargo xtask test` runs v2 across targets under qemu; `cargo xtask kernel` boots the kernel on all three. |
+| [`green-tea-arch`](green-tea-arch) | The `arch` layer on its own: `Context` and `swap_context` for each architecture. `no_std`, so v2 and the kernels share it. |
+| [`green-tea-bare`](green-tea-bare) | What the kernels share: boot code and drivers per board behind the `Platform` and `TimerInterrupt` traits, a port of v2's `Task` and scheduler, a heap, and drivers for the serial port, QEMU's fw_cfg device and the ramfb display. |
+| [`green-tea-coop`](green-tea-coop) | A bare-metal kernel for QEMU on riscv64, aarch64 and x86_64 whose tasks yield to each other, so you can watch the context switches on screen. |
+| [`green-tea-preempt`](green-tea-preempt) | The same, but the tasks never yield: a timer interrupt preempts them. riscv64 only, so far. |
+| [`xtask`](xtask) | `cargo xtask test` runs v2 across targets under qemu; `cargo xtask kernel` boots both kernels everywhere they run. |
 
 Each version has two demos: `coop-2-*` drives two tasks with a hand-written loop, and
 `coop-n-*` uses the scheduler.
@@ -45,17 +49,20 @@ trampoline, `bootstrap_entry`, which calls the task's entry function.
 | Callee-saved float registers | none | `d8–d15` | `fs0–fs11` |
 | Stack alignment | 16 bytes before a `call` | 16 bytes, always | 16 bytes |
 
-The assembly is in [`green-tea-v2/src/arch`](green-tea-v2/src/arch).
+The assembly is in [`green-tea-arch/src`](green-tea-arch/src).
 
 ## Watching switches on bare metal
 
 ```sh
 sudo apt install qemu-system-misc qemu-system-arm qemu-system-x86
 rustup target add riscv64gc-unknown-none-elf aarch64-unknown-none x86_64-unknown-none
-cargo xtask kernel                    # one QEMU window per architecture, all at once
-cargo xtask kernel --target aarch64   # just one
-cargo xtask kernel --headless --screenshot   # no windows; saves target/kernel/<arch>.png
+cargo xtask kernel                    # one QEMU window per kernel and architecture, all at once
+cargo xtask kernel --kernel preempt   # just the preemptive kernel
+cargo xtask kernel --target aarch64   # just one architecture
+cargo xtask kernel --headless --screenshot   # no windows; saves target/kernel/<kernel>-<arch>.png
 ```
+
+### Cooperative: green-tea-coop
 
 The kernel runs with no OS, no interrupts and one CPU. It gives QEMU's ramfb device a
 framebuffer by writing its address and shape to the fw_cfg file `etc/ramfb`. Then five
@@ -64,7 +71,8 @@ yields. Before each resume, the scheduler outlines the column of the task about 
 bumps the switch counter at the top. When all tasks finish, the status bar turns green and
 the serial console prints the total, which should be 57; `cargo xtask kernel` checks it.
 
-Everything but [`src/platform`](green-tea-kernel/src/platform) is shared. Per architecture:
+Everything but [`green-tea-bare/src/platform`](green-tea-bare/src/platform) is shared.
+Per architecture:
 
 | | riscv64 (`virt`) | aarch64 (`virt`) | x86_64 (`q35`) |
 |---|---|---|---|
@@ -77,10 +85,26 @@ Everything but [`src/platform`](green-tea-kernel/src/platform) is shared. Per ar
 Differences from v2: `thread_local!` becomes a plain static (there's one CPU), and stacks
 come from a bump allocator with no guard page (with no paging, nothing can fault).
 
+### Preemptive: green-tea-preempt
+
+Same screen, but the workers grow their bars in a busy loop and never call `yield_now`.
+Before resuming a task, the scheduler sets a timer deadline 100 ms ahead (through
+OpenSBI's `sbi_set_timer`). When it passes, the CPU traps into a handler that saves *every*
+register on the task's stack, then calls the same `yield_now` a cooperative task would.
+When the task is next resumed, `swap_context` returns into the handler, which restores the
+registers and `sret`s back into the loop. Each band of shading in a bar is one time slice.
+
+`swap_context` itself is unchanged: it only saves callee-saved registers because, to the
+compiler, it's a function call. An interrupt isn't, so the trap frame covers the rest.
+The other rule is that the scheduler runs with interrupts off, and tasks with them on.
+
+The kernel needs a board that implements `TimerInterrupt`, which only riscv64 does so
+far. Building it for another target fails on that trait bound.
+
 ## Testing
 
 ```sh
-cargo test --workspace --exclude green-tea-kernel   # host (v1 needs x86_64)
+cargo test               # host: the default members (v1 needs x86_64)
 cargo xtask test         # v2 on host, aarch64 and riscv64 (qemu), debug and release
 ```
 

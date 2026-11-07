@@ -1,0 +1,22 @@
+[package]
+name = "green-tea-bare"
+description = "What green-tea's bare-metal kernels share: boot code, platform drivers (serial, timer, fw_cfg, ramfb), a heap, and tasks."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+# Not a native library: `links` is how build.rs hands linker.ld's path to the kernels'
+# build scripts (as DEP_GREEN_TEA_BARE_LINKER_SCRIPT).
+links = "green-tea-bare"
+
+# Builds only for riscv64gc-unknown-none-elf, aarch64-unknown-none and x86_64-unknown-none.
+
+[lib]
+test = false
+bench = false
+
+[dependencies]
+green-tea-arch = { path = "../green-tea-arch" }
