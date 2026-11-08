@@ -5,7 +5,8 @@
 //!   interrupts. [`Board`] is the implementation for the target being built.
 //! - Drivers on top of a `Platform`: [`console`] (`println!`), [`fw_cfg`], [`ramfb`]; and
 //!   [`screen`], the demos' layout drawn on the framebuffer.
-//! - [`heap`] (a bump allocator), [`Global`] (statics in place of `thread_local!`).
+//! - `heap` (a bump allocator), [`stack`] (task stacks with guard pages), [`Global`]
+//!   (statics in place of `thread_local!`).
 //! - [`task`] and [`runtime`]: green-tea-v2's tasks and round-robin scheduler, ported to
 //!   bare metal, on top of green-tea-arch's `swap_context`.
 //!
@@ -13,7 +14,9 @@
 //! `_start` sets up a stack, zeroes .bss, and calls it. The panic handler and the global
 //! allocator live here.
 //!
-//! Memory is identity-mapped (no paging beyond x86_64's identity map) and there is one CPU.
+//! Memory is identity-mapped: aarch64 runs with the MMU off, x86_64 with a plain identity
+//! map, and riscv64 with an identity map that leaves out the task stacks' guard pages.
+//! There is one CPU.
 
 #![no_std]
 
@@ -27,6 +30,7 @@ pub mod platform;
 pub mod ramfb;
 pub mod runtime;
 pub mod screen;
+pub mod stack;
 pub mod task;
 
 pub use global::Global;

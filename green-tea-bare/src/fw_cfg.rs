@@ -99,6 +99,16 @@ pub fn find_file(name: &str) -> Option<(u16, u32)> {
     found
 }
 
+/// Read the file `name` into `buf`, up to its length. `None` if there's no such file.
+/// QEMU adds files from its command line with `-fw_cfg name=opt/...,string=...`.
+pub fn read_file(name: &str, buf: &mut [u8]) -> Option<usize> {
+    let (key, size) = find_file(name)?;
+    let len = buf.len().min(size as usize);
+    select(key);
+    read(&mut buf[..len]);
+    Some(len)
+}
+
 /// A DMA request, read by QEMU from guest memory. All fields are big-endian.
 #[repr(C, align(16))]
 struct DmaAccess {

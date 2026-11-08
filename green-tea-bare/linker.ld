@@ -42,10 +42,18 @@ SECTIONS
         __stack_top = .;
     }
 
-    /* Memory for the bump allocator (task stacks, closures, the run queue). */
+    /* Memory for the bump allocator (tasks, closures, the run queue). */
     .heap (NOLOAD) : ALIGN(4096) {
         __heap_start = .;
         . += 4M;
         __heap_end = .;
+    }
+
+    /* Task stacks, each with a guard page under it (see src/stack.rs). One 2 MiB page,
+     * so a board that pages can map just this region with 4 KiB pages. */
+    .stacks (NOLOAD) : ALIGN(2M) {
+        __stacks_start = .;
+        . += 2M;
+        __stacks_end = .;
     }
 }

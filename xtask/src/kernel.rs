@@ -11,22 +11,25 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitCode, Stdio};
+use std::ptr;
 use std::time::{Duration, Instant};
 use std::{env, thread};
 
 pub const USAGE: &str = "\
-usage: cargo xtask kernel [--kernel coop|preempt]... [--target riscv64|aarch64|x86_64]...
+usage: cargo xtask kernel [--kernel coop|preempt|overflow]... [--target riscv64|aarch64|x86_64]...
                           [--release] [--headless] [--screenshot]
 
 Builds the bare-metal kernels and boots each in QEMU on every architecture it supports,
 one window apiece, all at once. Close the windows to finish. The kernels' serial output
 is echoed here, and the run passes when every kernel reports PASS.
 
-  coop     green-tea-coop: tasks yield to each other (riscv64, aarch64, x86_64)
-  preempt  green-tea-preempt: a timer interrupt preempts tasks that never yield
-           (riscv64, aarch64)
+  coop      green-tea-coop: tasks yield to each other (riscv64, aarch64, x86_64)
+  preempt   green-tea-preempt: a timer interrupt preempts tasks that never yield, and one
+            that sleeps between steps (riscv64, aarch64)
+  overflow  green-tea-coop's test that a task overflowing its stack hits its guard page
+            (riscv64, which pages)
 
-  --kernel      only these kernels (default: both)
+  --kernel      only these kernels (default: all)
   --target      only these architectures (default: all three)
   --release     build with optimizations
   --headless    no windows: quit each QEMU as soon as its kernel finishes
@@ -35,14 +38,18 @@ is echoed here, and the run passes when every kernel reports PASS.
 struct Kernel {
     name: &'static str,
     package: &'static str,
-    /// The architectures it builds for, by `Arch::name`.
+    /// The architectures it runs on, by `Arch::name`.
     arches: &'static [&'static str],
+    /// A test for the kernel to run instead of its demo: the fw_cfg file opt/green-tea/test.
+    test: Option<&'static str>,
 }
 
 const KERNELS: &[Kernel] = &[
-    Kernel { name: "coop", package: "green-tea-coop", arches: &["riscv64", "aarch64", "x86_64"] },
+    Kernel { name: "coop", package: "green-tea-coop", arches: &["riscv64", "aarch64", "x86_64"], test: None },
     // Needs a board with green-tea-bare's TimerInterrupt: not x86_64, so far.
-    Kernel { name: "preempt", package: "green-tea-preempt", arches: &["riscv64", "aarch64"] },
+    Kernel { name: "preempt", package: "green-tea-preempt", arches: &["riscv64", "aarch64"], test: None },
+    // Needs a board whose guard pages fault: riscv64, with paging.
+    Kernel { name: "overflow", package: "green-tea-coop", arches: &["riscv64"], test: Some("overflow") },
 ];
 
 struct Arch {
@@ -125,6 +132,9 @@ pub fn main(args: &[String]) -> ExitCode {
     let profile = if options.release { "release" } else { "debug" };
     for job in &options.jobs {
         eprintln!("=== build {} {} {profile}", job.kernel.package, job.arch.name);
+        if options.jobs.iter().take_while(|j| !ptr::eq(*j, job)).any(|j| j.kernel.package == job.kernel.package && ptr::eq(j.arch, job.arch)) {
+            continue; // already built: another kernel runs the same binary
+        }
         if !build(job, options.release) {
             return ExitCode::FAILURE;
         }
@@ -191,8 +201,8 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 let value = args.next().ok_or("--kernel needs a value")?;
                 let kernel = KERNELS
                     .iter()
-                    .find(|k| k.name == value || k.package == value)
-                    .ok_or_else(|| format!("unknown kernel {value}; known: coop, preempt"))?;
+                    .find(|k| k.name == value)
+                    .ok_or_else(|| format!("unknown kernel {value}; known: coop, preempt, overflow"))?;
                 kernels.push(kernel);
             }
             "-h" | "--help" => return Err(String::new()),
@@ -291,6 +301,9 @@ impl Run {
             .stdout(Stdio::null()); // the monitor's echo; errors still go to stderr
         if headless {
             cmd.args(["-display", "none"]);
+        }
+        if let Some(test) = job.kernel.test {
+            cmd.arg("-fw_cfg").arg(format!("name=opt/green-tea/test,string={test}"));
         }
         Ok(Run {
             job,
@@ -409,7 +422,14 @@ mod tests {
     fn by_default_every_kernel_runs_everywhere_it_can() {
         assert_eq!(
             labels(&[]),
-            ["coop-riscv64", "coop-aarch64", "coop-x86_64", "preempt-riscv64", "preempt-aarch64"]
+            [
+                "coop-riscv64",
+                "coop-aarch64",
+                "coop-x86_64",
+                "preempt-riscv64",
+                "preempt-aarch64",
+                "overflow-riscv64"
+            ]
         );
     }
 

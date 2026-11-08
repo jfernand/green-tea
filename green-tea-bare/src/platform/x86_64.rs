@@ -136,6 +136,7 @@ const HPET_COUNTER: *const u64 = (HPET + 0xf0) as *const u64;
 
 impl Platform for Q35 {
     const NAME: &'static str = "x86_64";
+    const GUARD_PAGES: bool = false;
 
     /// Start the HPET's main counter, which `ticks` reads.
     fn init() {

@@ -4,9 +4,9 @@
 //!
 //! What changed from v2:
 //! - `CURRENT` is a [`Global`] instead of a `thread_local!`: there is one hart.
-//! - The stack is a heap `Box<[u8]>` instead of an mmap with a guard page. Without paging
-//!   there's nothing to make a page fault, so an overflow silently runs into whatever
-//!   sits below the stack.
+//! - The stack comes from green-tea-bare's pool instead of an mmap. It has a guard page
+//!   below it, as in v2, but only boards with paging make touching it fault (see
+//!   [`stack`](crate::stack)).
 //! - Each task has an `id`, so the demo can tell which one is about to run.
 //!
 //! Nothing here knows about interrupts. green-tea-preempt calls `yield_now` from its timer
@@ -14,12 +14,11 @@
 
 use crate::global::Global;
 use crate::platform::{Board, Platform};
+use crate::stack::Stack;
 use alloc::boxed::Box;
-use alloc::vec;
+use core::ops::Range;
 use core::ptr::{self, NonNull};
 use green_tea_arch::{Context, swap_context};
-
-const STACK_SIZE: usize = 16 * 1024;
 
 /// The task running right now, or null when we're on the boot stack.
 static CURRENT: Global<*mut Inner> = Global::new(ptr::null_mut());
@@ -27,8 +26,7 @@ static CURRENT: Global<*mut Inner> = Global::new(ptr::null_mut());
 /// Ids handed out in creation order, starting at 0.
 static NEXT_ID: Global<usize> = Global::new(0);
 
-/// An owned handle to a task. Dropping it frees the task's stack (a no-op with the bump
-/// allocator, but the ownership is the same as in v2).
+/// An owned handle to a task. Dropping it gives the task's stack back to the pool.
 pub struct Task {
     inner: NonNull<Inner>,
 }
@@ -41,14 +39,14 @@ struct Inner {
     id: usize,
     /// Set by `sleep_until` just before the task yields: don't run it again before this.
     wake_at: Option<u64>,
-    _stack: Box<[u8]>,
+    stack: Stack,
 }
 
 impl Task {
     pub fn new(func: impl FnOnce() + 'static) -> Task {
         let id = NEXT_ID.replace(NEXT_ID.get() + 1);
-        let mut stack = vec![0u8; STACK_SIZE].into_boxed_slice();
-        let top = stack.as_mut_ptr_range().end; // Context::new rounds it down to 16 bytes
+        let stack = Stack::take();
+        let top = stack.top(); // Context::new rounds it down to 16 bytes
         let inner = Box::into_raw(Box::new(Inner {
             context: Context::default(),
             caller: Context::default(),
@@ -56,7 +54,7 @@ impl Task {
             done: false,
             id,
             wake_at: None,
-            _stack: stack, // moving the Box doesn't move the bytes `top` points into
+            stack,
         }));
         unsafe {
             (*inner).context = Context::new(top, task_entry, inner.cast());
@@ -107,6 +105,16 @@ pub fn yield_now() {
     let inner = CURRENT.get();
     assert!(!inner.is_null(), "yield_now called outside a task");
     unsafe { swap_context(&raw mut (*inner).context, &raw const (*inner).caller) };
+}
+
+/// The guard page under the current task's stack.
+///
+/// # Panics
+/// If called outside a task.
+pub fn current_guard() -> Range<usize> {
+    let inner = CURRENT.get();
+    assert!(!inner.is_null(), "current_guard called outside a task");
+    unsafe { (*inner).stack.guard() }
 }
 
 /// Suspend the current task, and tell the scheduler not to resume it before `ticks()`

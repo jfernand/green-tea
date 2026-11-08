@@ -34,6 +34,10 @@ pub trait Platform {
     /// The architecture, for the boot banner.
     const NAME: &'static str;
 
+    /// Whether touching a task stack's guard page faults (see [`crate::stack`]). That
+    /// needs paging; boards without it run with the MMU off, or with a plain identity map.
+    const GUARD_PAGES: bool;
+
     /// Bring up what the other functions need (e.g. start x86_64's HPET). Call once, first.
     fn init();
 

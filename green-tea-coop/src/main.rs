@@ -4,6 +4,10 @@
 //!
 //! Tasks switch only when they call `yield_now`: no interrupts, one CPU. Everything else
 //! (boot, drivers, tasks, scheduler) is green-tea-bare; this is just the demo.
+//!
+//! With the fw_cfg file `opt/green-tea/test` set to "overflow", it runs a test instead: a
+//! task recurses until it overflows its stack, which on a board with guard pages must
+//! fault in that task's guard page (`cargo xtask kernel --kernel overflow`).
 
 #![no_std]
 #![no_main]
@@ -11,14 +15,20 @@
 use green_tea_bare::ramfb::Framebuffer;
 use green_tea_bare::runtime::{Switch, run, spawn};
 use green_tea_bare::screen::{COLORS, COLUMNS, Painter, Screen};
-use green_tea_bare::task::yield_now;
-use green_tea_bare::{Board, Global, Platform, boot, delay_ms, println};
+use green_tea_bare::task::{current_guard, yield_now};
+use green_tea_bare::{Board, Global, Platform, boot, delay_ms, fw_cfg, println, stack};
 
 /// Called by the platform's `_start`, on the boot stack, with .bss zeroed.
 #[unsafe(no_mangle)]
 extern "C" fn kmain() -> ! {
     let fb = boot("green-tea-coop");
-    demo(fb);
+    let mut test = [0u8; 16];
+    let len = fw_cfg::read_file("opt/green-tea/test", &mut test).unwrap_or(0);
+    match &test[..len] {
+        b"" => demo(fb),
+        b"overflow" => overflow_test(fb),
+        other => panic!("unknown test {:?}", core::str::from_utf8(other)),
+    }
     println!("halting");
     Board::halt()
 }
@@ -86,3 +96,58 @@ fn worker(mut painter: Painter, column: usize) {
     }
 }
 
+// ---- The overflow test ----------------------------------------------------------------
+//
+// The bare-metal twin of green-tea-v2's `overflow_hits_the_guard_page`: a task recurses
+// until its stack runs out. Passing needs the fault, and at an address in that task's
+// own guard page: without guard pages it would run on into the next slot down, silently.
+
+/// The overflowing task's guard page, and how deep it got.
+static GUARD: Global<(usize, usize)> = Global::new((0, 0));
+static DEPTH: Global<u64> = Global::new(0);
+
+fn overflow_test(fb: Framebuffer) {
+    if !Board::GUARD_PAGES {
+        println!("FAIL: {} has no guard pages", Board::NAME);
+        return;
+    }
+    static SCREEN: Global<Option<Framebuffer>> = Global::new(None);
+    SCREEN.set(Some(fb));
+    stack::on_overflow(|addr| {
+        let (start, end) = GUARD.get();
+        let depth = DEPTH.get();
+        if let Some(fb) = SCREEN.get() {
+            Screen::new(fb).finish(depth as usize); // green, with the depth reached
+        }
+        if (start..end).contains(&addr) {
+            println!("PASS: overflowed after {depth} frames, into the task's guard page at {addr:#x}");
+        } else {
+            println!("FAIL: faulted at {addr:#x}, outside the task's guard page {start:#x}..{end:#x}");
+        }
+        Board::halt()
+    });
+    println!("overflowing a {} KiB task stack", stack::STACK_SIZE / 1024);
+    run(
+        || {
+            spawn(|| {
+                let guard = current_guard();
+                GUARD.set((guard.start, guard.end));
+                recurse(0);
+                println!("FAIL: recursed without faulting");
+            })
+        },
+        |_| {},
+    );
+}
+
+/// Recurse with a 256-byte frame (well under a page, so it can't skip the guard page)
+/// that stays live across the call, so the recursion can't become a loop.
+#[inline(never)]
+fn recurse(depth: u64) -> u64 {
+    DEPTH.set(depth);
+    let frame = core::hint::black_box([depth as u8; 256]);
+    if depth == u64::MAX {
+        return 0;
+    }
+    recurse(depth + 1) + u64::from(frame[0])
+}

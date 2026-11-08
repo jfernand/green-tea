@@ -49,6 +49,7 @@ _start:
 
 impl Platform for AarchVirt {
     const NAME: &'static str = "aarch64";
+    const GUARD_PAGES: bool = false;
 
     fn init() {}
 

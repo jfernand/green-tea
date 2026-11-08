@@ -58,6 +58,7 @@ sudo apt install qemu-system-misc qemu-system-arm qemu-system-x86
 rustup target add riscv64gc-unknown-none-elf aarch64-unknown-none x86_64-unknown-none
 cargo xtask kernel                    # one QEMU window per kernel and architecture, all at once
 cargo xtask kernel --kernel preempt   # just the preemptive kernel
+cargo xtask kernel --kernel overflow  # the guard page test (riscv64)
 cargo xtask kernel --target aarch64   # just one architecture
 cargo xtask kernel --headless --screenshot   # no windows; saves target/kernel/<kernel>-<arch>.png
 ```
@@ -82,9 +83,14 @@ Per architecture:
 | fw_cfg | memory-mapped | memory-mapped | I/O ports |
 | Timer | `time` CSR | `cntvct_el0` | HPET |
 | Timer interrupt | SBI `set_timer` → supervisor timer interrupt | virtual timer → GICv2, IRQ 27 | not yet |
+| Paging | Sv39 identity map, guard pages unmapped | off | identity map (2 MiB pages), no guards |
 
 Differences from v2: `thread_local!` becomes a plain static (there's one CPU), and stacks
-come from a bump allocator with no guard page (with no paging, nothing can fault).
+come from a pool in which each 16 KiB stack has a 4 KiB guard page under it. Only riscv64
+turns on paging with the guard pages missing, so only there does an overflow fault; the
+`overflow` test checks that a task that recurses forever faults in its own guard page,
+like v2's `overflow_hits_the_guard_page`. A fault is handled on a stack of its own, since
+the task's is the one that's full.
 
 ### Preemptive: green-tea-preempt
 
