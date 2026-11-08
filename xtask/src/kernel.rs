@@ -23,7 +23,8 @@ one window apiece, all at once. Close the windows to finish. The kernels' serial
 is echoed here, and the run passes when every kernel reports PASS.
 
   coop     green-tea-coop: tasks yield to each other (riscv64, aarch64, x86_64)
-  preempt  green-tea-preempt: a timer interrupt preempts tasks that never yield (riscv64)
+  preempt  green-tea-preempt: a timer interrupt preempts tasks that never yield
+           (riscv64, aarch64)
 
   --kernel      only these kernels (default: both)
   --target      only these architectures (default: all three)
@@ -40,8 +41,8 @@ struct Kernel {
 
 const KERNELS: &[Kernel] = &[
     Kernel { name: "coop", package: "green-tea-coop", arches: &["riscv64", "aarch64", "x86_64"] },
-    // Needs a board with green-tea-bare's TimerInterrupt, which only riscv64 has so far.
-    Kernel { name: "preempt", package: "green-tea-preempt", arches: &["riscv64"] },
+    // Needs a board with green-tea-bare's TimerInterrupt: not x86_64, so far.
+    Kernel { name: "preempt", package: "green-tea-preempt", arches: &["riscv64", "aarch64"] },
 ];
 
 struct Arch {
@@ -63,7 +64,8 @@ const ARCHES: &[Arch] = &[
         name: "aarch64",
         triple: "aarch64-unknown-none",
         qemu: "qemu-system-aarch64",
-        machine: &["-machine", "virt", "-cpu", "cortex-a72"], // no firmware: QEMU jumps in at EL1
+        // No firmware: QEMU jumps in at EL1. green-tea-bare drives a GICv2 (the default).
+        machine: &["-machine", "virt,gic-version=2", "-cpu", "cortex-a72"],
     },
     Arch {
         name: "x86_64",
@@ -405,12 +407,15 @@ mod tests {
 
     #[test]
     fn by_default_every_kernel_runs_everywhere_it_can() {
-        assert_eq!(labels(&[]), ["coop-riscv64", "coop-aarch64", "coop-x86_64", "preempt-riscv64"]);
+        assert_eq!(
+            labels(&[]),
+            ["coop-riscv64", "coop-aarch64", "coop-x86_64", "preempt-riscv64", "preempt-aarch64"]
+        );
     }
 
     #[test]
     fn unsupported_combinations_are_skipped() {
-        assert_eq!(labels(&["--target", "aarch64"]), ["coop-aarch64"]);
+        assert_eq!(labels(&["--target", "x86_64"]), ["coop-x86_64"]);
         let args = ["--kernel".to_string(), "preempt".into(), "--target".into(), "x86_64".into()];
         assert!(parse(&args).is_err());
     }

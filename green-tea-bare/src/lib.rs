@@ -1,7 +1,7 @@
 //! What green-tea's bare-metal kernels (green-tea-coop, green-tea-preempt) share.
 //!
 //! - [`platform`]: per-machine code behind the [`Platform`] and [`TimerInterrupt`] traits:
-//!   boot code, serial port, timer, fw_cfg registers, and (riscv64 only, so far) timer
+//!   boot code, serial port, timer, fw_cfg registers, and (riscv64 and aarch64) timer
 //!   interrupts. [`Board`] is the implementation for the target being built.
 //! - Drivers on top of a `Platform`: [`console`] (`println!`), [`fw_cfg`], [`ramfb`]; and
 //!   [`screen`], the demos' layout drawn on the framebuffer.

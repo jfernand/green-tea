@@ -23,7 +23,7 @@ kernels built on the same context switch:
 | [`green-tea-arch`](green-tea-arch) | The `arch` layer on its own: `Context` and `swap_context` for each architecture. `no_std`, so v2 and the kernels share it. |
 | [`green-tea-bare`](green-tea-bare) | What the kernels share: boot code and drivers per board behind the `Platform` and `TimerInterrupt` traits, a port of v2's `Task` and scheduler, a heap, and drivers for the serial port, QEMU's fw_cfg device and the ramfb display. |
 | [`green-tea-coop`](green-tea-coop) | A bare-metal kernel for QEMU on riscv64, aarch64 and x86_64 whose tasks yield to each other, so you can watch the context switches on screen. |
-| [`green-tea-preempt`](green-tea-preempt) | The same, but the tasks never yield: a timer interrupt preempts them. riscv64 only, so far. |
+| [`green-tea-preempt`](green-tea-preempt) | The same, but the tasks never yield: a timer interrupt preempts them. riscv64 and aarch64. |
 | [`xtask`](xtask) | `cargo xtask test` runs v2 across targets under qemu; `cargo xtask kernel` boots both kernels everywhere they run. |
 
 Each version has two demos: `coop-2-*` drives two tasks with a hand-written loop, and
@@ -81,6 +81,7 @@ Per architecture:
 | Serial | 16550, memory-mapped | PL011 | 16550 on I/O ports |
 | fw_cfg | memory-mapped | memory-mapped | I/O ports |
 | Timer | `time` CSR | `cntvct_el0` | HPET |
+| Timer interrupt | SBI `set_timer` → supervisor timer interrupt | virtual timer → GICv2, IRQ 27 | not yet |
 
 Differences from v2: `thread_local!` becomes a plain static (there's one CPU), and stacks
 come from a bump allocator with no guard page (with no paging, nothing can fault).
@@ -88,18 +89,18 @@ come from a bump allocator with no guard page (with no paging, nothing can fault
 ### Preemptive: green-tea-preempt
 
 Same screen, but the workers grow their bars in a busy loop and never call `yield_now`.
-Before resuming a task, the scheduler sets a timer deadline 100 ms ahead (through
-OpenSBI's `sbi_set_timer`). When it passes, the CPU traps into a handler that saves *every*
-register on the task's stack, then calls the same `yield_now` a cooperative task would.
-When the task is next resumed, `swap_context` returns into the handler, which restores the
-registers and `sret`s back into the loop. Each band of shading in a bar is one time slice.
+Before resuming a task, the scheduler sets a timer deadline 100 ms ahead. When it passes,
+the CPU traps into a handler that saves *every* register on the task's stack, then calls
+the same `yield_now` a cooperative task would. When the task is next resumed,
+`swap_context` returns into the handler, which restores the registers and returns from the
+trap (`sret`, `eret`) back into the loop. Each band of shading in a bar is one time slice.
 
 `swap_context` itself is unchanged: it only saves callee-saved registers because, to the
 compiler, it's a function call. An interrupt isn't, so the trap frame covers the rest.
 The other rule is that the scheduler runs with interrupts off, and tasks with them on.
 
-The kernel needs a board that implements `TimerInterrupt`, which only riscv64 does so
-far. Building it for another target fails on that trait bound.
+The kernel needs a board that implements `TimerInterrupt`: riscv64 and aarch64 do, x86_64
+doesn't yet, and building for it fails on that trait bound.
 
 ## Testing
 
