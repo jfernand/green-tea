@@ -13,6 +13,7 @@
 //! handler, and keeps interrupts off whenever a switch is under way.
 
 use crate::global::Global;
+use crate::platform::{Board, Platform};
 use alloc::boxed::Box;
 use alloc::vec;
 use core::ptr::{self, NonNull};
@@ -38,6 +39,8 @@ struct Inner {
     func: Option<Box<dyn FnOnce()>>,
     done: bool,
     id: usize,
+    /// Set by `sleep_until` just before the task yields: don't run it again before this.
+    wake_at: Option<u64>,
     _stack: Box<[u8]>,
 }
 
@@ -52,6 +55,7 @@ impl Task {
             func: Some(Box::new(func)),
             done: false,
             id,
+            wake_at: None,
             _stack: stack, // moving the Box doesn't move the bytes `top` points into
         }));
         unsafe {
@@ -66,6 +70,11 @@ impl Task {
 
     pub fn is_done(&self) -> bool {
         unsafe { (*self.inner.as_ptr()).done }
+    }
+
+    /// If the task went to sleep when it last yielded, until when. Taking it clears it.
+    pub fn take_wake_at(&mut self) -> Option<u64> {
+        unsafe { (*self.inner.as_ptr()).wake_at.take() }
     }
 
     /// Run the task until it yields or finishes.
@@ -98,6 +107,23 @@ pub fn yield_now() {
     let inner = CURRENT.get();
     assert!(!inner.is_null(), "yield_now called outside a task");
     unsafe { swap_context(&raw mut (*inner).context, &raw const (*inner).caller) };
+}
+
+/// Suspend the current task, and tell the scheduler not to resume it before `ticks()`
+/// reaches `deadline`.
+///
+/// # Panics
+/// If called outside a task.
+pub fn sleep_until(deadline: u64) {
+    let inner = CURRENT.get();
+    assert!(!inner.is_null(), "sleep_until called outside a task");
+    unsafe { (*inner).wake_at = Some(deadline) };
+    yield_now();
+}
+
+/// `sleep_until`, `ms` milliseconds from now.
+pub fn sleep_ms(ms: u64) {
+    sleep_until(Board::ticks() + ms * Board::ticks_per_ms());
 }
 
 /// Where every task starts, on its own stack: run the closure, mark the task done, and

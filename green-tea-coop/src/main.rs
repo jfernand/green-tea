@@ -9,7 +9,7 @@
 #![no_main]
 
 use green_tea_bare::ramfb::Framebuffer;
-use green_tea_bare::runtime::{run, spawn};
+use green_tea_bare::runtime::{Switch, run, spawn};
 use green_tea_bare::screen::{COLORS, COLUMNS, Painter, Screen};
 use green_tea_bare::task::yield_now;
 use green_tea_bare::{Board, Global, Platform, boot, delay_ms, println};
@@ -52,7 +52,8 @@ fn demo(fb: Framebuffer) {
                 spawn(move || worker(painter, column));
             }
         },
-        |id| {
+        |switch| {
+            let Switch::To(id) = switch else { return }; // no task here sleeps, so never idle
             let switches = SWITCHES.get() + 1;
             SWITCHES.set(switches);
             screen.switch_to(id, switches);
@@ -84,3 +85,4 @@ fn worker(mut painter: Painter, column: usize) {
         }
     }
 }
+

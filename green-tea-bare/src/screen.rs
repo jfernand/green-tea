@@ -69,6 +69,15 @@ impl Screen {
         self.fb.draw_number(WIDTH - 54, 20, id, 4, BACKGROUND);
     }
 
+    /// No task is runnable: drop the highlight, and show an empty box for the task id.
+    pub fn idle(&mut self, switches: usize) {
+        if let Some(previous) = self.highlighted.take() {
+            self.outline(previous, IDLE_BORDER);
+        }
+        self.status(STATUS_BG, switches);
+        self.fb.outline(WIDTH - 60, 15, 36, 30, 2, IDLE_BORDER);
+    }
+
     /// Everything is done: drop the highlight and turn the status bar green.
     pub fn finish(&mut self, switches: usize) {
         if let Some(previous) = self.highlighted.take() {

@@ -23,7 +23,7 @@ kernels built on the same context switch:
 | [`green-tea-arch`](green-tea-arch) | The `arch` layer on its own: `Context` and `swap_context` for each architecture. `no_std`, so v2 and the kernels share it. |
 | [`green-tea-bare`](green-tea-bare) | What the kernels share: boot code and drivers per board behind the `Platform` and `TimerInterrupt` traits, a port of v2's `Task` and scheduler, a heap, and drivers for the serial port, QEMU's fw_cfg device and the ramfb display. |
 | [`green-tea-coop`](green-tea-coop) | A bare-metal kernel for QEMU on riscv64, aarch64 and x86_64 whose tasks yield to each other, so you can watch the context switches on screen. |
-| [`green-tea-preempt`](green-tea-preempt) | The same, but the tasks never yield: a timer interrupt preempts them. riscv64 and aarch64. |
+| [`green-tea-preempt`](green-tea-preempt) | The same, but the tasks never yield: a timer interrupt preempts them. One task sleeps instead, and costs no time slices. riscv64 and aarch64. |
 | [`xtask`](xtask) | `cargo xtask test` runs v2 across targets under qemu; `cargo xtask kernel` boots both kernels everywhere they run. |
 
 Each version has two demos: `coop-2-*` drives two tasks with a hand-written loop, and
@@ -94,6 +94,11 @@ the CPU traps into a handler that saves *every* register on the task's stack, th
 the same `yield_now` a cooperative task would. When the task is next resumed,
 `swap_context` returns into the handler, which restores the registers and returns from the
 trap (`sret`, `eret`) back into the loop. Each band of shading in a bar is one time slice.
+
+The fifth worker sleeps between steps instead (`sleep_ms`). A sleeping task is parked off
+the run queue until its deadline, so it costs no time slices: it uses about 1% of the CPU
+of the busy workers, and its bar gets a thin stripe per wakeup. When it's the only task
+left, the scheduler idles until it's due (an empty box in the status bar).
 
 `swap_context` itself is unchanged: it only saves callee-saved registers because, to the
 compiler, it's a function call. An interrupt isn't, so the trap frame covers the rest.
