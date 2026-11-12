@@ -3,8 +3,8 @@
 //! cooperative kernel's tasks call themselves. The ramfb display shows it: every worker
 //! grows its bar in a busy loop, and each band of shading is one time slice.
 //!
-//! riscv64 and aarch64: `demo` needs `Board: TimerInterrupt`, which x86_64's board doesn't
-//! implement yet. Run it with `cargo xtask kernel --kernel preempt`.
+//! `demo` needs `Board: TimerInterrupt`, which every board implements. Run it with
+//! `cargo xtask kernel --kernel preempt`.
 //!
 //! How a preemption works:
 //! 1. The scheduler arms the timer for one time slice, then resumes a task.
@@ -15,7 +15,7 @@
 //!    using) under `on_tick`'s frame, with the callee-saved registers in its `Context`.
 //! 4. Later the scheduler resumes it: `swap_context` returns into `on_tick`, which returns
 //!    to the trap entry, which restores the frame and returns from the trap (`sret`,
-//!    `eret`) into the busy loop, as if nothing had happened.
+//!    `eret`, `iretq`) into the busy loop, as if nothing had happened.
 //!
 //! The one rule that makes this safe: the scheduler only runs with interrupts off, and
 //! tasks only with them on. See [`spawn_preemptible`].

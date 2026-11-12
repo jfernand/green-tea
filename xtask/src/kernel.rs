@@ -25,9 +25,9 @@ is echoed here, and the run passes when every kernel reports PASS.
 
   coop      green-tea-coop: tasks yield to each other (riscv64, aarch64, x86_64)
   preempt   green-tea-preempt: a timer interrupt preempts tasks that never yield, and one
-            that sleeps between steps (riscv64, aarch64)
+            that sleeps between steps (riscv64, aarch64, x86_64)
   overflow  green-tea-coop's test that a task overflowing its stack hits its guard page
-            (riscv64, which pages)
+            (riscv64, x86_64: the boards that page)
 
   --kernel      only these kernels (default: all)
   --target      only these architectures (default: all three)
@@ -46,10 +46,9 @@ struct Kernel {
 
 const KERNELS: &[Kernel] = &[
     Kernel { name: "coop", package: "green-tea-coop", arches: &["riscv64", "aarch64", "x86_64"], test: None },
-    // Needs a board with green-tea-bare's TimerInterrupt: not x86_64, so far.
-    Kernel { name: "preempt", package: "green-tea-preempt", arches: &["riscv64", "aarch64"], test: None },
-    // Needs a board whose guard pages fault: riscv64, with paging.
-    Kernel { name: "overflow", package: "green-tea-coop", arches: &["riscv64"], test: Some("overflow") },
+    Kernel { name: "preempt", package: "green-tea-preempt", arches: &["riscv64", "aarch64", "x86_64"], test: None },
+    // Needs a board whose guard pages fault: not aarch64 (MMU off), so far.
+    Kernel { name: "overflow", package: "green-tea-coop", arches: &["riscv64", "x86_64"], test: Some("overflow") },
 ];
 
 struct Arch {
@@ -428,15 +427,17 @@ mod tests {
                 "coop-x86_64",
                 "preempt-riscv64",
                 "preempt-aarch64",
-                "overflow-riscv64"
+                "preempt-x86_64",
+                "overflow-riscv64",
+                "overflow-x86_64"
             ]
         );
     }
 
     #[test]
     fn unsupported_combinations_are_skipped() {
-        assert_eq!(labels(&["--target", "x86_64"]), ["coop-x86_64"]);
-        let args = ["--kernel".to_string(), "preempt".into(), "--target".into(), "x86_64".into()];
+        assert_eq!(labels(&["--target", "aarch64"]), ["coop-aarch64", "preempt-aarch64"]);
+        let args = ["--kernel".to_string(), "overflow".into(), "--target".into(), "aarch64".into()];
         assert!(parse(&args).is_err());
     }
 }

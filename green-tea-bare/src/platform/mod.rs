@@ -67,7 +67,7 @@ pub trait FwCfgPort {
 }
 
 /// A board that can interrupt the running code when a deadline passes: what preemption
-/// needs. Implemented on riscv64 and aarch64.
+/// needs. Every board implements it.
 ///
 /// Interrupt handlers run with interrupts off, on the stack of whatever they interrupted,
 /// and with every register of the interrupted code saved, so a handler may switch to

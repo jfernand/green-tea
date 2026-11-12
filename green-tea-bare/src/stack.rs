@@ -3,8 +3,8 @@
 //! overflows runs into its own guard page first.
 //!
 //! The guard only protects anything on a board with `Platform::GUARD_PAGES`, which maps
-//! the region with the guard pages left out, so touching one faults (riscv64, with Sv39
-//! paging). Elsewhere memory isn't paged, and an overflow writes into the guard page and
+//! the region with the guard pages left out, so touching one faults (riscv64 and x86_64).
+//! On aarch64 the MMU is off, and an overflow writes into the guard page and
 //! then into the slot below, silently, as it would with any heap-allocated stack.
 
 use crate::global::Global;

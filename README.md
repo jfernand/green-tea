@@ -23,7 +23,7 @@ kernels built on the same context switch:
 | [`green-tea-arch`](green-tea-arch) | The `arch` layer on its own: `Context` and `swap_context` for each architecture. `no_std`, so v2 and the kernels share it. |
 | [`green-tea-bare`](green-tea-bare) | What the kernels share: boot code and drivers per board behind the `Platform` and `TimerInterrupt` traits, a port of v2's `Task` and scheduler, a heap, and drivers for the serial port, QEMU's fw_cfg device and the ramfb display. |
 | [`green-tea-coop`](green-tea-coop) | A bare-metal kernel for QEMU on riscv64, aarch64 and x86_64 whose tasks yield to each other, so you can watch the context switches on screen. |
-| [`green-tea-preempt`](green-tea-preempt) | The same, but the tasks never yield: a timer interrupt preempts them. One task sleeps instead, and costs no time slices. riscv64 and aarch64. |
+| [`green-tea-preempt`](green-tea-preempt) | The same, but the tasks never yield: a timer interrupt preempts them. One task sleeps instead, and costs no time slices. |
 | [`xtask`](xtask) | `cargo xtask test` runs v2 across targets under qemu; `cargo xtask kernel` boots both kernels everywhere they run. |
 
 Each version has two demos: `coop-2-*` drives two tasks with a hand-written loop, and
@@ -58,7 +58,7 @@ sudo apt install qemu-system-misc qemu-system-arm qemu-system-x86
 rustup target add riscv64gc-unknown-none-elf aarch64-unknown-none x86_64-unknown-none
 cargo xtask kernel                    # one QEMU window per kernel and architecture, all at once
 cargo xtask kernel --kernel preempt   # just the preemptive kernel
-cargo xtask kernel --kernel overflow  # the guard page test (riscv64)
+cargo xtask kernel --kernel overflow  # the guard page test (riscv64, x86_64)
 cargo xtask kernel --target aarch64   # just one architecture
 cargo xtask kernel --headless --screenshot   # no windows; saves target/kernel/<kernel>-<arch>.png
 ```
@@ -82,15 +82,16 @@ Per architecture:
 | Serial | 16550, memory-mapped | PL011 | 16550 on I/O ports |
 | fw_cfg | memory-mapped | memory-mapped | I/O ports |
 | Timer | `time` CSR | `cntvct_el0` | HPET |
-| Timer interrupt | SBI `set_timer` → supervisor timer interrupt | virtual timer → GICv2, IRQ 27 | not yet |
-| Paging | Sv39 identity map, guard pages unmapped | off | identity map (2 MiB pages), no guards |
+| Timer interrupt | SBI `set_timer` → supervisor timer interrupt | virtual timer → GICv2, IRQ 27 | local APIC timer, one-shot, measured against the HPET |
+| Paging | Sv39 identity map, guard pages unmapped | off | identity map (2 MiB pages; 4 KiB for the stack pool, guard pages unmapped) |
 
 Differences from v2: `thread_local!` becomes a plain static (there's one CPU), and stacks
-come from a pool in which each 16 KiB stack has a 4 KiB guard page under it. Only riscv64
-turns on paging with the guard pages missing, so only there does an overflow fault; the
+come from a pool in which each 16 KiB stack has a 4 KiB guard page under it. riscv64 and
+x86_64 map memory with the guard pages missing, so there an overflow faults (aarch64 runs
+with the MMU off); the
 `overflow` test checks that a task that recurses forever faults in its own guard page,
-like v2's `overflow_hits_the_guard_page`. A fault is handled on a stack of its own, since
-the task's is the one that's full.
+like v2's `overflow_hits_the_guard_page`. A fault is handled on a stack of its own (on x86_64, IST1
+in the TSS), since the task's is the one that's full.
 
 ### Preemptive: green-tea-preempt
 
@@ -99,7 +100,7 @@ Before resuming a task, the scheduler sets a timer deadline 100 ms ahead. When i
 the CPU traps into a handler that saves *every* register on the task's stack, then calls
 the same `yield_now` a cooperative task would. When the task is next resumed,
 `swap_context` returns into the handler, which restores the registers and returns from the
-trap (`sret`, `eret`) back into the loop. Each band of shading in a bar is one time slice.
+trap (`sret`, `eret`, `iretq`) back into the loop. Each band of shading in a bar is one time slice.
 
 The fifth worker sleeps between steps instead (`sleep_ms`). A sleeping task is parked off
 the run queue until its deadline, so it costs no time slices: it uses about 1% of the CPU
@@ -110,8 +111,8 @@ left, the scheduler idles until it's due (an empty box in the status bar).
 compiler, it's a function call. An interrupt isn't, so the trap frame covers the rest.
 The other rule is that the scheduler runs with interrupts off, and tasks with them on.
 
-The kernel needs a board that implements `TimerInterrupt`: riscv64 and aarch64 do, x86_64
-doesn't yet, and building for it fails on that trait bound.
+The kernel needs a board that implements `TimerInterrupt`; all three do. A board that
+didn't would fail to build on that trait bound.
 
 ## Testing
 

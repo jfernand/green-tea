@@ -1,8 +1,7 @@
 //! What green-tea's bare-metal kernels (green-tea-coop, green-tea-preempt) share.
 //!
 //! - [`platform`]: per-machine code behind the [`Platform`] and [`TimerInterrupt`] traits:
-//!   boot code, serial port, timer, fw_cfg registers, and (riscv64 and aarch64) timer
-//!   interrupts. [`Board`] is the implementation for the target being built.
+//!   boot code, serial port, timer, fw_cfg registers, and timer interrupts. [`Board`] is the implementation for the target being built.
 //! - Drivers on top of a `Platform`: [`console`] (`println!`), [`fw_cfg`], [`ramfb`]; and
 //!   [`screen`], the demos' layout drawn on the framebuffer.
 //! - `heap` (a bump allocator), [`stack`] (task stacks with guard pages), [`Global`]
@@ -14,8 +13,8 @@
 //! `_start` sets up a stack, zeroes .bss, and calls it. The panic handler and the global
 //! allocator live here.
 //!
-//! Memory is identity-mapped: aarch64 runs with the MMU off, x86_64 with a plain identity
-//! map, and riscv64 with an identity map that leaves out the task stacks' guard pages.
+//! Memory is identity-mapped: aarch64 runs with the MMU off, and riscv64 and x86_64 with
+//! an identity map that leaves out the task stacks' guard pages.
 //! There is one CPU.
 
 #![no_std]
