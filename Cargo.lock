@@ -111,6 +111,7 @@ dependencies = [
  "green-tea-pl011",
  "green-tea-ramfb",
  "green-tea-virtio",
+ "green-tea-virtio-blk",
 ]
 
 [[package]]
@@ -187,6 +188,14 @@ version = "0.1.0"
 dependencies = [
  "green-tea-io",
  "green-tea-pci",
+]
+
+[[package]]
+name = "green-tea-virtio-blk"
+version = "0.1.0"
+dependencies = [
+ "green-tea-io",
+ "green-tea-virtio",
 ]
 
 [[package]]

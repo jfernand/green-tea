@@ -5,7 +5,7 @@
 //!   port, how to reach fw_cfg, where to look for virtio devices). [`Board`] is the
 //!   implementation for the target being built.
 //! - The device drivers themselves are crates of their own, in drivers/, re-exported
-//!   here: [`fw_cfg`], [`ramfb`], [`pci`], [`virtio`]. Here are [`console`]
+//!   here: [`fw_cfg`], [`ramfb`], [`pci`], [`virtio`], [`virtio_blk`]. Here are [`console`]
 //!   (`println!` on the board's serial port) and [`screen`], the demos' layout drawn on
 //!   the framebuffer.
 //! - `heap` (a bump allocator), [`stack`] (task stacks with guard pages), [`Global`]
@@ -35,7 +35,10 @@ pub mod stack;
 pub mod task;
 
 pub use global::Global;
-pub use {green_tea_fw_cfg as fw_cfg, green_tea_pci as pci, green_tea_ramfb as ramfb, green_tea_virtio as virtio};
+pub use {
+    green_tea_fw_cfg as fw_cfg, green_tea_pci as pci, green_tea_ramfb as ramfb, green_tea_virtio as virtio,
+    green_tea_virtio_blk as virtio_blk,
+};
 pub use platform::{Board, Platform, TimerInterrupt};
 
 use core::panic::PanicInfo;

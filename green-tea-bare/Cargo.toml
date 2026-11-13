@@ -27,3 +27,4 @@ green-tea-fw-cfg = { path = "../drivers/fw-cfg" }
 green-tea-ramfb = { path = "../drivers/ramfb" }
 green-tea-pci = { path = "../drivers/pci" }
 green-tea-virtio = { path = "../drivers/virtio" }
+green-tea-virtio-blk = { path = "../drivers/virtio-blk" }

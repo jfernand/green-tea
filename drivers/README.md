@@ -12,6 +12,7 @@ caller's to say, and green-tea-bare's platforms say it.
 | [`green-tea-ramfb`](ramfb) | QEMU's ramfb display, set up through fw_cfg | all |
 | [`green-tea-pci`](pci) | PCI configuration space through ECAM | x86_64 |
 | [`green-tea-virtio`](virtio) | virtio: negotiation, split virtqueues, the MMIO and PCI transports | all |
+| [`green-tea-virtio-blk`](virtio-blk) | virtio-blk, a disk, over any virtio transport | all |
 | [`green-tea-io`](io) | not a driver: what they share (`dma_fence`, x86 port I/O) | |
 
 All are `no_std` and build only for the bare-metal targets. They assume what
