@@ -107,8 +107,10 @@ dependencies = [
  "green-tea-fw-cfg",
  "green-tea-io",
  "green-tea-ns16550",
+ "green-tea-pci",
  "green-tea-pl011",
  "green-tea-ramfb",
+ "green-tea-virtio",
 ]
 
 [[package]]
@@ -177,6 +179,14 @@ dependencies = [
  "test-log",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "green-tea-virtio"
+version = "0.1.0"
+dependencies = [
+ "green-tea-io",
+ "green-tea-pci",
 ]
 
 [[package]]

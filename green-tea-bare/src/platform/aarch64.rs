@@ -14,6 +14,7 @@ use core::arch::{asm, global_asm};
 use core::ptr::{read_volatile, write_volatile};
 use green_tea_fw_cfg::Mmio;
 use green_tea_pl011::Pl011;
+use green_tea_virtio::{self as virtio, AnyTransport};
 
 pub struct AarchVirt;
 
@@ -80,6 +81,16 @@ impl Platform for AarchVirt {
 
     type FwCfg = Mmio;
     const FW_CFG: Mmio = Mmio(0x0902_0000);
+
+    /// 32 virtio-mmio slots, 0x200 bytes apart.
+    fn for_each_virtio(mut f: impl FnMut(virtio::Device)) -> Result<(), &'static str> {
+        for slot in 0..32 {
+            if let Some((id, transport)) = virtio::mmio::probe(0x0a00_0000 + slot * 0x200)? {
+                f(virtio::Device { id, transport: AnyTransport::Mmio(transport) });
+            }
+        }
+        Ok(())
+    }
 }
 
 // ---- Exceptions -----------------------------------------------------------------------

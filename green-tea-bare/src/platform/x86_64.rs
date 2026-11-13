@@ -23,6 +23,8 @@ use core::ptr::{read_volatile, write_volatile};
 use green_tea_fw_cfg::IoPorts;
 use green_tea_io::port::outb;
 use green_tea_ns16550::Ns16550Port;
+use green_tea_pci::Ecam;
+use green_tea_virtio::{self as virtio, AnyTransport};
 
 pub struct Q35;
 
@@ -167,6 +169,18 @@ impl Platform for Q35 {
 
     type FwCfg = IoPorts;
     const FW_CFG: IoPorts = IoPorts;
+
+    /// virtio devices are PCI functions here. SeaBIOS put ECAM at 0xb000_0000 (inside
+    /// the 4 GiB that `_start` maps) and gave their BARs addresses below 4 GiB.
+    fn for_each_virtio(mut f: impl FnMut(virtio::Device)) -> Result<(), &'static str> {
+        let ecam = Ecam(0xb000_0000);
+        ecam.for_each_function(|function| {
+            if let Some((id, transport)) = virtio::pci::probe(ecam, function) {
+                f(virtio::Device { id, transport: AnyTransport::Pci(transport) });
+            }
+        });
+        Ok(())
+    }
 }
 
 // ---- Traps ----------------------------------------------------------------------------

@@ -25,4 +25,5 @@ green-tea-ns16550 = { path = "../drivers/ns16550" }
 green-tea-pl011 = { path = "../drivers/pl011" }
 green-tea-fw-cfg = { path = "../drivers/fw-cfg" }
 green-tea-ramfb = { path = "../drivers/ramfb" }
-
+green-tea-pci = { path = "../drivers/pci" }
+green-tea-virtio = { path = "../drivers/virtio" }

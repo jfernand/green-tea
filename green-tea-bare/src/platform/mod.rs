@@ -26,6 +26,7 @@ pub use riscv64::RiscvVirt as Board;
 pub use x86_64::Q35 as Board;
 
 pub use green_tea_fw_cfg::{FwCfg, FwCfgPort};
+use green_tea_virtio as virtio;
 
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64")))]
 compile_error!("green-tea-bare supports riscv64, aarch64 and x86_64 so far");
@@ -60,6 +61,22 @@ pub trait Platform {
     /// The fw_cfg device, ready to use.
     fn fw_cfg() -> FwCfg<Self::FwCfg> {
         FwCfg(Self::FW_CFG)
+    }
+
+    /// Call `f` with every virtio device on the board: in `virt`'s virtio-mmio slots on
+    /// riscv64 and aarch64, on the PCI bus on x86_64. An error if one is there that the
+    /// driver can't use (a legacy virtio-mmio device).
+    fn for_each_virtio(f: impl FnMut(virtio::Device)) -> Result<(), &'static str>;
+
+    /// The first virtio device with id `id` (e.g. [`virtio::ID_BLOCK`]).
+    fn find_virtio(id: u32) -> Result<Option<virtio::AnyTransport>, &'static str> {
+        let mut found = None;
+        Self::for_each_virtio(|device| {
+            if found.is_none() && device.id == id {
+                found = Some(device.transport);
+            }
+        })?;
+        Ok(found)
     }
 }
 

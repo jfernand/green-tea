@@ -16,6 +16,7 @@ use crate::stack;
 use core::arch::{asm, global_asm};
 use green_tea_fw_cfg::Mmio;
 use green_tea_ns16550::Ns16550Mmio;
+use green_tea_virtio::{self as virtio, AnyTransport};
 
 pub struct RiscvVirt;
 
@@ -81,6 +82,16 @@ impl Platform for RiscvVirt {
 
     type FwCfg = Mmio;
     const FW_CFG: Mmio = Mmio(0x1010_0000);
+
+    /// Eight virtio-mmio slots, 4 KiB apart.
+    fn for_each_virtio(mut f: impl FnMut(virtio::Device)) -> Result<(), &'static str> {
+        for slot in 0..8 {
+            if let Some((id, transport)) = virtio::mmio::probe(0x1000_1000 + slot * 0x1000)? {
+                f(virtio::Device { id, transport: AnyTransport::Mmio(transport) });
+            }
+        }
+        Ok(())
+    }
 }
 
 // ---- Traps ----------------------------------------------------------------------------
