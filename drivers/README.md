@@ -10,6 +10,7 @@ caller's to say, and green-tea-bare's platforms say it.
 | [`green-tea-pl011`](pl011) | Arm PL011 UART | aarch64 |
 | [`green-tea-fw-cfg`](fw-cfg) | QEMU's firmware configuration device | all |
 | [`green-tea-ramfb`](ramfb) | QEMU's ramfb display, set up through fw_cfg | all |
+| [`green-tea-pci`](pci) | PCI configuration space through ECAM | x86_64 (for virtio, next) |
 | [`green-tea-io`](io) | not a driver: what they share (`dma_fence`, x86 port I/O) | |
 
 All are `no_std` and build only for the bare-metal targets. They assume what

@@ -137,6 +137,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "green-tea-pci"
+version = "0.1.0"
+
+[[package]]
 name = "green-tea-pl011"
 version = "0.1.0"
 
