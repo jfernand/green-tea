@@ -7,7 +7,8 @@
 //!
 //! With the fw_cfg file `opt/green-tea/test` set to "overflow", it runs a test instead: a
 //! task recurses until it overflows its stack, which on a board with guard pages must
-//! fault in that task's guard page (`cargo xtask kernel --kernel overflow`).
+//! fault in that task's guard page (`cargo xtask kernel --kernel overflow`). Set to "disk",
+//! it tests the virtio-blk driver against a disk image xtask made (`--kernel disk`).
 
 #![no_std]
 #![no_main]
@@ -16,7 +17,12 @@ use green_tea_bare::ramfb::Framebuffer;
 use green_tea_bare::runtime::{Switch, run, spawn};
 use green_tea_bare::screen::{COLORS, COLUMNS, Painter, Screen};
 use green_tea_bare::task::{current_guard, yield_now};
+use green_tea_bare::virtio::{self, Transport};
+use green_tea_bare::virtio_blk::{self as blk, Blk, SECTOR_SIZE};
 use green_tea_bare::{Board, Global, Platform, boot, delay_ms, println, stack};
+
+extern crate alloc;
+use alloc::vec;
 
 /// Called by the platform's `_start`, on the boot stack, with .bss zeroed.
 #[unsafe(no_mangle)]
@@ -27,6 +33,7 @@ extern "C" fn kmain() -> ! {
     match &test[..len] {
         b"" => demo(fb),
         b"overflow" => overflow_test(fb),
+        b"disk" => disk_test(fb),
         other => panic!("unknown test {:?}", core::str::from_utf8(other)),
     }
     println!("halting");
@@ -150,4 +157,107 @@ fn recurse(depth: u64) -> u64 {
         return 0;
     }
     recurse(depth + 1) + u64::from(frame[0])
+}
+
+// ---- The disk test --------------------------------------------------------------------
+//
+// cargo xtask kernel attaches a disk image whose every byte is `pattern(sector, offset)`.
+// Read it all back, a few sectors per request; then overwrite one sector, flush, and
+// check that it reads back changed and its neighbours didn't.
+
+/// Must match xtask's `disk_pattern`.
+fn pattern(sector: u64, offset: usize) -> u8 {
+    (sector as u8).wrapping_mul(31) ^ (offset as u8) ^ (offset >> 8) as u8
+}
+
+/// The serial number xtask gives the disk.
+const DISK_ID: &[u8] = b"green-tea-disk";
+/// Sectors per read request.
+const CHUNK: usize = 4;
+/// The sector the test overwrites.
+const SCRATCH: u64 = 3;
+
+fn disk_test(fb: Framebuffer) {
+    Board::for_each_virtio(|d| println!("virtio: {} device (id {})", virtio::device_name(d.id), d.id))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let transport = match Board::find_virtio(virtio::ID_BLOCK) {
+        Ok(Some(t)) => t,
+        Ok(None) => return println!("FAIL: no virtio block device"),
+        Err(e) => return println!("FAIL: {e}"),
+    };
+    let kind = match transport {
+        virtio::AnyTransport::Mmio(_) => "MMIO",
+        virtio::AnyTransport::Pci(_) => "PCI",
+    };
+    let mut disk = match Blk::new(transport) {
+        Ok(disk) => disk,
+        Err(e) => return println!("FAIL: {e}"),
+    };
+    let sectors = disk.capacity();
+    let id = match disk.id() {
+        Ok(id) => id,
+        Err(e) => return println!("FAIL: reading the disk's id: {e}"),
+    };
+    let id = &id[..id.iter().position(|&b| b == 0).unwrap_or(id.len())];
+    println!(
+        "virtio-blk over {kind}: {sectors} sectors ({} KiB), id {:?}{}{}",
+        sectors * SECTOR_SIZE as u64 / 1024,
+        core::str::from_utf8(id).unwrap_or("?"),
+        if disk.read_only() { ", read-only" } else { "" },
+        if disk.write_cache() { ", write cache" } else { "" },
+    );
+    if id != DISK_ID {
+        return println!("FAIL: the disk's id isn't {:?}", core::str::from_utf8(DISK_ID).unwrap());
+    }
+    if let Err(e) = check_disk(&mut disk) {
+        return println!("FAIL: {e}");
+    }
+    Screen::new(fb).finish(sectors as usize); // green, with the sector count
+    println!("PASS: read {sectors} sectors over virtio-{kind}, and wrote one back");
+}
+
+fn check_disk(disk: &mut Blk<impl Transport>) -> Result<(), alloc::string::String> {
+    use alloc::format;
+    let sectors = disk.capacity();
+    if sectors < SCRATCH + 2 || !sectors.is_multiple_of(CHUNK as u64) {
+        return Err(format!("unexpected capacity: {sectors} sectors"));
+    }
+
+    // Every sector, CHUNK at a time.
+    let mut buf = vec![0u8; CHUNK * SECTOR_SIZE];
+    for first in (0..sectors).step_by(CHUNK) {
+        disk.read(first, &mut buf).map_err(|e| format!("reading sector {first}: {e}"))?;
+        for (i, sector) in buf.chunks(SECTOR_SIZE).enumerate() {
+            let n = first + i as u64;
+            if let Some(offset) = (0..SECTOR_SIZE).find(|&o| sector[o] != pattern(n, o)) {
+                return Err(format!("sector {n} byte {offset} is {:#04x}, expected {:#04x}", sector[offset], pattern(n, offset)));
+            }
+        }
+    }
+
+    // The driver refuses what the device would.
+    if disk.read(sectors - 1, &mut buf) != Err(blk::Error::OutOfRange) {
+        return Err("a read past the end didn't fail".into());
+    }
+    if disk.read(0, &mut buf[..100]) != Err(blk::Error::Unaligned) {
+        return Err("a read of part of a sector didn't fail".into());
+    }
+
+    // Overwrite one sector with the pattern inverted, and read it and its neighbours back.
+    let mut sector = vec![0u8; SECTOR_SIZE];
+    for (o, byte) in sector.iter_mut().enumerate() {
+        *byte = !pattern(SCRATCH, o);
+    }
+    disk.write(SCRATCH, &sector).map_err(|e| format!("writing sector {SCRATCH}: {e}"))?;
+    disk.flush().map_err(|e| format!("flushing: {e}"))?;
+    let mut three = vec![0u8; 3 * SECTOR_SIZE];
+    disk.read(SCRATCH - 1, &mut three).map_err(|e| format!("reading back: {e}"))?;
+    for (i, got) in three.chunks(SECTOR_SIZE).enumerate() {
+        let n = SCRATCH - 1 + i as u64;
+        let expected = |o| if n == SCRATCH { !pattern(n, o) } else { pattern(n, o) };
+        if (0..SECTOR_SIZE).any(|o| got[o] != expected(o)) {
+            return Err(format!("sector {n} reads back wrong after writing sector {SCRATCH}"));
+        }
+    }
+    Ok(())
 }

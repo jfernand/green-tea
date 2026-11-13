@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use std::{env, thread};
 
 pub const USAGE: &str = "\
-usage: cargo xtask kernel [--kernel coop|preempt|overflow]... [--target riscv64|aarch64|x86_64]...
+usage: cargo xtask kernel [--kernel coop|preempt|overflow|disk]... [--target riscv64|aarch64|x86_64]...
                           [--release] [--headless] [--screenshot]
 
 Builds the bare-metal kernels and boots each in QEMU on every architecture it supports,
@@ -28,6 +28,9 @@ is echoed here, and the run passes when every kernel reports PASS.
             that sleeps between steps (riscv64, aarch64, x86_64)
   overflow  green-tea-coop's test that a task overflowing its stack hits its guard page
             (riscv64, x86_64: the boards that page)
+  disk      green-tea-coop's test of the virtio-blk driver: reads back a disk image made
+            for it, and writes a sector (virtio-mmio on riscv64 and aarch64, virtio-pci
+            on x86_64)
 
   --kernel      only these kernels (default: all)
   --target      only these architectures (default: all three)
@@ -42,14 +45,19 @@ struct Kernel {
     arches: &'static [&'static str],
     /// A test for the kernel to run instead of its demo: the fw_cfg file opt/green-tea/test.
     test: Option<&'static str>,
+    /// Attach a virtio disk, from a fresh image (see `disk_image`).
+    disk: bool,
 }
 
 const KERNELS: &[Kernel] = &[
-    Kernel { name: "coop", package: "green-tea-coop", arches: &["riscv64", "aarch64", "x86_64"], test: None },
-    Kernel { name: "preempt", package: "green-tea-preempt", arches: &["riscv64", "aarch64", "x86_64"], test: None },
+    Kernel { name: "coop", package: "green-tea-coop", arches: ALL, test: None, disk: false },
+    Kernel { name: "preempt", package: "green-tea-preempt", arches: ALL, test: None, disk: false },
     // Needs a board whose guard pages fault: not aarch64 (MMU off), so far.
-    Kernel { name: "overflow", package: "green-tea-coop", arches: &["riscv64", "x86_64"], test: Some("overflow") },
+    Kernel { name: "overflow", package: "green-tea-coop", arches: &["riscv64", "x86_64"], test: Some("overflow"), disk: false },
+    Kernel { name: "disk", package: "green-tea-coop", arches: ALL, test: Some("disk"), disk: true },
 ];
+
+const ALL: &[&str] = &["riscv64", "aarch64", "x86_64"];
 
 struct Arch {
     name: &'static str,
@@ -57,7 +65,13 @@ struct Arch {
     qemu: &'static str,
     /// The machine, plus whatever that machine needs to boot our ELF and show only ramfb.
     machine: &'static [&'static str],
+    /// How to plug in a virtio disk, given `-drive id=disk`.
+    virtio_blk: &'static [&'static str],
 }
+
+/// On `virt`, a virtio-mmio slot. QEMU makes those legacy (virtio 0.9) devices unless
+/// told otherwise, and green-tea-virtio speaks only virtio 1.0.
+const VIRTIO_MMIO_BLK: &[&str] = &["-global", "virtio-mmio.force-legacy=false", "-device", "virtio-blk-device,drive=disk,serial=green-tea-disk"];
 
 const ARCHES: &[Arch] = &[
     Arch {
@@ -65,6 +79,7 @@ const ARCHES: &[Arch] = &[
         triple: "riscv64gc-unknown-none-elf",
         qemu: "qemu-system-riscv64",
         machine: &["-machine", "virt", "-bios", "default"], // OpenSBI loads the kernel
+        virtio_blk: VIRTIO_MMIO_BLK,
     },
     Arch {
         name: "aarch64",
@@ -72,12 +87,15 @@ const ARCHES: &[Arch] = &[
         qemu: "qemu-system-aarch64",
         // No firmware: QEMU jumps in at EL1. green-tea-bare drives a GICv2 (the default).
         machine: &["-machine", "virt,gic-version=2", "-cpu", "cortex-a72"],
+        virtio_blk: VIRTIO_MMIO_BLK,
     },
     Arch {
         name: "x86_64",
         triple: "x86_64-unknown-none",
         qemu: "qemu-system-x86_64",
         machine: &["-machine", "q35", "-vga", "none"], // PVH boot; no VGA so ramfb is the screen
+        // A PCI device, modern interface only.
+        virtio_blk: &["-device", "virtio-blk-pci,drive=disk,serial=green-tea-disk,disable-legacy=on"],
     },
 ];
 
@@ -201,7 +219,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 let kernel = KERNELS
                     .iter()
                     .find(|k| k.name == value)
-                    .ok_or_else(|| format!("unknown kernel {value}; known: coop, preempt, overflow"))?;
+                    .ok_or_else(|| format!("unknown kernel {value}; known: coop, preempt, overflow, disk"))?;
                 kernels.push(kernel);
             }
             "-h" | "--help" => return Err(String::new()),
@@ -269,6 +287,20 @@ fn target_dir() -> PathBuf {
         .unwrap_or_else(|| workspace_root().join("target"))
 }
 
+/// The disk test's image: 32 KiB.
+const DISK_SECTORS: u64 = 64;
+
+/// What the disk test expects to read: every byte a function of where it is, so a sector
+/// read from the wrong place, or bytes shuffled within one, don't match. Must match
+/// green-tea-coop's `pattern`.
+fn disk_pattern(sector: u64, offset: usize) -> u8 {
+    (sector as u8).wrapping_mul(31) ^ (offset as u8) ^ (offset >> 8) as u8
+}
+
+fn disk_image(sectors: u64) -> Vec<u8> {
+    (0..sectors).flat_map(|s| (0..512).map(move |o| disk_pattern(s, o))).collect()
+}
+
 /// One QEMU and what we've learned from it so far.
 struct Run {
     job: Job,
@@ -303,6 +335,13 @@ impl Run {
         }
         if let Some(test) = job.kernel.test {
             cmd.arg("-fw_cfg").arg(format!("name=opt/green-tea/test,string={test}"));
+        }
+        if job.kernel.disk {
+            let image = out_dir.join(format!("{}.img", job.label()));
+            fs::write(&image, disk_image(DISK_SECTORS))?; // fresh each run: the test writes to it
+            cmd.arg("-drive")
+                .arg(format!("if=none,id=disk,format=raw,file={}", image.display()))
+                .args(job.arch.virtio_blk);
         }
         Ok(Run {
             job,
@@ -390,7 +429,15 @@ fn watch(runs: &mut [Run], options: &Options, out_dir: &Path) {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse, verdict};
+    use super::{disk_image, parse, verdict};
+
+    #[test]
+    fn the_disk_image_differs_from_sector_to_sector() {
+        let image = disk_image(4);
+        assert_eq!(image.len(), 4 * 512);
+        assert_ne!(image[..512], image[512..1024]);
+        assert_ne!(image[..256], image[256..512]);
+    }
 
     #[test]
     fn pass_passes() {
@@ -429,14 +476,17 @@ mod tests {
                 "preempt-aarch64",
                 "preempt-x86_64",
                 "overflow-riscv64",
-                "overflow-x86_64"
+                "overflow-x86_64",
+                "disk-riscv64",
+                "disk-aarch64",
+                "disk-x86_64"
             ]
         );
     }
 
     #[test]
     fn unsupported_combinations_are_skipped() {
-        assert_eq!(labels(&["--target", "aarch64"]), ["coop-aarch64", "preempt-aarch64"]);
+        assert_eq!(labels(&["--target", "aarch64"]), ["coop-aarch64", "preempt-aarch64", "disk-aarch64"]);
         let args = ["--kernel".to_string(), "overflow".into(), "--target".into(), "aarch64".into()];
         assert!(parse(&args).is_err());
     }

@@ -60,6 +60,7 @@ rustup target add riscv64gc-unknown-none-elf aarch64-unknown-none x86_64-unknown
 cargo xtask kernel                    # one QEMU window per kernel and architecture, all at once
 cargo xtask kernel --kernel preempt   # just the preemptive kernel
 cargo xtask kernel --kernel overflow  # the guard page test (riscv64, x86_64)
+cargo xtask kernel --kernel disk      # the virtio-blk test
 cargo xtask kernel --target aarch64   # just one architecture
 cargo xtask kernel --headless --screenshot   # no windows; saves target/kernel/<kernel>-<arch>.png
 ```
@@ -115,6 +116,28 @@ The other rule is that the scheduler runs with interrupts off, and tasks with th
 
 The kernel needs a board that implements `TimerInterrupt`; all three do. A board that
 didn't would fail to build on that trait bound.
+
+### A disk: virtio-blk
+
+`--kernel disk` runs green-tea-coop with a disk attached. xtask writes a fresh 32 KiB
+image in which every byte depends on its sector and offset. The kernel reads it all back,
+four sectors per request, then overwrites one sector, flushes, and checks that sector and
+its neighbours.
+
+virtio splits a device in two. The device model is the same everywhere: a status
+handshake, feature bits, a configuration area (the disk's capacity), and virtqueues,
+rings in guest memory through which the driver hands the device chains of buffers. A disk
+read is a chain of three: a header the device reads, the data it writes, and a status
+byte. The transport, how the driver reaches the device's registers, is what differs:
+
+- on riscv64 and aarch64 `virt`, a block of registers in one of a row of fixed slots
+  (virtio-mmio). QEMU makes those legacy devices unless started with
+  `-global virtio-mmio.force-legacy=false`;
+- on x86_64 `q35`, a PCI device. The firmware has given its BARs addresses, and
+  vendor-specific PCI capabilities say where in them each register block is.
+
+The block driver is written once, against the `Transport` trait, and polls for
+completions: no interrupts yet.
 
 ## Testing
 
