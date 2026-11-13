@@ -15,11 +15,14 @@
 //! guard pages. Exceptions run on a stack of their own (IST1 in the TSS), since a stack
 //! overflow faults with the task's stack pointer in a guard page.
 
-use super::{FwCfgPort, Platform, TimerInterrupt};
+use super::{Platform, TimerInterrupt};
 use crate::Global;
 use crate::stack;
 use core::arch::{asm, global_asm};
 use core::ptr::{read_volatile, write_volatile};
+use green_tea_fw_cfg::IoPorts;
+use green_tea_io::port::outb;
+use green_tea_ns16550::Ns16550Port;
 
 pub struct Q35;
 
@@ -123,24 +126,6 @@ boot_pds:  .skip 4 * 4096
     options(att_syntax)
 );
 
-unsafe fn outb(port: u16, value: u8) {
-    unsafe { asm!("out dx, al", in("dx") port, in("al") value, options(nostack)) };
-}
-
-unsafe fn inb(port: u16) -> u8 {
-    let value: u8;
-    unsafe { asm!("in al, dx", in("dx") port, out("al") value, options(nostack)) };
-    value
-}
-
-unsafe fn outw(port: u16, value: u16) {
-    unsafe { asm!("out dx, ax", in("dx") port, in("ax") value, options(nostack)) };
-}
-
-unsafe fn outl(port: u16, value: u32) {
-    unsafe { asm!("out dx, eax", in("dx") port, in("eax") value, options(nostack)) };
-}
-
 const HPET: usize = 0xfed0_0000;
 const HPET_CAPABILITIES: *const u64 = HPET as *const u64;
 const HPET_CONFIG: *mut u64 = (HPET + 0x10) as *mut u64;
@@ -159,14 +144,9 @@ impl Platform for Q35 {
         paging::enable_guard_pages();
     }
 
-    /// COM1, a 16550 on I/O ports: wait for room, write the byte.
+    /// COM1, a 16550 on I/O ports.
     fn putc(byte: u8) {
-        const COM1: u16 = 0x3f8;
-        const LSR_THR_EMPTY: u8 = 1 << 5;
-        unsafe {
-            while inb(COM1 + 5) & LSR_THR_EMPTY == 0 {}
-            outb(COM1, byte);
-        }
+        Ns16550Port(0x3f8).putc(byte);
     }
 
     /// The HPET's main counter.
@@ -187,28 +167,6 @@ impl Platform for Q35 {
 
     type FwCfg = IoPorts;
     const FW_CFG: IoPorts = IoPorts;
-}
-
-/// fw_cfg on x86 lives on I/O ports rather than memory-mapped registers.
-pub struct IoPorts;
-
-impl FwCfgPort for IoPorts {
-    fn select(&self, key: u16) {
-        unsafe { outw(0x510, key) }; // the port selector is little-endian, unlike MMIO
-    }
-
-    fn read_u8(&self) -> u8 {
-        unsafe { inb(0x511) }
-    }
-
-    /// The DMA address register is big-endian: high half at 0x514, then low half at 0x518,
-    /// which starts the transfer.
-    fn start_dma(&self, address: u64) {
-        unsafe {
-            outl(0x514, ((address >> 32) as u32).to_be());
-            outl(0x518, (address as u32).to_be());
-        }
-    }
 }
 
 // ---- Traps ----------------------------------------------------------------------------

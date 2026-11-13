@@ -3,13 +3,14 @@ members = [
     "green-tea-v1",
     "green-tea-v2",
     "green-tea-arch",
+    "drivers/*",
     "green-tea-bare",
     "green-tea-coop",
     "green-tea-preempt",
     "xtask",
 ]
 # What a plain `cargo build` / `cargo test` covers: everything that builds for the host.
-# green-tea-bare and the kernels build only for bare-metal targets: cargo xtask kernel.
+# The drivers, green-tea-bare and the kernels build only for bare-metal targets: cargo xtask kernel.
 default-members = ["green-tea-v1", "green-tea-v2", "green-tea-arch", "xtask"]
 resolver = "3"
 

@@ -1,6 +1,6 @@
 [package]
 name = "green-tea-bare"
-description = "What green-tea's bare-metal kernels share: boot code, platform drivers (serial, timer, fw_cfg, ramfb), a heap, and tasks."
+description = "What green-tea's bare-metal kernels share: boot code and the machine behind each target (timers, interrupts, paging), a heap, and tasks."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -20,3 +20,9 @@ bench = false
 
 [dependencies]
 green-tea-arch = { path = "../green-tea-arch" }
+green-tea-io = { path = "../drivers/io" }
+green-tea-ns16550 = { path = "../drivers/ns16550" }
+green-tea-pl011 = { path = "../drivers/pl011" }
+green-tea-fw-cfg = { path = "../drivers/fw-cfg" }
+green-tea-ramfb = { path = "../drivers/ramfb" }
+

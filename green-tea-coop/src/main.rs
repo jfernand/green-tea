@@ -16,14 +16,14 @@ use green_tea_bare::ramfb::Framebuffer;
 use green_tea_bare::runtime::{Switch, run, spawn};
 use green_tea_bare::screen::{COLORS, COLUMNS, Painter, Screen};
 use green_tea_bare::task::{current_guard, yield_now};
-use green_tea_bare::{Board, Global, Platform, boot, delay_ms, fw_cfg, println, stack};
+use green_tea_bare::{Board, Global, Platform, boot, delay_ms, println, stack};
 
 /// Called by the platform's `_start`, on the boot stack, with .bss zeroed.
 #[unsafe(no_mangle)]
 extern "C" fn kmain() -> ! {
     let fb = boot("green-tea-coop");
     let mut test = [0u8; 16];
-    let len = fw_cfg::read_file("opt/green-tea/test", &mut test).unwrap_or(0);
+    let len = Board::fw_cfg().read_file("opt/green-tea/test", &mut test).unwrap_or(0);
     match &test[..len] {
         b"" => demo(fb),
         b"overflow" => overflow_test(fb),

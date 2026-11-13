@@ -25,6 +25,8 @@ pub use riscv64::RiscvVirt as Board;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::Q35 as Board;
 
+pub use green_tea_fw_cfg::{FwCfg, FwCfgPort};
+
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64")))]
 compile_error!("green-tea-bare supports riscv64, aarch64 and x86_64 so far");
 
@@ -54,16 +56,11 @@ pub trait Platform {
     /// How this board reaches QEMU's fw_cfg device.
     type FwCfg: FwCfgPort;
     const FW_CFG: Self::FwCfg;
-}
 
-/// fw_cfg's registers: memory-mapped on `virt`, I/O ports on x86. See [`crate::fw_cfg`].
-pub trait FwCfgPort {
-    /// Select an item; reads start at its first byte.
-    fn select(&self, key: u16);
-    /// The selected item's next byte.
-    fn read_u8(&self) -> u8;
-    /// Hand QEMU the physical address of a DMA request, which starts it.
-    fn start_dma(&self, address: u64);
+    /// The fw_cfg device, ready to use.
+    fn fw_cfg() -> FwCfg<Self::FwCfg> {
+        FwCfg(Self::FW_CFG)
+    }
 }
 
 /// A board that can interrupt the running code when a deadline passes: what preemption

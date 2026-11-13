@@ -12,10 +12,10 @@
 
 use super::{Platform, TimerInterrupt};
 use crate::Global;
-use crate::fw_cfg::Mmio;
 use crate::stack;
 use core::arch::{asm, global_asm};
-use core::ptr::{read_volatile, write_volatile};
+use green_tea_fw_cfg::Mmio;
+use green_tea_ns16550::Ns16550Mmio;
 
 pub struct RiscvVirt;
 
@@ -57,14 +57,9 @@ impl Platform for RiscvVirt {
         paging::enable();
     }
 
-    /// The 16550 UART. QEMU needs no setup: wait for room, write the byte.
+    /// A 16550 UART.
     fn putc(byte: u8) {
-        const BASE: usize = 0x1000_0000;
-        const LSR_THR_EMPTY: u8 = 1 << 5;
-        unsafe {
-            while read_volatile((BASE + 5) as *const u8) & LSR_THR_EMPTY == 0 {}
-            write_volatile(BASE as *mut u8, byte);
-        }
+        Ns16550Mmio(0x1000_0000).putc(byte);
     }
 
     /// The `time` CSR, which ticks at 10 MHz on QEMU's virt machine.

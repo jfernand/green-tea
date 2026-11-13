@@ -1,9 +1,13 @@
 //! What green-tea's bare-metal kernels (green-tea-coop, green-tea-preempt) share.
 //!
 //! - [`platform`]: per-machine code behind the [`Platform`] and [`TimerInterrupt`] traits:
-//!   boot code, serial port, timer, fw_cfg registers, and timer interrupts. [`Board`] is the implementation for the target being built.
-//! - Drivers on top of a `Platform`: [`console`] (`println!`), [`fw_cfg`], [`ramfb`]; and
-//!   [`screen`], the demos' layout drawn on the framebuffer.
+//!   boot code, timers, interrupts and paging, and where each device is (which serial
+//!   port, how to reach fw_cfg). [`Board`] is the
+//!   implementation for the target being built.
+//! - The device drivers themselves are crates of their own, in drivers/, re-exported
+//!   here: [`fw_cfg`], [`ramfb`]. Here are [`console`]
+//!   (`println!` on the board's serial port) and [`screen`], the demos' layout drawn on
+//!   the framebuffer.
 //! - `heap` (a bump allocator), [`stack`] (task stacks with guard pages), [`Global`]
 //!   (statics in place of `thread_local!`).
 //! - [`task`] and [`runtime`]: green-tea-v2's tasks and round-robin scheduler, ported to
@@ -22,18 +26,17 @@
 extern crate alloc;
 
 pub mod console;
-pub mod fw_cfg;
 mod global;
 mod heap;
 pub mod platform;
-pub mod ramfb;
 pub mod runtime;
 pub mod screen;
 pub mod stack;
 pub mod task;
 
 pub use global::Global;
-pub use platform::{Board, FwCfgPort, Platform, TimerInterrupt};
+pub use {green_tea_fw_cfg as fw_cfg, green_tea_ramfb as ramfb};
+pub use platform::{Board, Platform, TimerInterrupt};
 
 use core::panic::PanicInfo;
 use ramfb::{Framebuffer, HEIGHT, WIDTH};
@@ -45,13 +48,14 @@ pub fn boot(kernel: &str) -> Framebuffer {
     Board::init();
     println!("{kernel} on {}", Board::NAME);
 
-    if let Err(e) = fw_cfg::probe() {
+    let fw_cfg = Board::fw_cfg();
+    if let Err(e) = fw_cfg.probe() {
         panic!("{e}");
     }
     println!("fw_cfg files:");
-    fw_cfg::for_each_file(|f| println!("  {:#06x} {:6} {}", f.select, f.size, f.name()));
+    fw_cfg.for_each_file(|f| println!("  {:#06x} {:6} {}", f.select, f.size, f.name()));
 
-    let fb = match Framebuffer::init() {
+    let fb = match Framebuffer::init(&fw_cfg) {
         Ok(fb) => fb,
         Err(e) => panic!("{e}"),
     };

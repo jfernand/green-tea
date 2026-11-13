@@ -10,9 +10,10 @@
 
 use super::{Platform, TimerInterrupt};
 use crate::Global;
-use crate::fw_cfg::Mmio;
 use core::arch::{asm, global_asm};
 use core::ptr::{read_volatile, write_volatile};
+use green_tea_fw_cfg::Mmio;
+use green_tea_pl011::Pl011;
 
 pub struct AarchVirt;
 
@@ -53,14 +54,9 @@ impl Platform for AarchVirt {
 
     fn init() {}
 
-    /// The PL011 UART: wait while the transmit FIFO is full, then write the byte.
+    /// A PL011 UART.
     fn putc(byte: u8) {
-        const BASE: usize = 0x0900_0000;
-        const FR_TXFF: u32 = 1 << 5;
-        unsafe {
-            while read_volatile((BASE + 0x18) as *const u32) & FR_TXFF != 0 {}
-            write_volatile(BASE as *mut u32, u32::from(byte));
-        }
+        Pl011(0x0900_0000).putc(byte);
     }
 
     /// The generic timer's virtual count.

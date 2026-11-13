@@ -104,6 +104,11 @@ name = "green-tea-bare"
 version = "0.1.0"
 dependencies = [
  "green-tea-arch",
+ "green-tea-fw-cfg",
+ "green-tea-io",
+ "green-tea-ns16550",
+ "green-tea-pl011",
+ "green-tea-ramfb",
 ]
 
 [[package]]
@@ -114,10 +119,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "green-tea-fw-cfg"
+version = "0.1.0"
+dependencies = [
+ "green-tea-io",
+]
+
+[[package]]
+name = "green-tea-io"
+version = "0.1.0"
+
+[[package]]
+name = "green-tea-ns16550"
+version = "0.1.0"
+dependencies = [
+ "green-tea-io",
+]
+
+[[package]]
+name = "green-tea-pl011"
+version = "0.1.0"
+
+[[package]]
 name = "green-tea-preempt"
 version = "0.1.0"
 dependencies = [
  "green-tea-bare",
+]
+
+[[package]]
+name = "green-tea-ramfb"
+version = "0.1.0"
+dependencies = [
+ "green-tea-fw-cfg",
 ]
 
 [[package]]

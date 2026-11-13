@@ -2,7 +2,9 @@
 //! QEMU where it is and what shape it has, by writing a config to the fw_cfg file
 //! `etc/ramfb`. After that, QEMU shows whatever is in that memory on every refresh.
 
-use crate::fw_cfg;
+#![no_std]
+
+use green_tea_fw_cfg::{FwCfg, FwCfgPort};
 use core::ptr::write_volatile;
 
 pub const WIDTH: usize = 640;
@@ -26,8 +28,8 @@ pub struct Framebuffer {
 
 impl Framebuffer {
     /// Point QEMU at the framebuffer. Call once.
-    pub fn init() -> Result<Framebuffer, &'static str> {
-        let (key, size) = fw_cfg::find_file("etc/ramfb").ok_or("no etc/ramfb (run qemu with -device ramfb)")?;
+    pub fn init(fw_cfg: &FwCfg<impl FwCfgPort>) -> Result<Framebuffer, &'static str> {
+        let (key, size) = fw_cfg.find_file("etc/ramfb").ok_or("no etc/ramfb (run qemu with -device ramfb)")?;
         let pixels = (&raw mut PIXELS).cast::<u32>();
 
         // struct RAMFBCfg { u64 addr; u32 fourcc, flags, width, height, stride; }, packed,
@@ -42,7 +44,7 @@ impl Framebuffer {
         if size as usize != config.len() {
             return Err("etc/ramfb has an unexpected size");
         }
-        fw_cfg::dma_write(key, &config)?;
+        fw_cfg.dma_write(key, &config)?;
         Ok(Framebuffer { pixels })
     }
 
