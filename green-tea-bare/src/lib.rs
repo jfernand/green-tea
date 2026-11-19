@@ -8,8 +8,9 @@
 //!   here: [`fw_cfg`], [`ramfb`], [`pci`], [`virtio`], [`virtio_blk`]. Here are [`console`]
 //!   (`println!` on the board's serial port) and [`screen`], the demos' layout drawn on
 //!   the framebuffer.
-//! - [`heap`] (a bump allocator), [`stack`] (task stacks with guard pages), [`memory`] (where
-//!   the linker put each section), [`Global`] (statics in place of `thread_local!`).
+//! - [`heap`] (a bump allocator), [`arena`] (a bump allocator that can be reset), [`stack`]
+//!   (task stacks with guard pages), [`memory`] (where the linker put each section),
+//!   [`Global`] (statics in place of `thread_local!`).
 //! - [`task`] and [`runtime`]: green-tea-v2's tasks and round-robin scheduler, ported to
 //!   bare metal, on top of green-tea-arch's `swap_context`.
 //!
@@ -25,6 +26,7 @@
 
 extern crate alloc;
 
+pub mod arena;
 pub mod console;
 mod global;
 pub mod heap;
