@@ -16,5 +16,6 @@ publish.workspace = true
 test = false
 bench = false
 
-[dependencies]
+# Only the I/O-port flavour, which is x86's, needs green-tea-io.
+[target.'cfg(target_arch = "x86_64")'.dependencies]
 green-tea-io = { path = "../io" }
