@@ -8,7 +8,9 @@
 //! With the fw_cfg file `opt/green-tea/test` set to "overflow", it runs a test instead: a
 //! task recurses until it overflows its stack, which on a board with guard pages must
 //! fault in that task's guard page (`cargo xtask kernel --kernel overflow`). Set to "disk",
-//! it tests the virtio-blk driver against a disk image xtask made (`--kernel disk`).
+//! it tests the virtio-blk driver against a disk image xtask made (`--kernel disk`). Set to
+//! "memmap", it prints where the linker put each section and checks the layout
+//! (`--kernel memmap`).
 
 #![no_std]
 #![no_main]
@@ -19,10 +21,13 @@ use green_tea_bare::screen::{COLORS, COLUMNS, Painter, Screen};
 use green_tea_bare::task::{current_guard, yield_now};
 use green_tea_bare::virtio::{self, Transport};
 use green_tea_bare::virtio_blk::{self as blk, Blk, SECTOR_SIZE};
-use green_tea_bare::{Board, Global, Platform, boot, delay_ms, println, stack};
+use green_tea_bare::{Board, Global, Platform, boot, delay_ms, memory, println, stack};
 
 extern crate alloc;
+use alloc::boxed::Box;
+use alloc::string::String;
 use alloc::vec;
+use core::sync::atomic::AtomicUsize;
 
 /// Called by the platform's `_start`, on the boot stack, with .bss zeroed.
 #[unsafe(no_mangle)]
@@ -34,6 +39,7 @@ extern "C" fn kmain() -> ! {
         b"" => demo(fb),
         b"overflow" => overflow_test(fb),
         b"disk" => disk_test(fb),
+        b"memmap" => memmap_test(fb),
         other => panic!("unknown test {:?}", core::str::from_utf8(other)),
     }
     println!("halting");
@@ -216,7 +222,7 @@ fn disk_test(fb: Framebuffer) {
     println!("PASS: read {sectors} sectors over virtio-{kind}, and wrote one back");
 }
 
-fn check_disk(disk: &mut Blk<impl Transport>) -> Result<(), alloc::string::String> {
+fn check_disk(disk: &mut Blk<impl Transport>) -> Result<(), String> {
     use alloc::format;
     let sectors = disk.capacity();
     if sectors < SCRATCH + 2 || !sectors.is_multiple_of(CHUNK as u64) {
@@ -257,6 +263,114 @@ fn check_disk(disk: &mut Blk<impl Transport>) -> Result<(), alloc::string::Strin
         let expected = |o| if n == SCRATCH { !pattern(n, o) } else { pattern(n, o) };
         if (0..SECTOR_SIZE).any(|o| got[o] != expected(o)) {
             return Err(format!("sector {n} reads back wrong after writing sector {SCRATCH}"));
+        }
+    }
+    Ok(())
+}
+
+// ---- The memory map test --------------------------------------------------------------
+//
+// Print where the linker put each section, from the symbols linker.ld defines, and check
+// the layout from the inside: every section starts on its alignment, they are in order and
+// don't overlap, the ones linker.ld sizes have that size, and one address of each kind (a
+// function, a constant, a static, a local, a box, a task's local) is in the section it
+// should be in.
+
+/// A static with an initial value: in the image, and writable, so in .data.
+static INITIALISED: AtomicUsize = AtomicUsize::new(0x6772_6e74);
+/// A static that starts as zero: not in the image, so in .bss.
+static ZEROED: AtomicUsize = AtomicUsize::new(0);
+/// A static that never changes: .rodata.
+static CONSTANT: [u8; 16] = *b"green-tea memmap";
+
+/// A type that asks for more than the usual alignment.
+#[repr(align(4096))]
+struct Page(#[allow(dead_code)] [u8; 4096]);
+
+/// The address of a local variable of the task that `run` starts.
+static TASK_LOCAL: Global<usize> = Global::new(0);
+
+fn memmap_test(fb: Framebuffer) {
+    let kernel = memory::kernel();
+    println!("kernel: {:#x}..{:#x}, {} KiB", kernel.start, kernel.end, kernel.len() / 1024);
+    println!("  section      start        end      bytes    align");
+    let mut previous = kernel.start;
+    for s in memory::sections() {
+        if s.start > previous {
+            println!("  {:8}                       {:9}", "(gap)", s.start - previous);
+        }
+        println!("  {:8} {:#010x} {:#010x} {:9} {:8}", s.name, s.start, s.end, s.size(), s.align);
+        previous = s.end;
+    }
+
+    let local = 0u8;
+    let boxed = Box::new(0u64);
+    let page = Box::new(Page([0; 4096]));
+    run(
+        || {
+            let task_local = 0u8;
+            TASK_LOCAL.set(&raw const task_local as usize);
+        },
+        |_| {},
+    );
+    // What each address is, where it is, where it should be, and the alignment it needs.
+    let witnesses = [
+        ("a function", memmap_test as fn(Framebuffer) as usize, ".text", 1),
+        ("a constant static", &raw const CONSTANT as usize, ".rodata", 1),
+        ("an initialised static", &raw const INITIALISED as usize, ".data", align_of::<AtomicUsize>()),
+        ("a zeroed static", &raw const ZEROED as usize, ".bss", align_of::<AtomicUsize>()),
+        ("a local of kmain's", &raw const local as usize, ".stack", 1),
+        ("a Box<u64>", &raw const *boxed as usize, ".heap", align_of::<u64>()),
+        ("a Box<Page>", &raw const *page as usize, ".heap", align_of::<Page>()),
+        ("a local of a task's", TASK_LOCAL.get(), ".stacks", 1),
+    ];
+    println!("  address    in       what");
+    for (what, addr, ..) in witnesses {
+        let name = memory::section_of(addr).map_or("nowhere", |s| s.name);
+        println!("  {addr:#010x} {name:8} {what}");
+    }
+
+    if let Err(e) = check_memmap(&witnesses) {
+        return println!("FAIL: {e}");
+    }
+    let sections = memory::sections().len();
+    Screen::new(fb).finish(sections); // green, with the section count
+    println!("PASS: {sections} sections in order and aligned; {} addresses where they should be", witnesses.len());
+}
+
+fn check_memmap(witnesses: &[(&str, usize, &str, usize)]) -> Result<(), String> {
+    use alloc::format;
+    let kernel = memory::kernel();
+    let mut previous = kernel.start;
+    for s in memory::sections() {
+        if !s.start.is_multiple_of(s.align) {
+            return Err(format!("{} starts at {:#x}, which isn't a multiple of {}", s.name, s.start, s.align));
+        }
+        if s.start < previous || s.end < s.start {
+            return Err(format!("{} ({:#x}..{:#x}) overlaps the section before it, which ends at {previous:#x}", s.name, s.start, s.end));
+        }
+        if let Some(reserved) = s.reserved
+            && s.size() != reserved
+        {
+            return Err(format!("{} is {} bytes; linker.ld reserves {reserved}", s.name, s.size()));
+        }
+        previous = s.end;
+    }
+    if previous != kernel.end {
+        return Err(format!("the last section ends at {previous:#x}, the kernel at {:#x}", kernel.end));
+    }
+    // The boot stack's top is where sp starts, and every ABI here wants sp 16-byte aligned.
+    let stack = memory::sections()[4];
+    if stack.name != ".stack" || !stack.end.is_multiple_of(16) {
+        return Err(format!("the boot stack's top, {:#x}, isn't 16-byte aligned", stack.end));
+    }
+    for &(what, addr, expected, align) in witnesses {
+        let found = memory::section_of(addr).map_or("no section", |s| s.name);
+        if found != expected {
+            return Err(format!("{what} is at {addr:#x}, in {found}, not {expected}"));
+        }
+        if !addr.is_multiple_of(align) {
+            return Err(format!("{what} is at {addr:#x}, which isn't a multiple of its alignment, {align}"));
         }
     }
     Ok(())

@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use std::{env, thread};
 
 pub const USAGE: &str = "\
-usage: cargo xtask kernel [--kernel coop|preempt|overflow|disk]... [--target riscv64|aarch64|x86_64]...
+usage: cargo xtask kernel [--kernel coop|preempt|overflow|disk|memmap]... [--target riscv64|aarch64|x86_64]...
                           [--release] [--headless] [--screenshot]
 
 Builds the bare-metal kernels and boots each in QEMU on every architecture it supports,
@@ -31,6 +31,8 @@ is echoed here, and the run passes when every kernel reports PASS.
   disk      green-tea-coop's test of the virtio-blk driver: reads back a disk image made
             for it, and writes a sector (virtio-mmio on riscv64 and aarch64, virtio-pci
             on x86_64)
+  memmap    green-tea-coop's test of its own memory map: prints where the linker put each
+            section, and checks their order, alignment and size (riscv64, aarch64, x86_64)
 
   --kernel      only these kernels (default: all)
   --target      only these architectures (default: all three)
@@ -55,6 +57,7 @@ const KERNELS: &[Kernel] = &[
     // Needs a board whose guard pages fault: not aarch64 (MMU off), so far.
     Kernel { name: "overflow", package: "green-tea-coop", arches: &["riscv64", "x86_64"], test: Some("overflow"), disk: false },
     Kernel { name: "disk", package: "green-tea-coop", arches: ALL, test: Some("disk"), disk: true },
+    Kernel { name: "memmap", package: "green-tea-coop", arches: ALL, test: Some("memmap"), disk: false },
 ];
 
 const ALL: &[&str] = &["riscv64", "aarch64", "x86_64"];
@@ -219,7 +222,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 let kernel = KERNELS
                     .iter()
                     .find(|k| k.name == value)
-                    .ok_or_else(|| format!("unknown kernel {value}; known: coop, preempt, overflow, disk"))?;
+                    .ok_or_else(|| format!("unknown kernel {value}; known: coop, preempt, overflow, disk, memmap"))?;
                 kernels.push(kernel);
             }
             "-h" | "--help" => return Err(String::new()),
@@ -479,14 +482,17 @@ mod tests {
                 "overflow-x86_64",
                 "disk-riscv64",
                 "disk-aarch64",
-                "disk-x86_64"
+                "disk-x86_64",
+                "memmap-riscv64",
+                "memmap-aarch64",
+                "memmap-x86_64"
             ]
         );
     }
 
     #[test]
     fn unsupported_combinations_are_skipped() {
-        assert_eq!(labels(&["--target", "aarch64"]), ["coop-aarch64", "preempt-aarch64", "disk-aarch64"]);
+        assert_eq!(labels(&["--target", "aarch64"]), ["coop-aarch64", "preempt-aarch64", "disk-aarch64", "memmap-aarch64"]);
         let args = ["--kernel".to_string(), "overflow".into(), "--target".into(), "aarch64".into()];
         assert!(parse(&args).is_err());
     }

@@ -61,6 +61,7 @@ cargo xtask kernel                    # one QEMU window per kernel and architect
 cargo xtask kernel --kernel preempt   # just the preemptive kernel
 cargo xtask kernel --kernel overflow  # the guard page test (riscv64, x86_64)
 cargo xtask kernel --kernel disk      # the virtio-blk test
+cargo xtask kernel --kernel memmap    # where the linker put each section
 cargo xtask kernel --target aarch64   # just one architecture
 cargo xtask kernel --headless --screenshot   # no windows; saves target/kernel/<kernel>-<arch>.png
 ```
@@ -138,6 +139,20 @@ byte. The transport, how the driver reaches the device's registers, is what diff
 
 The block driver is written once, against the `Transport` trait, and polls for
 completions: no interrupts yet.
+
+### The memory map
+
+`--kernel memmap` runs green-tea-coop's test of its own layout. linker.ld defines a symbol
+at the start and end of each section, and the kernel reads their addresses
+([`green-tea-bare/src/memory.rs`](green-tea-bare/src/memory.rs)), prints the map, and
+checks it: every section starts on its alignment, they are in order, and the boot stack,
+heap and stack pool have the sizes linker.ld reserves. It also checks one address of each
+kind: a function is in `.text`, a constant in `.rodata`, statics in `.data` and `.bss`, a
+local of `kmain`'s on the boot stack, a `Box` in the heap, and a task's local in the stack
+pool.
+
+The gaps it prints between sections are sections linker.ld doesn't name, which the linker
+places itself: `.eh_frame`, and on x86_64 `.got` and the PVH note.
 
 ## Testing
 
