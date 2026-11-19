@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use std::{env, thread};
 
 pub const USAGE: &str = "\
-usage: cargo xtask kernel [--kernel coop|preempt|overflow|disk|memmap]... [--target riscv64|aarch64|x86_64]...
+usage: cargo xtask kernel [--kernel coop|preempt|overflow|disk|memmap|shell]... [--target riscv64|aarch64|x86_64]...
                           [--release] [--headless] [--screenshot]
 
 Builds the bare-metal kernels and boots each in QEMU on every architecture it supports,
@@ -33,6 +33,9 @@ is echoed here, and the run passes when every kernel reports PASS.
             on x86_64)
   memmap    green-tea-coop's test of its own memory map: prints where the linker put each
             section, and checks their order, alignment and size (riscv64, aarch64, x86_64)
+  shell     green-tea-shell: types two commands at the shell on the serial console; the
+            second is its `test`, which checks that an arena frees what the heap can't
+            (riscv64, aarch64, x86_64). To type at it yourself: cargo xtask shell
 
   --kernel      only these kernels (default: all)
   --target      only these architectures (default: all three)
@@ -49,15 +52,27 @@ struct Kernel {
     test: Option<&'static str>,
     /// Attach a virtio disk, from a fresh image (see `disk_image`).
     disk: bool,
+    /// What to type at the serial console.
+    input: Option<&'static str>,
 }
 
 const KERNELS: &[Kernel] = &[
-    Kernel { name: "coop", package: "green-tea-coop", arches: ALL, test: None, disk: false },
-    Kernel { name: "preempt", package: "green-tea-preempt", arches: ALL, test: None, disk: false },
+    Kernel { name: "coop", package: "green-tea-coop", arches: ALL, test: None, disk: false, input: None },
+    Kernel { name: "preempt", package: "green-tea-preempt", arches: ALL, test: None, disk: false, input: None },
     // Needs a board whose guard pages fault: not aarch64 (MMU off), so far.
-    Kernel { name: "overflow", package: "green-tea-coop", arches: &["riscv64", "x86_64"], test: Some("overflow"), disk: false },
-    Kernel { name: "disk", package: "green-tea-coop", arches: ALL, test: Some("disk"), disk: true },
-    Kernel { name: "memmap", package: "green-tea-coop", arches: ALL, test: Some("memmap"), disk: false },
+    Kernel { name: "overflow", package: "green-tea-coop", arches: &["riscv64", "x86_64"], test: Some("overflow"), disk: false, input: None },
+    Kernel { name: "disk", package: "green-tea-coop", arches: ALL, test: Some("disk"), disk: true, input: None },
+    Kernel { name: "memmap", package: "green-tea-coop", arches: ALL, test: Some("memmap"), disk: false, input: None },
+    Kernel {
+        name: "shell",
+        package: "green-tea-shell",
+        arches: ALL,
+        test: None,
+        disk: false,
+        // The empty first line is there to be lost: on riscv64 the firmware reads the serial
+        // port before the kernel does, and takes the first byte with it.
+        input: Some("\necho hello from the serial port\ntest\n"),
+    },
 ];
 
 const ALL: &[&str] = &["riscv64", "aarch64", "x86_64"];
@@ -222,7 +237,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 let kernel = KERNELS
                     .iter()
                     .find(|k| k.name == value)
-                    .ok_or_else(|| format!("unknown kernel {value}; known: coop, preempt, overflow, disk, memmap"))?;
+                    .ok_or_else(|| format!("unknown kernel {value}; known: coop, preempt, overflow, disk, memmap, shell"))?;
                 kernels.push(kernel);
             }
             "-h" | "--help" => return Err(String::new()),
@@ -304,6 +319,74 @@ fn disk_image(sectors: u64) -> Vec<u8> {
     (0..sectors).flat_map(|s| (0..512).map(move |o| disk_pattern(s, o))).collect()
 }
 
+pub const SHELL_USAGE: &str = "\
+usage: cargo xtask shell [--target riscv64|aarch64|x86_64] [--release]
+
+Builds green-tea-shell and boots it in QEMU with its serial console on this terminal, so
+you can type at it. `halt` stops the kernel; ctrl-a x leaves QEMU.";
+
+/// `cargo xtask shell`: one QEMU, in the foreground, with the kernel's serial port on our
+/// stdin and stdout.
+pub fn shell(args: &[String]) -> ExitCode {
+    let mut arch = &ARCHES[0];
+    let mut release = false;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match (arg.as_str(), args.clone().next()) {
+            ("--release", _) => release = true,
+            ("--target", Some(value)) => match ARCHES.iter().find(|a| a.name == value || a.triple == value) {
+                Some(found) => {
+                    arch = found;
+                    args.next();
+                }
+                None => {
+                    eprintln!("error: unknown target {value}\n\n{SHELL_USAGE}");
+                    return ExitCode::FAILURE;
+                }
+            },
+            ("-h" | "--help", _) => {
+                println!("{SHELL_USAGE}");
+                return ExitCode::SUCCESS;
+            }
+            _ => {
+                eprintln!("error: unknown option {arg}\n\n{SHELL_USAGE}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    if let Err(problems) = preflight(&[arch]) {
+        eprintln!("missing prerequisites:");
+        for p in problems {
+            eprintln!("  - {p}");
+        }
+        return ExitCode::FAILURE;
+    }
+    let kernel = KERNELS.iter().find(|k| k.name == "shell").expect("the shell kernel");
+    let job = Job { kernel, arch };
+    if !build(&job, release) {
+        return ExitCode::FAILURE;
+    }
+    let profile = if release { "release" } else { "debug" };
+    let elf = target_dir().join(arch.triple).join(profile).join(kernel.package);
+    eprintln!("=== {} on {}: `halt` stops the kernel, ctrl-a x leaves QEMU", kernel.package, arch.name);
+    // mon:stdio puts the terminal in raw mode, so the shell sees each key as it's typed,
+    // and keeps ctrl-a as QEMU's escape.
+    let status = Command::new(arch.qemu)
+        .args(arch.machine)
+        .args(["-m", "128M", "-device", "ramfb", "-display", "none", "-serial", "mon:stdio"])
+        .arg("-kernel")
+        .arg(elf)
+        .status();
+    match status {
+        Ok(s) if s.success() => ExitCode::SUCCESS,
+        Ok(_) => ExitCode::FAILURE,
+        Err(e) => {
+            eprintln!("failed to start {}: {e}", arch.qemu);
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// One QEMU and what we've learned from it so far.
 struct Run {
     job: Job,
@@ -326,13 +409,24 @@ impl Run {
         cmd.args(job.arch.machine)
             .args(["-m", "128M", "-device", "ramfb"])
             .args(["-name", &format!("{} ({})", job.kernel.package, job.arch.name)])
-            .arg("-serial")
-            .arg(format!("file:{}", log.display()))
             .args(["-monitor", "stdio"])
             .arg("-kernel")
             .arg(elf)
             .stdin(Stdio::piped())
             .stdout(Stdio::null()); // the monitor's echo; errors still go to stderr
+        match job.kernel.input {
+            None => cmd.arg("-serial").arg(format!("file:{}", log.display())),
+            // The serial port's output goes to the log, and its input comes from a file.
+            // QEMU hands the UART a byte only when it has room, so nothing is lost if
+            // the kernel is slow to start reading.
+            Some(input) => {
+                let script = out_dir.join(format!("{}.in", job.label()));
+                fs::write(&script, input)?;
+                cmd.arg("-chardev")
+                    .arg(format!("file,id=console,path={},input-path={}", log.display(), script.display()))
+                    .args(["-serial", "chardev:console"])
+            }
+        };
         if headless {
             cmd.args(["-display", "none"]);
         }
@@ -485,14 +579,17 @@ mod tests {
                 "disk-x86_64",
                 "memmap-riscv64",
                 "memmap-aarch64",
-                "memmap-x86_64"
+                "memmap-x86_64",
+                "shell-riscv64",
+                "shell-aarch64",
+                "shell-x86_64"
             ]
         );
     }
 
     #[test]
     fn unsupported_combinations_are_skipped() {
-        assert_eq!(labels(&["--target", "aarch64"]), ["coop-aarch64", "preempt-aarch64", "disk-aarch64", "memmap-aarch64"]);
+        assert_eq!(labels(&["--target", "aarch64"]), ["coop-aarch64", "preempt-aarch64", "disk-aarch64", "memmap-aarch64", "shell-aarch64"]);
         let args = ["--kernel".to_string(), "overflow".into(), "--target".into(), "aarch64".into()];
         assert!(parse(&args).is_err());
     }

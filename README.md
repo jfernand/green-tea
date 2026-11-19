@@ -13,7 +13,7 @@ With minimal help from R. Claude and R. Junie
 
 ## Layout
 
-The workspace has two versions side by side, so you can compare them, and two bare-metal
+The workspace has two versions side by side, so you can compare them, and three bare-metal
 kernels built on the same context switch:
 
 | crate | what it shows |
@@ -25,7 +25,8 @@ kernels built on the same context switch:
 | [`green-tea-bare`](green-tea-bare) | What the kernels share: boot code per board behind the `Platform` and `TimerInterrupt` traits (timers, interrupts, paging, and where each device is), a port of v2's `Task` and scheduler, and a heap. |
 | [`green-tea-coop`](green-tea-coop) | A bare-metal kernel for QEMU on riscv64, aarch64 and x86_64 whose tasks yield to each other, so you can watch the context switches on screen. |
 | [`green-tea-preempt`](green-tea-preempt) | The same, but the tasks never yield: a timer interrupt preempts them. One task sleeps instead, and costs no time slices. |
-| [`xtask`](xtask) | `cargo xtask test` runs v2 across targets under qemu; `cargo xtask kernel` boots both kernels everywhere they run. |
+| [`green-tea-shell`](green-tea-shell) | A kernel with a small shell on the serial console. Each command allocates its working memory from the heap, which never frees, or from an arena that is reset after every command. |
+| [`xtask`](xtask) | `cargo xtask test` runs v2 across targets under qemu; `cargo xtask kernel` boots the kernels everywhere they run; `cargo xtask shell` boots the shell on your terminal. |
 
 Each version has two demos: `coop-2-*` drives two tasks with a hand-written loop, and
 `coop-n-*` uses the scheduler.
@@ -62,6 +63,8 @@ cargo xtask kernel --kernel preempt   # just the preemptive kernel
 cargo xtask kernel --kernel overflow  # the guard page test (riscv64, x86_64)
 cargo xtask kernel --kernel disk      # the virtio-blk test
 cargo xtask kernel --kernel memmap    # where the linker put each section
+cargo xtask kernel --kernel shell     # the shell's test, typed at its serial console
+cargo xtask shell                     # the shell, on this terminal (--target to pick a board)
 cargo xtask kernel --target aarch64   # just one architecture
 cargo xtask kernel --headless --screenshot   # no windows; saves target/kernel/<kernel>-<arch>.png
 ```
@@ -153,6 +156,26 @@ pool.
 
 The gaps it prints between sections are sections linker.ld doesn't name, which the linker
 places itself: `.eh_frame`, and on x86_64 `.got` and the PVH note.
+
+### A shell, and an arena
+
+green-tea-shell is one task that reads a line from the serial console and runs it as a
+command, forever. The serial ports are polled: a task waiting for input sleeps a
+millisecond at a time. Type at it with `cargo xtask shell`; `help` lists the commands.
+
+Every command allocates its working memory (a copy of the line, the words it splits into,
+the text it prints) and is done with it when it returns. `use heap` takes that memory from
+the global heap, a bump allocator that never frees: each `echo` of nine words costs 616
+bytes for good, and after about 6,700 of them the kernel panics. `use arena` takes it from
+an [arena](green-tea-bare/src/arena.rs), a bump allocator over a block of its own that is
+reset after every command, so the shell can run indefinitely. The arena is an `Allocator`,
+and `reset` takes `&mut self`, so the borrow checker refuses a reset while anything
+allocated from the arena is still alive.
+
+`--kernel shell` types two commands at the shell, through a file that QEMU feeds to the
+serial port. The second is `test`, which runs 1,000 commands each way and checks that the
+heap grew in one case and not at all in the other. (The script starts with an empty line,
+because on riscv64 the first byte typed before the kernel is up doesn't arrive.)
 
 ## Testing
 
