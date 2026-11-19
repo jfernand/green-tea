@@ -15,12 +15,35 @@ unsafe extern "C" {
     static __heap_end: u8;
 }
 
+/// `addr` rounded up to a multiple of `align`, which must be a power of two, as a
+/// `Layout`'s alignment always is. `None` if that overflows.
+///
+/// `checked_next_multiple_of` does the same for any `align`, with a division: the compiler
+/// can't see that a `Layout`'s alignment is a power of two. This is an add and a mask.
+pub fn align_up(addr: usize, align: usize) -> Option<usize> {
+    debug_assert!(align.is_power_of_two());
+    Some(addr.checked_add(align - 1)? & !(align - 1))
+}
+
 struct Bump {
     next: AtomicUsize, // 0 until the first allocation
 }
 
 #[global_allocator]
 static HEAP: Bump = Bump { next: AtomicUsize::new(0) };
+
+/// Bytes of the heap handed out so far, padding included. They never come back.
+pub fn used() -> usize {
+    match HEAP.next.load(Ordering::Relaxed) {
+        0 => 0,
+        next => next - (&raw const __heap_start as usize),
+    }
+}
+
+/// The heap's size: what linker.ld reserves.
+pub fn capacity() -> usize {
+    (&raw const __heap_end as usize) - (&raw const __heap_start as usize)
+}
 
 unsafe impl GlobalAlloc for Bump {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
@@ -29,7 +52,7 @@ unsafe impl GlobalAlloc for Bump {
         let mut current = self.next.load(Ordering::Relaxed);
         loop {
             let next = if current == 0 { start } else { current };
-            let Some(addr) = next.checked_next_multiple_of(layout.align()) else { return ptr::null_mut() };
+            let Some(addr) = align_up(next, layout.align()) else { return ptr::null_mut() };
             let Some(new_next) = addr.checked_add(layout.size()) else { return ptr::null_mut() };
             if new_next > end {
                 return ptr::null_mut(); // the alloc crate turns this into an allocation-error panic
