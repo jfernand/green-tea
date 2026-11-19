@@ -9,14 +9,13 @@
 
 use crate::global::Global;
 use core::ops::Range;
+use green_tea_pool::{FreeList, Pool};
 
 pub const PAGE: usize = 4096;
 pub const STACK_SIZE: usize = 16 * 1024;
 pub const SLOT: usize = PAGE + STACK_SIZE;
 pub const REGION: usize = 2 * 1024 * 1024; // as linker.ld's .stacks: one 2 MiB page
 pub const SLOTS: usize = REGION / SLOT;
-
-const _: () = assert!(SLOTS <= 128); // one bit each in `FREE`
 
 unsafe extern "C" {
     static __stacks_start: u8;
@@ -27,14 +26,33 @@ pub fn region_start() -> usize {
     &raw const __stacks_start as usize
 }
 
-/// Bit `i` set: slot `i` is free.
-static FREE: Global<u128> = Global::new(u128::MAX >> (128 - SLOTS));
+/// How the pool remembers which slots are free: a list threaded through the free slots.
+/// green-tea-pool's `Bitmap` does the same job with one bit per slot; either works here.
+type Slots = FreeList;
+
+/// The pool, made the first time it's used.
+static POOL: Global<Option<Slots>> = Global::new(None);
+
+/// Run `f` on the pool. A free slot's link goes in the first word above its guard page:
+/// on a board with guard pages, the guard page itself can't be written.
+fn with_pool<R>(f: impl FnOnce(&mut Slots) -> R) -> R {
+    let mut pool = POOL.get().unwrap_or_else(|| unsafe { Slots::new(region_start(), SLOT, SLOTS, PAGE) });
+    let result = f(&mut pool);
+    POOL.set(Some(pool));
+    result
+}
+
+/// How many stacks the pool has left.
+pub fn free_slots() -> usize {
+    with_pool(|pool| pool.free())
+}
 
 /// A task's stack: a slot in the pool, given back on drop. Taking and giving back aren't
 /// interrupt-safe: green-tea-preempt creates tasks with interrupts off, and the scheduler,
 /// which drops them, runs with interrupts off.
 pub struct Stack {
-    slot: usize,
+    /// The slot's first byte, which is its guard page's.
+    base: usize,
 }
 
 impl Stack {
@@ -43,28 +61,28 @@ impl Stack {
     /// # Panics
     /// If every slot is taken.
     pub fn take() -> Stack {
-        let free = FREE.get();
-        assert!(free != 0, "out of task stacks (all {SLOTS} in use)");
-        let slot = free.trailing_zeros() as usize;
-        FREE.set(free & !(1 << slot));
-        Stack { slot }
+        match with_pool(|pool| pool.take()) {
+            Some(base) => Stack { base },
+            None => panic!("out of task stacks (all {SLOTS} in use)"),
+        }
     }
 
     /// One past the highest byte: where the stack starts.
     pub fn top(&self) -> *mut u8 {
-        (region_start() + (self.slot + 1) * SLOT) as *mut u8
+        (self.base + SLOT) as *mut u8
     }
 
     /// The guard page's addresses.
     pub fn guard(&self) -> Range<usize> {
-        let start = region_start() + self.slot * SLOT;
-        start..start + PAGE
+        self.base..self.base + PAGE
     }
 }
 
 impl Drop for Stack {
     fn drop(&mut self) {
-        FREE.set(FREE.get() | (1 << self.slot));
+        // SAFETY: `base` came from this pool's `take`, and a Stack is dropped once.
+        let given = with_pool(|pool| unsafe { pool.give(self.base) });
+        assert!(given.is_ok(), "the stack pool refused a stack: {given:?}");
     }
 }
 

@@ -109,6 +109,7 @@ dependencies = [
  "green-tea-ns16550",
  "green-tea-pci",
  "green-tea-pl011",
+ "green-tea-pool",
  "green-tea-ramfb",
  "green-tea-virtio",
  "green-tea-virtio-blk",

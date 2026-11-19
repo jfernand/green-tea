@@ -20,6 +20,7 @@ bench = false
 
 [dependencies]
 green-tea-arch = { path = "../green-tea-arch" }
+green-tea-pool = { path = "../green-tea-pool" }
 green-tea-io = { path = "../drivers/io" }
 green-tea-fw-cfg = { path = "../drivers/fw-cfg" }
 green-tea-ramfb = { path = "../drivers/ramfb" }
