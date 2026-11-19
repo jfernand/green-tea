@@ -63,6 +63,10 @@ impl Platform for RiscvVirt {
         Ns16550Mmio(0x1000_0000).putc(byte);
     }
 
+    fn getc() -> Option<u8> {
+        Ns16550Mmio(0x1000_0000).getc()
+    }
+
     /// The `time` CSR, which ticks at 10 MHz on QEMU's virt machine.
     fn ticks() -> u64 {
         let t: u64;

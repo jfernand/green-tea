@@ -47,6 +47,10 @@ pub trait Platform {
     /// Write a byte to the serial console, waiting for room.
     fn putc(byte: u8);
 
+    /// The next byte received on the serial console, if one has arrived. Polled: nothing
+    /// interrupts when a byte comes in.
+    fn getc() -> Option<u8>;
+
     /// A free-running counter, never reset.
     fn ticks() -> u64;
     fn ticks_per_ms() -> u64;

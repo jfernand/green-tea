@@ -53,11 +53,17 @@ impl Platform for AarchVirt {
     const NAME: &'static str = "aarch64";
     const GUARD_PAGES: bool = false;
 
-    fn init() {}
+    fn init() {
+        Pl011(0x0900_0000).enable();
+    }
 
     /// A PL011 UART.
     fn putc(byte: u8) {
         Pl011(0x0900_0000).putc(byte);
+    }
+
+    fn getc() -> Option<u8> {
+        Pl011(0x0900_0000).getc()
     }
 
     /// The generic timer's virtual count.

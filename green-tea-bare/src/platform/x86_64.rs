@@ -151,6 +151,10 @@ impl Platform for Q35 {
         Ns16550Port(0x3f8).putc(byte);
     }
 
+    fn getc() -> Option<u8> {
+        Ns16550Port(0x3f8).getc()
+    }
+
     /// The HPET's main counter.
     fn ticks() -> u64 {
         unsafe { read_volatile(HPET_COUNTER) }
