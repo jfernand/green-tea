@@ -1,0 +1,13 @@
+[package]
+name = "green-tea-pool"
+description = "Pools of fixed-size blocks, two ways: a bitmap and an intrusive free list."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+# no_std and dependency-free, so the bare-metal kernels can use it, and its tests run on
+# the host: cargo test -p green-tea-pool
