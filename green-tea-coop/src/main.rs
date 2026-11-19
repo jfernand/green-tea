@@ -10,7 +10,8 @@
 //! fault in that task's guard page (`cargo xtask kernel --kernel overflow`). Set to "disk",
 //! it tests the virtio-blk driver against a disk image xtask made (`--kernel disk`). Set to
 //! "memmap", it prints where the linker put each section and checks the layout
-//! (`--kernel memmap`).
+//! (`--kernel memmap`). Set to "pool", it compares the two pools of green-tea-pool, and
+//! checks that tasks run one after another reuse one stack (`--kernel pool`).
 
 #![no_std]
 #![no_main]
@@ -21,7 +22,8 @@ use green_tea_bare::screen::{COLORS, COLUMNS, Painter, Screen};
 use green_tea_bare::task::{current_guard, yield_now};
 use green_tea_bare::virtio::{self, Transport};
 use green_tea_bare::virtio_blk::{self as blk, Blk, SECTOR_SIZE};
-use green_tea_bare::{Board, Global, Platform, boot, delay_ms, memory, println, stack};
+use green_tea_bare::pool::{Bitmap, FreeList, GiveError, Pool};
+use green_tea_bare::{Board, Global, Platform, boot, delay_ms, heap, memory, println, stack};
 
 extern crate alloc;
 use alloc::boxed::Box;
@@ -40,6 +42,7 @@ extern "C" fn kmain() -> ! {
         b"overflow" => overflow_test(fb),
         b"disk" => disk_test(fb),
         b"memmap" => memmap_test(fb),
+        b"pool" => pool_test(fb),
         other => panic!("unknown test {:?}", core::str::from_utf8(other)),
     }
     println!("halting");
@@ -374,4 +377,148 @@ fn check_memmap(witnesses: &[(&str, usize, &str, usize)]) -> Result<(), String> 
         }
     }
     Ok(())
+}
+
+// ---- The pool test --------------------------------------------------------------------
+//
+// Two parts. First, the same sequence of takes and gives on each of green-tea-pool's two
+// pools, over eight small slots from the heap: which slot each hands out next, what
+// happens when the pool is empty, and what happens when a slot is given back twice.
+// Second, the stack pool at work: a thousand tasks, one after another, must all run on the
+// same stack, and leave the pool as full as they found it.
+
+const POOL_SLOT: usize = 64;
+const POOL_SLOTS: usize = 8;
+
+/// What one pool did with the sequence.
+struct PoolRun {
+    /// The slots it handed out from new, as indices.
+    fresh: [usize; POOL_SLOTS],
+    /// Whether a ninth `take` got nothing.
+    empty_refuses: bool,
+    /// The three it handed out after 2, 5 and 0 were given back, in that order.
+    reused: [usize; 3],
+    /// What it said to a slot given back a second time.
+    second_give: Result<(), GiveError>,
+    /// The next two it handed out after that: `None` where it had nothing left.
+    after_second_give: [Option<usize>; 2],
+    /// In a new pool: slot 0 is taken and given back, and then its first word is
+    /// overwritten with the address of `VICTIM`, as a task still using the slot after
+    /// giving it back might. Whether one of the next two takes returned that address.
+    hands_out_victim: bool,
+}
+
+/// Not part of any pool.
+static VICTIM: Global<usize> = Global::new(0);
+
+fn pool_run<P: Pool>() -> PoolRun {
+    // Never freed: the heap doesn't, and the test runs once.
+    let base = Box::leak(Box::new([0usize; POOL_SLOTS * POOL_SLOT / size_of::<usize>()])).as_mut_ptr() as usize;
+    let mut pool = unsafe { P::new(base, POOL_SLOT, POOL_SLOTS, 0) };
+    let take = |pool: &mut P| pool.take().map_or(usize::MAX, |slot| (slot - base) / POOL_SLOT);
+    let fresh = [0; POOL_SLOTS].map(|_| take(&mut pool));
+    let empty_refuses = pool.take().is_none();
+    for index in [2, 5, 0] {
+        let _ = unsafe { pool.give(base + index * POOL_SLOT) };
+    }
+    let reused = [0; 3].map(|_| take(&mut pool));
+    // Slot 7 is taken. Give it back twice: the second time breaks `give`'s contract, on
+    // purpose, to see what each pool makes of it.
+    let slot = base + 7 * POOL_SLOT;
+    let _ = unsafe { pool.give(slot) };
+    let second_give = unsafe { pool.give(slot) };
+    let after_second_give = [0; 2].map(|_| pool.take().map(|slot| (slot - base) / POOL_SLOT));
+
+    let base = Box::leak(Box::new([0usize; POOL_SLOTS * POOL_SLOT / size_of::<usize>()])).as_mut_ptr() as usize;
+    let mut pool = unsafe { P::new(base, POOL_SLOT, POOL_SLOTS, 0) };
+    let victim = &raw const VICTIM as usize;
+    let slot = pool.take().expect("a new pool has a slot");
+    let _ = unsafe { pool.give(slot) };
+    unsafe { (slot as *mut usize).write(victim) }; // a use after free
+    let hands_out_victim = [pool.take(), pool.take()].contains(&Some(victim));
+    PoolRun { fresh, empty_refuses, reused, second_give, after_second_give, hands_out_victim }
+}
+
+/// How many tasks the second part runs.
+const TASKS: usize = 1000;
+
+/// The lowest and highest address of a local variable in any of the tasks, and how many
+/// tasks have run.
+static STACK_SEEN: Global<(usize, usize, usize)> = Global::new((usize::MAX, 0, 0));
+
+fn pool_test(fb: Framebuffer) {
+    println!("a pool of {POOL_SLOTS} slots:        bitmap                     free list");
+    let (bitmap, list) = (pool_run::<Bitmap>(), pool_run::<FreeList>());
+    println!("  taken from new:          {:?}   {:?}", bitmap.fresh, list.fresh);
+    println!("  a ninth take refused:    {:<24}   {}", bitmap.empty_refuses, list.empty_refuses);
+    println!("  after giving 2, 5, 0:    {:<24}   {:?}", alloc::format!("{:?}", bitmap.reused), list.reused);
+    println!(
+        "  7 given back twice:      {:<24}   {:?}",
+        alloc::format!("{:?}", bitmap.second_give),
+        list.second_give
+    );
+    println!(
+        "  the next two takes:      {:<24}   {:?}",
+        alloc::format!("{:?}", bitmap.after_second_give),
+        list.after_second_give
+    );
+    println!(
+        "  after a write to a free slot, hands out a block outside the pool:\n                           {:<24}   {}",
+        bitmap.hands_out_victim, list.hands_out_victim
+    );
+
+    let free_before = stack::free_slots();
+    let heap_before = heap::used();
+    run(
+        || {
+            for _ in 0..TASKS {
+                spawn(|| {
+                    let local = 0u8;
+                    let addr = &raw const local as usize;
+                    let (low, high, count) = STACK_SEEN.get();
+                    STACK_SEEN.set((low.min(addr), high.max(addr), count + 1));
+                });
+                yield_now(); // the new task runs, and finishes, before the next is spawned
+            }
+        },
+        |_| {},
+    );
+    let (low, high, count) = STACK_SEEN.get();
+    let heap_per_task = (heap::used() - heap_before) / TASKS;
+    println!(
+        "{count} tasks, one after another: their locals were at {low:#x}..={high:#x}; the pool has {} of {} \
+         stacks free, as before; each task cost {heap_per_task} bytes of heap",
+        stack::free_slots(),
+        stack::SLOTS
+    );
+
+    let ascending: [usize; POOL_SLOTS] = core::array::from_fn(|i| i);
+    let verdict = if bitmap.fresh != ascending || list.fresh != ascending {
+        Err("a new pool didn't hand out its slots in address order")
+    } else if !bitmap.empty_refuses || !list.empty_refuses {
+        Err("an empty pool handed out a slot")
+    } else if bitmap.reused != [0, 2, 5] {
+        Err("the bitmap didn't reuse the lowest slot first")
+    } else if list.reused != [0, 5, 2] {
+        Err("the free list didn't reuse the last slot given back first")
+    } else if bitmap.second_give != Err(GiveError::NotTaken) {
+        Err("the bitmap accepted a slot given back twice")
+    } else if list.second_give != Ok(()) || list.after_second_give != [Some(7), Some(7)] {
+        Err("the free list didn't hand out twice the slot it was given twice")
+    } else if bitmap.hands_out_victim || !list.hands_out_victim {
+        Err("a write to a free slot should mislead the free list, and only the free list")
+    } else if count != TASKS || low != high {
+        Err("the tasks didn't all run on the same stack")
+    } else if stack::free_slots() != free_before {
+        Err("the stack pool lost a stack")
+    } else {
+        Ok(())
+    };
+    match verdict {
+        Err(e) => println!("FAIL: {e}"),
+        Ok(()) => {
+            Screen::new(fb).finish(TASKS); // green, with the task count
+            println!("PASS: {TASKS} tasks ran on one stack; the bitmap caught a double give, the free list didn't");
+        }
+    }
 }

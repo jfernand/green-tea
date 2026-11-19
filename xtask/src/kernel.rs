@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use std::{env, thread};
 
 pub const USAGE: &str = "\
-usage: cargo xtask kernel [--kernel coop|preempt|overflow|disk|memmap|shell]... [--target riscv64|aarch64|x86_64]...
+usage: cargo xtask kernel [--kernel coop|preempt|overflow|disk|memmap|pool|shell]... [--target riscv64|aarch64|x86_64]...
                           [--release] [--headless] [--screenshot]
 
 Builds the bare-metal kernels and boots each in QEMU on every architecture it supports,
@@ -33,6 +33,9 @@ is echoed here, and the run passes when every kernel reports PASS.
             on x86_64)
   memmap    green-tea-coop's test of its own memory map: prints where the linker put each
             section, and checks their order, alignment and size (riscv64, aarch64, x86_64)
+  pool      green-tea-coop's test of pools: a bitmap and a free list given the same takes
+            and gives, and a thousand tasks run on one reused stack (riscv64, aarch64,
+            x86_64)
   shell     green-tea-shell: types two commands at the shell on the serial console; the
             second is its `test`, which checks that an arena frees what the heap can't
             (riscv64, aarch64, x86_64). To type at it yourself: cargo xtask shell
@@ -63,6 +66,7 @@ const KERNELS: &[Kernel] = &[
     Kernel { name: "overflow", package: "green-tea-coop", arches: &["riscv64", "x86_64"], test: Some("overflow"), disk: false, input: None },
     Kernel { name: "disk", package: "green-tea-coop", arches: ALL, test: Some("disk"), disk: true, input: None },
     Kernel { name: "memmap", package: "green-tea-coop", arches: ALL, test: Some("memmap"), disk: false, input: None },
+    Kernel { name: "pool", package: "green-tea-coop", arches: ALL, test: Some("pool"), disk: false, input: None },
     Kernel {
         name: "shell",
         package: "green-tea-shell",
@@ -237,7 +241,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 let kernel = KERNELS
                     .iter()
                     .find(|k| k.name == value)
-                    .ok_or_else(|| format!("unknown kernel {value}; known: coop, preempt, overflow, disk, memmap, shell"))?;
+                    .ok_or_else(|| format!("unknown kernel {value}; known: coop, preempt, overflow, disk, memmap, pool, shell"))?;
                 kernels.push(kernel);
             }
             "-h" | "--help" => return Err(String::new()),
@@ -580,6 +584,9 @@ mod tests {
                 "memmap-riscv64",
                 "memmap-aarch64",
                 "memmap-x86_64",
+                "pool-riscv64",
+                "pool-aarch64",
+                "pool-x86_64",
                 "shell-riscv64",
                 "shell-aarch64",
                 "shell-x86_64"
@@ -589,7 +596,7 @@ mod tests {
 
     #[test]
     fn unsupported_combinations_are_skipped() {
-        assert_eq!(labels(&["--target", "aarch64"]), ["coop-aarch64", "preempt-aarch64", "disk-aarch64", "memmap-aarch64", "shell-aarch64"]);
+        assert_eq!(labels(&["--target", "aarch64"]), ["coop-aarch64", "preempt-aarch64", "disk-aarch64", "memmap-aarch64", "pool-aarch64", "shell-aarch64"]);
         let args = ["--kernel".to_string(), "overflow".into(), "--target".into(), "aarch64".into()];
         assert!(parse(&args).is_err());
     }

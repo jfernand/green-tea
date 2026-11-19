@@ -64,6 +64,7 @@ cargo xtask kernel --kernel preempt   # just the preemptive kernel
 cargo xtask kernel --kernel overflow  # the guard page test (riscv64, x86_64)
 cargo xtask kernel --kernel disk      # the virtio-blk test
 cargo xtask kernel --kernel memmap    # where the linker put each section
+cargo xtask kernel --kernel pool      # two pools compared, and a thousand tasks on one stack
 cargo xtask kernel --kernel shell     # the shell's test, typed at its serial console
 cargo xtask shell                     # the shell, on this terminal (--target to pick a board)
 cargo xtask kernel --target aarch64   # just one architecture
@@ -157,6 +158,20 @@ pool.
 
 The gaps it prints between sections are sections linker.ld doesn't name, which the linker
 places itself: `.eh_frame`, and on x86_64 `.got` and the PVH note.
+
+### Pools
+
+Task stacks are all one size, so the pool they come from needs no search: it only has to
+remember which slots are free. [`green-tea-pool`](green-tea-pool) does that two ways behind
+one trait. `Bitmap` keeps a bit per slot, apart from the slots, takes the lowest free one,
+and notices a slot given back twice. `FreeList` threads a list through the free slots
+themselves, takes the one most recently given back, and can check nothing: given a slot
+twice, it hands that slot to two callers. The stack pool uses the free list, with each free
+slot's link in the first word above its guard page.
+
+`--kernel pool` gives both pools the same takes and gives and prints what each does, then
+runs a thousand tasks one after another and checks that they all ran on the same stack.
+The crate's own tests run on the host: `cargo test -p green-tea-pool`.
 
 ### A shell, and an arena
 

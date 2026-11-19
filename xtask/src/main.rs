@@ -8,15 +8,15 @@ mod kernel;
 
 const USAGE: &str = "\
 usage: cargo xtask test [--target <triple>]... [--profile debug|release]...
-       cargo xtask kernel [--kernel coop|preempt|overflow|disk|memmap|shell]... [--target <arch>]... [--release] [--headless] [--screenshot]
+       cargo xtask kernel [--kernel coop|preempt|overflow|disk|memmap|pool|shell]... [--target <arch>]... [--release] [--headless] [--screenshot]
 
 test:   runs green-tea-v2's tests and demo binaries on the host and, under qemu, on every
         cross target, in both profiles. Also checks that the library builds for targets
         we can compile for but not run (Apple Silicon). --target and --profile narrow
         the matrix.
 kernel: builds the bare-metal kernels (green-tea-coop, green-tea-preempt) and boots them,
-        and coop's stack overflow, disk and memory map tests, in QEMU on riscv64, aarch64 and
-        x86_64 (see cargo xtask kernel --help).
+        and coop's stack overflow, disk, memory map and pool tests, in QEMU on riscv64,
+        aarch64 and x86_64 (see cargo xtask kernel --help).
 shell:  boots green-tea-shell with its serial console on this terminal (see cargo xtask
         shell --help).";
 
