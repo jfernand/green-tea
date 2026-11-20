@@ -1,0 +1,13 @@
+[package]
+name = "green-tea-fit"
+description = "An allocator for blocks of any size: a free list searched first-fit, next-fit or best-fit, with boundary tags to merge freed neighbours."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+# no_std and dependency-free, so the bare-metal kernels can use it, and its tests run on
+# the host: cargo test -p green-tea-fit

@@ -123,6 +123,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "green-tea-fit"
+version = "0.1.0"
+
+[[package]]
 name = "green-tea-fw-cfg"
 version = "0.1.0"
 dependencies = [
