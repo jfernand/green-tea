@@ -24,8 +24,18 @@
 //! bytes: the two tags and the two links.
 //!
 //! green-tea-bare's heap is one of these (see its `heap` module).
+//!
+//! [`trace`] replays a recorded sequence of allocations and frees against an allocator and
+//! measures its fragmentation, and [`adversary`] is a program written to fragment one.
+//! Those two allocate (a `Vec`, a `BTreeMap`), so they need a global allocator; the
+//! allocator itself needs nothing.
 
 #![no_std]
+
+extern crate alloc;
+
+pub mod adversary;
+pub mod trace;
 
 const WORD: usize = size_of::<usize>();
 /// Every address handed out is a multiple of this, and so is every block's size.
@@ -112,6 +122,8 @@ pub struct Fit {
     order: Order,
     /// Bytes in allocated blocks, tags included.
     used: usize,
+    /// The highest address any allocated block has reached: one past its footer.
+    high: usize,
     stats: Stats,
 }
 
@@ -128,7 +140,7 @@ impl Fit {
         let first = region.next_multiple_of(ALIGN) + WORD;
         let end = ((region + len) & !(ALIGN - 1)) - WORD;
         assert!(end >= first + MIN_BLOCK, "a region too small for one block");
-        let mut fit = Fit { first, end, head: 0, rover: 0, policy, order, used: 0, stats: Stats::default() };
+        let mut fit = Fit { first, end, head: 0, rover: 0, policy, order, used: 0, high: first, stats: Stats::default() };
         fit.write(first - WORD, USED);
         fit.write(end, USED);
         fit.set_block(first, end - first, false);
@@ -174,6 +186,7 @@ impl Fit {
         }
         self.set_block(start, end - start, true);
         self.used += end - start;
+        self.high = self.high.max(end);
         self.stats.allocations += 1;
         self.stats.peak = self.stats.peak.max(self.used);
         Some(start + WORD)
@@ -243,6 +256,13 @@ impl Fit {
     /// Bytes in allocated blocks, tags included.
     pub fn used(&self) -> usize {
         self.used
+    }
+
+    /// How much of the region has ever been in an allocated block: the distance from its
+    /// start to the highest address a block has reached. It never goes down. A region of
+    /// this size would have been enough for everything asked of the allocator so far.
+    pub fn footprint(&self) -> usize {
+        self.high - self.first
     }
 
     pub fn stats(&self) -> Stats {
@@ -686,6 +706,24 @@ mod tests {
                 fit.free(blocks[3]).unwrap();
             }
             assert_eq!([0; 3].map(|_| fit.allocate(48, 8).unwrap()), [blocks[1], blocks[3], blocks[5]]);
+        });
+    }
+
+    #[test]
+    fn the_footprint_is_the_highest_address_ever_reached() {
+        every_way(4096, |fit| {
+            assert_eq!(fit.footprint(), 0);
+            let a = fit.allocate(100, 8).unwrap();
+            let b = fit.allocate(100, 8).unwrap();
+            assert_eq!(fit.footprint(), 2 * 128);
+            unsafe { fit.free(a).unwrap() };
+            unsafe { fit.free(b).unwrap() };
+            assert_eq!(fit.footprint(), 2 * 128); // freeing gives nothing back
+            // A block that fits below the mark doesn't move it, wherever the policy puts it.
+            fit.allocate(40, 8).unwrap();
+            assert_eq!(fit.footprint(), 2 * 128);
+            fit.allocate(400, 8).unwrap();
+            assert!(fit.footprint() >= 64 + 416);
         });
     }
 
