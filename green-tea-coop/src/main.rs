@@ -11,7 +11,9 @@
 //! it tests the virtio-blk driver against a disk image xtask made (`--kernel disk`). Set to
 //! "memmap", it prints where the linker put each section and checks the layout
 //! (`--kernel memmap`). Set to "pool", it compares the two pools of green-tea-pool, and
-//! checks that tasks run one after another reuse one stack (`--kernel pool`).
+//! checks that tasks run one after another reuse one stack (`--kernel pool`). Set to "fit",
+//! it puts green-tea-fit's allocator, which is also the kernel's heap, through its paces
+//! (`--kernel fit`, in fit.rs).
 
 #![no_std]
 #![no_main]
@@ -26,6 +28,8 @@ use green_tea_bare::pool::{Bitmap, FreeList, GiveError, Pool};
 use green_tea_bare::{Board, Global, Platform, boot, delay_ms, heap, memory, println, stack};
 
 extern crate alloc;
+
+mod fit;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec;
@@ -43,6 +47,7 @@ extern "C" fn kmain() -> ! {
         b"disk" => disk_test(fb),
         b"memmap" => memmap_test(fb),
         b"pool" => pool_test(fb),
+        b"fit" => fit::test(fb),
         other => panic!("unknown test {:?}", core::str::from_utf8(other)),
     }
     println!("halting");

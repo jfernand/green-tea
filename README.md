@@ -66,6 +66,7 @@ cargo xtask kernel --kernel overflow  # the guard page test (riscv64, x86_64)
 cargo xtask kernel --kernel disk      # the virtio-blk test
 cargo xtask kernel --kernel memmap    # where the linker put each section
 cargo xtask kernel --kernel pool      # two pools compared, and a thousand tasks on one stack
+cargo xtask kernel --kernel fit       # the heap's allocator: merging, three ways to search, a thousand tasks
 cargo xtask kernel --kernel shell     # the shell's test, typed at its serial console
 cargo xtask shell                     # the shell, on this terminal (--target to pick a board)
 cargo xtask kernel --target aarch64   # just one architecture
@@ -173,6 +174,24 @@ slot's link in the first word above its guard page.
 `--kernel pool` gives both pools the same takes and gives and prints what each does, then
 runs a thousand tasks one after another and checks that they all ran on the same stack.
 The crate's own tests run on the host: `cargo test -p green-tea-pool`.
+
+### A heap that frees
+
+The kernels' heap is a [`green-tea-fit`](green-tea-fit) allocator over the 4 MiB linker.ld
+reserves. Every block has a word at each end, a header and a footer, holding its size and
+whether it is allocated (Knuth's boundary tags), and the free blocks are on a doubly linked
+list threaded through themselves. `allocate` searches the list and splits the block it
+finds; `free` looks one word below the block and one word above it, and merges with
+whichever neighbours are free. The crate has three searches (first fit, next fit, best fit)
+and two list orders (LIFO, by address); the heap uses first fit by address. It runs with
+interrupts off, since a free list can't be updated in one instruction.
+
+`--kernel fit` prints a small region word by word, frees blocks until they merge back into
+one, gives one request to each policy, makes the caller's mistakes (a second free and a
+write past the end are refused; a write to a freed block redirects the list), counts what
+each policy does over the same 20,000 operations, and checks that a thousand tasks leave
+the kernel's heap as they found it. The crate's own tests run on the host:
+`cargo test -p green-tea-fit`.
 
 ### A shell, and an arena
 
