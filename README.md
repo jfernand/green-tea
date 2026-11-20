@@ -22,7 +22,7 @@ kernels built on the same context switch:
 | [`green-tea-v2`](green-tea-v2) | The same ideas split into layers: `arch` (save/restore registers, prime a stack) → `Task` (an asymmetric coroutine that switches back to whoever resumed it) → `run`/`spawn` (a round-robin scheduler on a thread-local run queue). No `static mut`. Runs on x86_64, aarch64 (including Apple Silicon) and riscv64. |
 | [`green-tea-arch`](green-tea-arch) | The `arch` layer on its own: `Context` and `swap_context` for each architecture. `no_std`, so v2 and the kernels share it. |
 | [`green-tea-pool`](green-tea-pool) | Pools of fixed-size blocks, two ways: a bitmap and an intrusive free list. `no_std`; the kernels' task stacks come from one. |
-| [`green-tea-fit`](green-tea-fit) | An allocator for blocks of any size: a free list searched first-fit, next-fit or best-fit, with boundary tags to merge freed neighbours. `no_std`; the kernels' heap is one. |
+| [`green-tea-fit`](green-tea-fit) | An allocator for blocks of any size: a free list searched first-fit, next-fit or best-fit, with boundary tags to merge freed neighbours. `no_std`; the kernels' heap is one. Also replays recorded traces of allocations against each policy, and measures the fragmentation. |
 | [`drivers/`](drivers) | The device drivers, one crate each, which know their device but not the machine: serial ports (16550, PL011), QEMU's fw_cfg and ramfb, PCI through ECAM, virtio (MMIO and PCI transports, split virtqueues) and virtio-blk. |
 | [`green-tea-bare`](green-tea-bare) | What the kernels share: boot code per board behind the `Platform` and `TimerInterrupt` traits (timers, interrupts, paging, and where each device is), a port of v2's `Task` and scheduler, and a heap. |
 | [`green-tea-coop`](green-tea-coop) | A bare-metal kernel for QEMU on riscv64, aarch64 and x86_64 whose tasks yield to each other, so you can watch the context switches on screen. |
@@ -67,7 +67,9 @@ cargo xtask kernel --kernel disk      # the virtio-blk test
 cargo xtask kernel --kernel memmap    # where the linker put each section
 cargo xtask kernel --kernel pool      # two pools compared, and a thousand tasks on one stack
 cargo xtask kernel --kernel fit       # the heap's allocator: merging, three ways to search, a thousand tasks
+cargo xtask kernel --kernel frag      # fragmentation: an adversary, and a random workload
 cargo xtask kernel --kernel shell     # the shell's test, typed at its serial console
+cargo xtask kernel --kernel trace     # the shell records its heap, and replays the trace against each policy
 cargo xtask shell                     # the shell, on this terminal (--target to pick a board)
 cargo xtask kernel --target aarch64   # just one architecture
 cargo xtask kernel --headless --screenshot   # no windows; saves target/kernel/<kernel>-<arch>.png
@@ -193,6 +195,26 @@ each policy does over the same 20,000 operations, and checks that a thousand tas
 the kernel's heap as they found it. The crate's own tests run on the host:
 `cargo test -p green-tea-fit`.
 
+### Fragmentation, measured
+
+green-tea-fit keeps a *footprint*: the highest address any allocated block has reached. A
+region that size would have been enough for everything asked of the allocator so far, so
+the footprint against what the program had allocated at its peak is how much the
+allocator's placement cost.
+
+`--kernel frag` first shows a region that is half free and refuses a request a fifth its
+size. Then it runs an [adversary](green-tea-fit/src/adversary.rs), a program that looks at
+where its blocks are and frees whichever leave holes too small for what it asks for next.
+Holding 64 KiB, it makes every policy need 5.93 times that. Last, it replays the `fit`
+test's random workload against each policy.
+
+The heap can record what is asked of it (`heap::record`), as a
+[trace](green-tea-fit/src/trace.rs): an address and a size per allocation, an address per
+free. `--kernel trace` has the shell record itself running a script of 1,970 commands
+that set, read and unset variables, and then replay the trace against all six
+combinations of policy and list order. It replays it twice more: with the same sizes and
+lifetimes dealt out at random, and with the long-lived blocks in a region of their own.
+
 ### A shell, and an arena
 
 green-tea-shell is one task that reads a line from the serial console and runs it as a
@@ -204,7 +226,8 @@ the text it prints) and is done with it when it returns. `use heap` takes that m
 the global heap: eight allocations for an `echo` of nine words, each found by a search and
 freed on its own. `use arena` takes it from an [arena](green-tea-bare/src/arena.rs), a bump
 allocator over a block of its own that is reset after every command. `heap` prints the
-heap block by block. The arena is an `Allocator`,
+heap block by block. `set`, `unset` and `vars` keep variables, which are always on the heap,
+since they outlive the command that sets them. The arena is an `Allocator`,
 and `reset` takes `&mut self`, so the borrow checker refuses a reset while anything
 allocated from the arena is still alive.
 

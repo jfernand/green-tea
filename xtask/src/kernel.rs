@@ -16,7 +16,8 @@ use std::time::{Duration, Instant};
 use std::{env, thread};
 
 pub const USAGE: &str = "\
-usage: cargo xtask kernel [--kernel coop|preempt|overflow|disk|memmap|pool|fit|shell]... [--target riscv64|aarch64|x86_64]...
+usage: cargo xtask kernel [--kernel coop|preempt|overflow|disk|memmap|pool|fit|frag|shell|trace]...
+                          [--target riscv64|aarch64|x86_64]...
                           [--release] [--headless] [--screenshot]
 
 Builds the bare-metal kernels and boots each in QEMU on every architecture it supports,
@@ -39,10 +40,16 @@ is echoed here, and the run passes when every kernel reports PASS.
   fit       green-tea-coop's test of green-tea-fit, the allocator behind the kernel's heap:
             freed blocks merge, first fit, next fit and best fit choose differently, and a
             thousand tasks leave the heap as they found it (riscv64, aarch64, x86_64)
+  frag      green-tea-coop's fragmentation test: a program written to fragment its
+            allocator makes every policy need several times what it holds, and a random
+            workload is replayed against each (riscv64, aarch64, x86_64)
   shell     green-tea-shell: types two commands at the shell on the serial console; the
             second is its `test`, which checks that commands free what they allocate,
             from the heap or from an arena
             (riscv64, aarch64, x86_64). To type at it yourself: cargo xtask shell
+  trace     green-tea-shell again: records the heap while the shell runs a script of
+            commands, and replays the recording against each policy (riscv64, aarch64,
+            x86_64)
 
   --kernel      only these kernels (default: all)
   --target      only these architectures (default: all three)
@@ -72,6 +79,7 @@ const KERNELS: &[Kernel] = &[
     Kernel { name: "memmap", package: "green-tea-coop", arches: ALL, test: Some("memmap"), disk: false, input: None },
     Kernel { name: "pool", package: "green-tea-coop", arches: ALL, test: Some("pool"), disk: false, input: None },
     Kernel { name: "fit", package: "green-tea-coop", arches: ALL, test: Some("fit"), disk: false, input: None },
+    Kernel { name: "frag", package: "green-tea-coop", arches: ALL, test: Some("frag"), disk: false, input: None },
     Kernel {
         name: "shell",
         package: "green-tea-shell",
@@ -81,6 +89,14 @@ const KERNELS: &[Kernel] = &[
         // The empty first line is there to be lost: on riscv64 the firmware reads the serial
         // port before the kernel does, and takes the first byte with it.
         input: Some("\necho hello from the serial port\ntest\n"),
+    },
+    Kernel {
+        name: "trace",
+        package: "green-tea-shell",
+        arches: ALL,
+        test: None,
+        disk: false,
+        input: Some("\ntrace on\nsession\ntrace off\nreplay\n"),
     },
 ];
 
@@ -246,7 +262,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 let kernel = KERNELS
                     .iter()
                     .find(|k| k.name == value)
-                    .ok_or_else(|| format!("unknown kernel {value}; known: coop, preempt, overflow, disk, memmap, pool, fit, shell"))?;
+                    .ok_or_else(|| format!("unknown kernel {value}; known: coop, preempt, overflow, disk, memmap, pool, fit, frag, shell, trace"))?;
                 kernels.push(kernel);
             }
             "-h" | "--help" => return Err(String::new()),
@@ -595,16 +611,22 @@ mod tests {
                 "fit-riscv64",
                 "fit-aarch64",
                 "fit-x86_64",
+                "frag-riscv64",
+                "frag-aarch64",
+                "frag-x86_64",
                 "shell-riscv64",
                 "shell-aarch64",
-                "shell-x86_64"
+                "shell-x86_64",
+                "trace-riscv64",
+                "trace-aarch64",
+                "trace-x86_64"
             ]
         );
     }
 
     #[test]
     fn unsupported_combinations_are_skipped() {
-        assert_eq!(labels(&["--target", "aarch64"]), ["coop-aarch64", "preempt-aarch64", "disk-aarch64", "memmap-aarch64", "pool-aarch64", "fit-aarch64", "shell-aarch64"]);
+        assert_eq!(labels(&["--target", "aarch64"]), ["coop-aarch64", "preempt-aarch64", "disk-aarch64", "memmap-aarch64", "pool-aarch64", "fit-aarch64", "frag-aarch64", "shell-aarch64", "trace-aarch64"]);
         let args = ["--kernel".to_string(), "overflow".into(), "--target".into(), "aarch64".into()];
         assert!(parse(&args).is_err());
     }

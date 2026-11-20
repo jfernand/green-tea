@@ -14,15 +14,26 @@
 //! Either way the shell runs indefinitely. `heap` prints the heap block by block.
 //!
 //! Commands are generic over the [`Allocator`] they use, so the same code runs both ways.
+//!
+//! The shell has variables (`set`, `unset`, `vars`, and `$name` in an `echo`). They outlive
+//! the command that sets them, so they are always on the heap, whatever `use` says.
+//!
+//! `trace on` records every allocation and free on the heap, `session` is a long script
+//! to record, and `replay` runs what was recorded against each of green-tea-fit's policies
+//! and measures the fragmentation (replay.rs).
 
 #![no_std]
 #![no_main]
 
 extern crate alloc;
 
+mod replay;
+
 use alloc::alloc::Global;
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::alloc::Allocator;
+use core::cell::RefCell;
 use core::fmt::{self, Write};
 use green_tea_bare::arena::Arena;
 use green_tea_bare::runtime::run;
@@ -59,8 +70,14 @@ struct Shell {
     /// Commands run so far, and how many of them weren't commands.
     commands: usize,
     unknown: usize,
-    /// Run commands without printing what they print (`repeat`, `test`).
+    /// Run commands without printing what they print (`repeat`, `test`, `session`).
     quiet: bool,
+    /// The variables, by name. On the heap whatever the source: they outlive commands.
+    vars: RefCell<Vec<(String, String)>>,
+    /// What `trace on` and `trace off` recorded, and how many allocations and frees the
+    /// heap counted between the two.
+    trace: Option<heap::Recording>,
+    counted: (usize, usize),
 }
 
 /// What the shell does after a command.
@@ -75,7 +92,16 @@ enum Next {
 }
 
 fn shell() {
-    let mut shell = Shell { source: Source::Arena, arena: Arena::new(ARENA_SIZE), commands: 0, unknown: 0, quiet: false };
+    let mut shell = Shell {
+        source: Source::Arena,
+        arena: Arena::new(ARENA_SIZE),
+        commands: 0,
+        unknown: 0,
+        quiet: false,
+        vars: RefCell::new(Vec::new()),
+        trace: None,
+        counted: (0, 0),
+    };
     println!("type `help` for the commands");
     let mut line = [0u8; LINE_MAX];
     loop {
@@ -121,6 +147,15 @@ impl Shell {
             Next::Prompt
         } else if text == "test" {
             self.test();
+            Next::Prompt
+        } else if let Some(arg) = text.strip_prefix("trace ") {
+            self.trace(arg.trim_ascii());
+            Next::Prompt
+        } else if text == "session" {
+            self.session();
+            Next::Prompt
+        } else if text == "replay" {
+            self.replay();
             Next::Prompt
         } else {
             self.command(text)
@@ -175,6 +210,34 @@ impl Shell {
             heap::used() as isize - used as isize,
             self.arena.peak()
         );
+    }
+
+    /// `trace on`, `trace off`: record what the heap is asked for, into a buffer that is
+    /// itself taken from the heap, before the recording starts.
+    fn trace(&mut self, arg: &str) {
+        match arg {
+            "on" => {
+                self.trace = None; // frees the last trace's buffer
+                let buffer = alloc::vec![Default::default(); replay::TRACE_EVENTS].into_boxed_slice();
+                // The runtime allocates its list of sleeping tasks the first time a task
+                // sleeps, which is whenever the console first has nothing to read. Sleep
+                // now, so that it isn't sometimes in the trace and sometimes not.
+                green_tea_bare::task::sleep_ms(1);
+                self.counted = heap::with(|fit| (fit.stats().allocations, fit.stats().frees));
+                drop(heap::record(buffer));
+                println!("recording the heap's allocations and frees, up to {} of them", replay::TRACE_EVENTS);
+            }
+            "off" => match heap::stop_recording() {
+                Some(recording) => {
+                    let (allocations, frees) = heap::with(|fit| (fit.stats().allocations, fit.stats().frees));
+                    self.counted = (allocations - self.counted.0, frees - self.counted.1);
+                    println!("recorded {} events, and dropped {}", recording.len, recording.dropped);
+                    self.trace = Some(recording);
+                }
+                None => println!("nothing was being recorded"),
+            },
+            _ => println!("usage: trace on|off"),
+        }
     }
 
     /// `test`: check that commands run from the heap allocate there and free all of it,
@@ -266,10 +329,40 @@ fn execute<A: Allocator + Copy>(text: &str, memory: A, shell: &Shell) -> Next {
         [] => Ok(()),
         ["help"] => out.write_str(HELP),
         ["echo", rest @ ..] => {
+            let vars = shell.vars.borrow();
             for (i, word) in rest.iter().enumerate() {
+                // `$name` is the variable's value, or nothing if there is no such variable.
+                let word = match word.strip_prefix('$') {
+                    Some(name) => vars.iter().find(|(n, _)| n == name).map_or("", |(_, value)| value),
+                    None => word,
+                };
                 let _ = write!(out, "{}{word}", if i == 0 { "" } else { " " });
             }
             out.write_str("\n")
+        }
+        ["set", name, value @ ..] => {
+            // The value is built on the heap, not in `memory`: it has to outlive the command.
+            let mut text = String::new();
+            for (i, word) in value.iter().enumerate() {
+                text.push_str(if i == 0 { "" } else { " " });
+                text.push_str(word);
+            }
+            let mut vars = shell.vars.borrow_mut();
+            match vars.iter_mut().find(|(n, _)| n == name) {
+                Some((_, old)) => *old = text,
+                None => vars.push((String::from(*name), text)),
+            }
+            Ok(())
+        }
+        ["unset", name] => {
+            shell.vars.borrow_mut().retain(|(n, _)| n != name);
+            Ok(())
+        }
+        ["vars"] => {
+            for (name, value) in shell.vars.borrow().iter() {
+                let _ = writeln!(out, "{name} = {value}");
+            }
+            Ok(())
         }
         ["mem"] => {
             let arena = &shell.arena;
@@ -338,6 +431,12 @@ mem                how much of the heap and the arena is in use
 heap               the heap, block by block
 map                where the kernel's sections are
 use heap|arena     where the next commands get their memory
+set <name> <words> give a variable a value; `echo $name` prints it
+unset <name>       forget a variable
+vars               the variables
+trace on|off       record the heap's allocations and frees
+session            run a script of a few thousand commands, from the heap
+replay             replay what was recorded against each policy
 repeat <n> <cmd>   run a command n times, without its output
 test               check that commands free what they allocate, either way
 halt               stop

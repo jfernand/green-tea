@@ -13,7 +13,8 @@
 //! (`--kernel memmap`). Set to "pool", it compares the two pools of green-tea-pool, and
 //! checks that tasks run one after another reuse one stack (`--kernel pool`). Set to "fit",
 //! it puts green-tea-fit's allocator, which is also the kernel's heap, through its paces
-//! (`--kernel fit`, in fit.rs).
+//! (`--kernel fit`, in fit.rs). Set to "frag", it measures how much memory that allocator
+//! can be made to need (`--kernel frag`, in frag.rs).
 
 #![no_std]
 #![no_main]
@@ -30,6 +31,7 @@ use green_tea_bare::{Board, Global, Platform, boot, delay_ms, heap, memory, prin
 extern crate alloc;
 
 mod fit;
+mod frag;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec;
@@ -48,6 +50,7 @@ extern "C" fn kmain() -> ! {
         b"memmap" => memmap_test(fb),
         b"pool" => pool_test(fb),
         b"fit" => fit::test(fb),
+        b"frag" => frag::test(fb),
         other => panic!("unknown test {:?}", core::str::from_utf8(other)),
     }
     println!("halting");

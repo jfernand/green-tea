@@ -8,7 +8,7 @@ mod kernel;
 
 const USAGE: &str = "\
 usage: cargo xtask test [--target <triple>]... [--profile debug|release]...
-       cargo xtask kernel [--kernel coop|preempt|overflow|disk|memmap|pool|fit|shell]... [--target <arch>]... [--release] [--headless] [--screenshot]
+       cargo xtask kernel [--kernel coop|preempt|overflow|disk|memmap|pool|fit|frag|shell|trace]... [--target <arch>]... [--release] [--headless] [--screenshot]
 
 test:   runs green-tea-v2's tests and demo binaries on the host and, under qemu, on every
         cross target, in both profiles. Also checks that the library builds for targets
