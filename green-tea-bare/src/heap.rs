@@ -1,19 +1,29 @@
-//! A bump allocator over the region linker.ld reserves. It never frees: the demos allocate
-//! a few task stacks and closures and then stop, so that's enough.
+//! The kernel's heap: a [`Fit`] over the region linker.ld reserves. It is the global
+//! allocator, so it is what `Box`, `Vec` and the rest of the `alloc` crate allocate from.
 //!
-//! The bump is a compare-and-swap rather than a plain read and write, so that it stays
-//! correct when a timer interrupt preempts one allocation and another task allocates
-//! (green-tea-preempt). One hart means no contention: the loop retries only after such a
-//! preemption.
+//! Blocks are of any size, and a freed block is reused: the allocator searches a list of
+//! free blocks for the first one large enough, and merges a freed block with its free
+//! neighbours. green-tea-fit has the allocator itself, and the other ways to search.
+//!
+//! Every operation runs with interrupts off, so that a timer interrupt can't switch to
+//! another task half way through one (green-tea-preempt). There is one hart, so that is
+//! the only way two tasks could be in the allocator at once.
 
+use crate::global::Global;
+use crate::platform::{Board, TimerInterrupt};
 use core::alloc::{GlobalAlloc, Layout};
+use core::cell::UnsafeCell;
 use core::ptr;
-use core::sync::atomic::{AtomicUsize, Ordering};
+use green_tea_fit::{Fit, Order, Policy};
 
 unsafe extern "C" {
     static __heap_start: u8;
     static __heap_end: u8;
 }
+
+/// Which free block the heap takes, and where a freed block goes on its list.
+pub const POLICY: Policy = Policy::FirstFit;
+pub const ORDER: Order = Order::Address;
 
 /// `addr` rounded up to a multiple of `align`, which must be a power of two, as a
 /// `Layout`'s alignment always is. `None` if that overflows.
@@ -25,44 +35,57 @@ pub fn align_up(addr: usize, align: usize) -> Option<usize> {
     Some(addr.checked_add(align - 1)? & !(align - 1))
 }
 
-struct Bump {
-    next: AtomicUsize, // 0 until the first allocation
+struct Heap {
+    fit: UnsafeCell<Option<Fit>>, // None until the first use
 }
+
+// SAFETY: one hart, and `with` keeps interrupts off while anything touches `fit`.
+unsafe impl Sync for Heap {}
 
 #[global_allocator]
-static HEAP: Bump = Bump { next: AtomicUsize::new(0) };
+static HEAP: Heap = Heap { fit: UnsafeCell::new(None) };
 
-/// Bytes of the heap handed out so far, padding included. They never come back.
+/// Set while `with` is running: the heap can't be used from inside itself.
+static BUSY: Global<bool> = Global::new(false);
+
+/// Run `f` on the heap's allocator, with interrupts off. `f` must not allocate or free:
+/// that would be a second use of the allocator inside the first, and panics.
+pub fn with<R>(f: impl FnOnce(&mut Fit) -> R) -> R {
+    Board::without_interrupts(|| {
+        assert!(!BUSY.replace(true), "the heap was used from inside heap::with");
+        // SAFETY: interrupts are off and BUSY was clear, so this is the only reference.
+        let fit = unsafe { &mut *HEAP.fit.get() }.get_or_insert_with(|| {
+            let start = &raw const __heap_start as usize;
+            let end = &raw const __heap_end as usize;
+            // SAFETY: linker.ld reserves the region for the heap, and nothing else uses it.
+            unsafe { Fit::new(start, end - start, POLICY, ORDER) }
+        });
+        let result = f(fit);
+        BUSY.set(false);
+        result
+    })
+}
+
+/// Bytes of the heap in allocated blocks, each block's two tags included.
 pub fn used() -> usize {
-    match HEAP.next.load(Ordering::Relaxed) {
-        0 => 0,
-        next => next - (&raw const __heap_start as usize),
-    }
+    with(|fit| fit.used())
 }
 
-/// The heap's size: what linker.ld reserves.
+/// The heap's size: what linker.ld reserves, less a word at each end.
 pub fn capacity() -> usize {
-    (&raw const __heap_end as usize) - (&raw const __heap_start as usize)
+    with(|fit| fit.capacity())
 }
 
-unsafe impl GlobalAlloc for Bump {
+unsafe impl GlobalAlloc for Heap {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let start = &raw const __heap_start as usize;
-        let end = &raw const __heap_end as usize;
-        let mut current = self.next.load(Ordering::Relaxed);
-        loop {
-            let next = if current == 0 { start } else { current };
-            let Some(addr) = align_up(next, layout.align()) else { return ptr::null_mut() };
-            let Some(new_next) = addr.checked_add(layout.size()) else { return ptr::null_mut() };
-            if new_next > end {
-                return ptr::null_mut(); // the alloc crate turns this into an allocation-error panic
-            }
-            match self.next.compare_exchange_weak(current, new_next, Ordering::Relaxed, Ordering::Relaxed) {
-                Ok(_) => return addr as *mut u8,
-                Err(actual) => current = actual,
-            }
+        // Null if nothing fits: the alloc crate turns that into an allocation-error panic.
+        with(|fit| fit.allocate(layout.size(), layout.align())).map_or(ptr::null_mut(), |addr| addr as *mut u8)
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
+        // SAFETY: the caller's promise is ours to the allocator.
+        if let Err(e) = with(|fit| unsafe { fit.free(ptr as usize) }) {
+            panic!("free of {ptr:p}: {e:?}");
         }
     }
-
-    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {}
 }

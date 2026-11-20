@@ -8,7 +8,8 @@
 //!   here: [`fw_cfg`], [`ramfb`], [`pci`], [`virtio`], [`virtio_blk`]. Here are [`console`]
 //!   (`println!` on the board's serial port) and [`screen`], the demos' layout drawn on
 //!   the framebuffer.
-//! - [`heap`] (a bump allocator), [`arena`] (a bump allocator that can be reset), [`stack`]
+//! - [`heap`] (the global allocator: a free list searched first-fit, from [`fit`]),
+//!   [`arena`] (a bump allocator that can be reset), [`stack`]
 //!   (task stacks with guard pages, from a pool), [`memory`] (where the linker put each
 //!   section), [`Global`] (statics in place of `thread_local!`).
 //! - [`task`] and [`runtime`]: green-tea-v2's tasks and round-robin scheduler, ported to
@@ -39,7 +40,7 @@ pub mod task;
 
 pub use global::Global;
 pub use {
-    green_tea_fw_cfg as fw_cfg, green_tea_pci as pci, green_tea_pool as pool, green_tea_ramfb as ramfb,
+    green_tea_fit as fit, green_tea_fw_cfg as fw_cfg, green_tea_pci as pci, green_tea_pool as pool, green_tea_ramfb as ramfb,
     green_tea_virtio as virtio, green_tea_virtio_blk as virtio_blk,
 };
 pub use platform::{Board, Platform, TimerInterrupt};

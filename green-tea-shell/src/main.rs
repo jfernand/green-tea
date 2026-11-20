@@ -7,9 +7,11 @@
 //! it prints) and is done with all of it when it returns.
 //!
 //! Where that memory comes from is switchable, with `use`:
-//! - `use heap`: the global heap, green-tea-bare's bump allocator, which never frees. Every
-//!   command leaves its memory behind, and after enough commands the kernel panics.
-//! - `use arena`: an [`Arena`], reset after every command. The shell runs indefinitely.
+//! - `use heap`: the global heap, green-tea-bare's first-fit allocator. Each of a command's
+//!   blocks is found by a search, and freed on its own when the command returns.
+//! - `use arena`: an [`Arena`], reset after every command.
+//!
+//! Either way the shell runs indefinitely. `heap` prints the heap block by block.
 //!
 //! Commands are generic over the [`Allocator`] they use, so the same code runs both ways.
 
@@ -39,6 +41,8 @@ extern "C" fn kmain() -> ! {
 
 /// The longest line the shell reads. Typing past it does nothing.
 const LINE_MAX: usize = 120;
+/// The most blocks `heap` prints.
+const HEAP_BLOCKS: usize = 24;
 /// The arena's size: far more than any command needs.
 const ARENA_SIZE: usize = 64 * 1024;
 
@@ -155,60 +159,71 @@ impl Shell {
         let (Ok(count), false) = (count.parse::<usize>(), command.trim_ascii().is_empty()) else {
             return println!("usage: repeat <n> <command>");
         };
-        let heap_before = heap::used();
+        let (used, before) = (heap::used(), heap::with(|fit| fit.stats()));
         self.quiet = true;
         for _ in 0..count {
             self.command(command);
         }
         self.quiet = false;
+        let after = heap::with(|fit| fit.stats());
         println!(
-            "ran `{command}` {count} times from the {}: heap {:+} bytes, arena peak {} bytes",
+            "ran `{command}` {count} times from the {}: {} heap allocations, {} frees, heap {:+} bytes; arena peak {} \
+             bytes",
             self.source.name(),
-            heap::used() - heap_before,
+            after.allocations - before.allocations,
+            after.frees - before.frees,
+            heap::used() as isize - used as isize,
             self.arena.peak()
         );
     }
 
-    /// `test`: check that commands run from the heap leave their memory behind, and that
-    /// commands run from the arena leave nothing. Also fails if anything typed before it
-    /// wasn't a command, which is how a lost or garbled byte on the serial port shows up.
+    /// `test`: check that commands run from the heap allocate there and free all of it,
+    /// and that commands run from the arena don't touch the heap. Also fails if anything
+    /// typed before it wasn't a command, which is how a lost or garbled byte on the serial
+    /// port shows up.
     fn test(&mut self) {
         const RUNS: usize = 1000;
         const COMMAND: &str = "echo the quick brown fox jumps over the lazy dog";
         let source = self.source;
         self.quiet = true;
+        let now = || heap::with(|fit| (fit.used(), fit.stats().allocations));
 
         self.source = Source::Heap;
-        let before = heap::used();
+        let before = now();
         for _ in 0..RUNS {
             self.command(COMMAND);
         }
-        let from_heap = heap::used() - before;
+        let (left, from_heap) = (now().0 as isize - before.0 as isize, now().1 - before.1);
 
         self.source = Source::Arena;
-        let before = heap::used();
+        let before = now();
         for _ in 0..RUNS {
             self.command(COMMAND);
         }
-        let from_arena = heap::used() - before;
+        let from_arena = now().1 - before.1;
 
         self.quiet = false;
         self.source = source;
-        let (peak, left) = (self.arena.peak(), self.arena.used());
-        println!("{RUNS} commands from the heap:  heap +{from_heap} bytes ({} per command)", from_heap / RUNS);
-        println!("{RUNS} commands from the arena: heap +{from_arena} bytes; arena peak {peak} bytes, {left} in use");
+        let (peak, in_use) = (self.arena.peak(), self.arena.used());
+        println!("{RUNS} commands from the heap:  {from_heap} heap allocations, heap {left:+} bytes afterwards");
+        println!("{RUNS} commands from the arena: {from_arena} heap allocations; arena peak {peak} bytes, {in_use} in use");
         if self.unknown != 0 {
             // Whatever was typed before `test` didn't arrive as it was typed.
             println!("FAIL: {} unknown command(s) before the test", self.unknown);
-        } else if from_heap == 0 {
-            println!("FAIL: commands run from the heap allocated nothing");
+        } else if from_heap < 3 * RUNS {
+            println!("FAIL: commands run from the heap made {from_heap} allocations, fewer than three each");
+        } else if left != 0 {
+            println!("FAIL: commands run from the heap left {left} bytes allocated");
         } else if from_arena != 0 {
-            println!("FAIL: commands run from the arena took {from_arena} bytes of heap");
-        } else if left != 0 || peak == 0 || peak >= self.arena.capacity() {
-            println!("FAIL: the arena has {left} bytes in use after a reset, and peaked at {peak}");
+            println!("FAIL: commands run from the arena made {from_arena} heap allocations");
+        } else if in_use != 0 || peak == 0 || peak >= self.arena.capacity() {
+            println!("FAIL: the arena has {in_use} bytes in use after a reset, and peaked at {peak}");
+        } else if let Err(e) = heap::with(|fit| fit.check()) {
+            println!("FAIL: the heap is inconsistent: {e}");
         } else {
             println!(
-                "PASS: {RUNS} commands cost {from_heap} bytes of heap, or none from an arena that peaked at {peak}"
+                "PASS: {RUNS} commands made {from_heap} heap allocations and freed them all, or none from an arena \
+                 that peaked at {peak}"
             );
         }
     }
@@ -259,7 +274,13 @@ fn execute<A: Allocator + Copy>(text: &str, memory: A, shell: &Shell) -> Next {
         ["mem"] => {
             let arena = &shell.arena;
             let _ = writeln!(out, "commands run: {}, now from the {}", shell.commands, shell.source.name());
-            let _ = writeln!(out, "heap:  {:8} of {} bytes used", heap::used(), heap::capacity());
+            let (free_blocks, largest) = heap::with(|fit| (fit.free_list().count(), fit.largest_free()));
+            let _ = writeln!(
+                out,
+                "heap:  {:8} of {} bytes used; {free_blocks} free blocks, the largest {largest} bytes",
+                heap::used(),
+                heap::capacity()
+            );
             writeln!(
                 out,
                 "arena: {:8} of {} bytes used, peak {}",
@@ -267,6 +288,23 @@ fn execute<A: Allocator + Copy>(text: &str, memory: A, shell: &Shell) -> Next {
                 arena.capacity(),
                 arena.peak()
             )
+        }
+        ["heap"] => {
+            // The walk can't write to `out` as it goes: `out` may be on the heap, and the
+            // heap can't be used while it is being walked. Copy the blocks out first.
+            let mut blocks = [None; HEAP_BLOCKS];
+            let total = heap::with(|fit| {
+                fit.blocks().zip(&mut blocks).for_each(|(block, slot)| *slot = Some(block));
+                fit.blocks().count()
+            });
+            for block in blocks.iter().flatten() {
+                let state = if block.used { "allocated" } else { "free" };
+                let _ = writeln!(out, "{:#010x} {:8} bytes {state}", block.start, block.size);
+            }
+            if total > HEAP_BLOCKS {
+                let _ = writeln!(out, "and {} more blocks", total - HEAP_BLOCKS);
+            }
+            Ok(())
         }
         ["map"] => {
             for s in memory::sections() {
@@ -297,9 +335,10 @@ const HELP: &str = "\
 help               this text
 echo <words>       print the words
 mem                how much of the heap and the arena is in use
+heap               the heap, block by block
 map                where the kernel's sections are
 use heap|arena     where the next commands get their memory
 repeat <n> <cmd>   run a command n times, without its output
-test               check that the arena frees what the heap can't
+test               check that commands free what they allocate, either way
 halt               stop
 ";

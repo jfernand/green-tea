@@ -22,11 +22,12 @@ kernels built on the same context switch:
 | [`green-tea-v2`](green-tea-v2) | The same ideas split into layers: `arch` (save/restore registers, prime a stack) → `Task` (an asymmetric coroutine that switches back to whoever resumed it) → `run`/`spawn` (a round-robin scheduler on a thread-local run queue). No `static mut`. Runs on x86_64, aarch64 (including Apple Silicon) and riscv64. |
 | [`green-tea-arch`](green-tea-arch) | The `arch` layer on its own: `Context` and `swap_context` for each architecture. `no_std`, so v2 and the kernels share it. |
 | [`green-tea-pool`](green-tea-pool) | Pools of fixed-size blocks, two ways: a bitmap and an intrusive free list. `no_std`; the kernels' task stacks come from one. |
+| [`green-tea-fit`](green-tea-fit) | An allocator for blocks of any size: a free list searched first-fit, next-fit or best-fit, with boundary tags to merge freed neighbours. `no_std`; the kernels' heap is one. |
 | [`drivers/`](drivers) | The device drivers, one crate each, which know their device but not the machine: serial ports (16550, PL011), QEMU's fw_cfg and ramfb, PCI through ECAM, virtio (MMIO and PCI transports, split virtqueues) and virtio-blk. |
 | [`green-tea-bare`](green-tea-bare) | What the kernels share: boot code per board behind the `Platform` and `TimerInterrupt` traits (timers, interrupts, paging, and where each device is), a port of v2's `Task` and scheduler, and a heap. |
 | [`green-tea-coop`](green-tea-coop) | A bare-metal kernel for QEMU on riscv64, aarch64 and x86_64 whose tasks yield to each other, so you can watch the context switches on screen. |
 | [`green-tea-preempt`](green-tea-preempt) | The same, but the tasks never yield: a timer interrupt preempts them. One task sleeps instead, and costs no time slices. |
-| [`green-tea-shell`](green-tea-shell) | A kernel with a small shell on the serial console. Each command allocates its working memory from the heap, which never frees, or from an arena that is reset after every command. |
+| [`green-tea-shell`](green-tea-shell) | A kernel with a small shell on the serial console. Each command allocates its working memory from the heap, block by block, or from an arena that is reset after every command. |
 | [`xtask`](xtask) | `cargo xtask test` runs v2 across targets under qemu; `cargo xtask kernel` boots the kernels everywhere they run; `cargo xtask shell` boots the shell on your terminal. |
 
 Each version has two demos: `coop-2-*` drives two tasks with a hand-written loop, and
@@ -181,16 +182,17 @@ millisecond at a time. Type at it with `cargo xtask shell`; `help` lists the com
 
 Every command allocates its working memory (a copy of the line, the words it splits into,
 the text it prints) and is done with it when it returns. `use heap` takes that memory from
-the global heap, a bump allocator that never frees: each `echo` of nine words costs 616
-bytes for good, and after about 6,700 of them the kernel panics. `use arena` takes it from
-an [arena](green-tea-bare/src/arena.rs), a bump allocator over a block of its own that is
-reset after every command, so the shell can run indefinitely. The arena is an `Allocator`,
+the global heap: eight allocations for an `echo` of nine words, each found by a search and
+freed on its own. `use arena` takes it from an [arena](green-tea-bare/src/arena.rs), a bump
+allocator over a block of its own that is reset after every command. `heap` prints the
+heap block by block. The arena is an `Allocator`,
 and `reset` takes `&mut self`, so the borrow checker refuses a reset while anything
 allocated from the arena is still alive.
 
 `--kernel shell` types two commands at the shell, through a file that QEMU feeds to the
-serial port. The second is `test`, which runs 1,000 commands each way and checks that the
-heap grew in one case and not at all in the other. (The script starts with an empty line,
+serial port. The second is `test`, which runs 1,000 commands each way and checks that
+commands run from the heap free everything they allocate, and that commands run from the
+arena don't touch the heap. (The script starts with an empty line,
 because on riscv64 the first byte typed before the kernel is up doesn't arrive.)
 
 ## Testing
