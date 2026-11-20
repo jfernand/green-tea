@@ -8,12 +8,18 @@
 //! Every operation runs with interrupts off, so that a timer interrupt can't switch to
 //! another task half way through one (green-tea-preempt). There is one hart, so that is
 //! the only way two tasks could be in the allocator at once.
+//!
+//! The heap can record what is asked of it: [`record`] takes a buffer, and from then on
+//! every allocation and every free is written to it as a green-tea-fit trace event, until
+//! [`stop_recording`] hands the buffer back.
 
 use crate::global::Global;
 use crate::platform::{Board, TimerInterrupt};
 use core::alloc::{GlobalAlloc, Layout};
 use core::cell::UnsafeCell;
+use alloc::boxed::Box;
 use core::ptr;
+use green_tea_fit::trace::Event;
 use green_tea_fit::{Fit, Order, Policy};
 
 unsafe extern "C" {
@@ -37,13 +43,30 @@ pub fn align_up(addr: usize, align: usize) -> Option<usize> {
 
 struct Heap {
     fit: UnsafeCell<Option<Fit>>, // None until the first use
+    recording: UnsafeCell<Option<Recording>>,
 }
 
-// SAFETY: one hart, and `with` keeps interrupts off while anything touches `fit`.
+/// A trace being recorded: the buffer, how many events are in it, and how many didn't fit.
+pub struct Recording {
+    pub events: Box<[Event]>,
+    pub len: usize,
+    pub dropped: usize,
+}
+
+impl Recording {
+    fn push(&mut self, event: Event) {
+        match self.events.get_mut(self.len) {
+            Some(slot) => (*slot, self.len) = (event, self.len + 1),
+            None => self.dropped += 1,
+        }
+    }
+}
+
+// SAFETY: one hart, and `locked` keeps interrupts off while anything touches either field.
 unsafe impl Sync for Heap {}
 
 #[global_allocator]
-static HEAP: Heap = Heap { fit: UnsafeCell::new(None) };
+static HEAP: Heap = Heap { fit: UnsafeCell::new(None), recording: UnsafeCell::new(None) };
 
 /// Set while `with` is running: the heap can't be used from inside itself.
 static BUSY: Global<bool> = Global::new(false);
@@ -51,6 +74,21 @@ static BUSY: Global<bool> = Global::new(false);
 /// Run `f` on the heap's allocator, with interrupts off. `f` must not allocate or free:
 /// that would be a second use of the allocator inside the first, and panics.
 pub fn with<R>(f: impl FnOnce(&mut Fit) -> R) -> R {
+    locked(|fit, _| f(fit))
+}
+
+/// Record every allocation and free into `events`, from the next one on, until
+/// [`stop_recording`]. Returns the recording this one replaces, if there was one.
+pub fn record(events: Box<[Event]>) -> Option<Recording> {
+    locked(|_, recording| recording.replace(Recording { events, len: 0, dropped: 0 }))
+}
+
+/// Stop recording, and return what was recorded.
+pub fn stop_recording() -> Option<Recording> {
+    locked(|_, recording| recording.take())
+}
+
+fn locked<R>(f: impl FnOnce(&mut Fit, &mut Option<Recording>) -> R) -> R {
     Board::without_interrupts(|| {
         assert!(!BUSY.replace(true), "the heap was used from inside heap::with");
         // SAFETY: interrupts are off and BUSY was clear, so this is the only reference.
@@ -60,7 +98,8 @@ pub fn with<R>(f: impl FnOnce(&mut Fit) -> R) -> R {
             // SAFETY: linker.ld reserves the region for the heap, and nothing else uses it.
             unsafe { Fit::new(start, end - start, POLICY, ORDER) }
         });
-        let result = f(fit);
+        // SAFETY: as for `fit`.
+        let result = f(fit, unsafe { &mut *HEAP.recording.get() });
         BUSY.set(false);
         result
     })
@@ -79,12 +118,25 @@ pub fn capacity() -> usize {
 unsafe impl GlobalAlloc for Heap {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         // Null if nothing fits: the alloc crate turns that into an allocation-error panic.
-        with(|fit| fit.allocate(layout.size(), layout.align())).map_or(ptr::null_mut(), |addr| addr as *mut u8)
+        let allocated = locked(|fit, recording| {
+            let addr = fit.allocate(layout.size(), layout.align())?;
+            if let Some(recording) = recording {
+                recording.push(Event::allocate(addr, layout.size(), layout.align()));
+            }
+            Some(addr)
+        });
+        allocated.map_or(ptr::null_mut(), |addr| addr as *mut u8)
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
         // SAFETY: the caller's promise is ours to the allocator.
-        if let Err(e) = with(|fit| unsafe { fit.free(ptr as usize) }) {
+        let freed = locked(|fit, recording| {
+            if let Some(recording) = recording {
+                recording.push(Event::free(ptr as usize));
+            }
+            unsafe { fit.free(ptr as usize) }
+        });
+        if let Err(e) = freed {
             panic!("free of {ptr:p}: {e:?}");
         }
     }
