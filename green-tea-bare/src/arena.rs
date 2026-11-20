@@ -10,7 +10,7 @@
 //! the bump is a plain load and store.
 
 use crate::heap::align_up;
-use alloc::alloc::{Layout, alloc, handle_alloc_error};
+use alloc::alloc::{Layout, alloc, dealloc, handle_alloc_error};
 use core::alloc::{AllocError, Allocator};
 use core::cell::Cell;
 use core::ptr::{self, NonNull};
@@ -25,8 +25,8 @@ pub struct Arena {
 }
 
 impl Arena {
-    /// An arena of `capacity` bytes, taken from the global heap. green-tea's heap never
-    /// frees, so the block is the arena's for good.
+    /// An arena of `capacity` bytes, taken from the global heap, and given back when the
+    /// arena is dropped.
     ///
     /// # Panics
     /// If the heap doesn't have `capacity` bytes left.
@@ -72,6 +72,13 @@ impl Arena {
     /// Whether the block at `ptr`, of `size` bytes, is the last one handed out.
     fn is_last(&self, ptr: NonNull<u8>, size: usize) -> bool {
         ptr.as_ptr() as usize + size == self.next.get()
+    }
+}
+
+impl Drop for Arena {
+    fn drop(&mut self) {
+        // SAFETY: `new` allocated the block with this layout.
+        unsafe { dealloc(self.start as *mut u8, Layout::from_size_align_unchecked(self.capacity(), 16)) };
     }
 }
 
