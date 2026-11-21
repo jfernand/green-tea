@@ -332,11 +332,10 @@ green_tea_trap_entry:
     .section .bss.fault_stack, "aw", @nobits
     .balign 16
 green_tea_fault_stacks:
-    .skip 8 * 16384             # one for each of cpus::MAX
-"#
+    .skip {fault_stacks}        # one for each of cpus::MAX
+"#,
+    fault_stacks = const crate::cpus::MAX * 16384,
 );
-
-const _: () = assert!(crate::cpus::MAX == 8); // the fault stacks above
 
 unsafe extern "C" {
     fn green_tea_trap_entry();

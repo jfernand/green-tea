@@ -117,6 +117,25 @@ impl<M: Memory> Acpi<M> {
         count
     }
 
+    /// The local APICs' address: the MADT's, or the 64-bit override entry if it has one.
+    pub fn lapic_address(&self) -> Option<u64> {
+        const OVERRIDE: u8 = 5;
+        let mut buf = [0u8; MAX_TABLE];
+        let madt = self.table(self.find(b"APIC")?, &mut buf)?;
+        let mut address = u64::from(u32_at(madt, HEADER)?);
+        let mut at = HEADER + 8;
+        while let (Some(&kind), Some(&len)) = (madt.get(at), madt.get(at + 1)) {
+            if len < 2 {
+                break;
+            }
+            if kind == OVERRIDE {
+                address = u64_at(madt, at + 4)?;
+            }
+            at += len as usize;
+        }
+        Some(address)
+    }
+
     /// The HPET's address.
     pub fn hpet(&self) -> Option<u64> {
         let mut buf = [0u8; MAX_TABLE];
@@ -249,6 +268,26 @@ mod tests {
         let acpi = Acpi::new(&fake, &rsdp_v2(0x1000)).unwrap();
         assert_eq!(acpi.hpet(), Some(0xfed0_0000));
         assert_eq!(acpi.pm_timer_port(), Some(0x608));
+    }
+
+    #[test]
+    fn the_lapic_address_is_the_madts() {
+        let mut body = std::vec![0u8; 8];
+        body[..4].copy_from_slice(&0xfee0_1000u32.to_le_bytes());
+        body.extend(lapic(0, 1));
+        let fake = with(&[(0x2000, table(b"APIC", &body))]);
+        assert_eq!(Acpi::new(&fake, &rsdp_v2(0x1000)).unwrap().lapic_address(), Some(0xfee0_1000));
+    }
+
+    #[test]
+    fn an_override_entry_replaces_the_lapic_address() {
+        let mut body = std::vec![0u8; 8];
+        body[..4].copy_from_slice(&0xfee0_0000u32.to_le_bytes());
+        body.extend(lapic(0, 1));
+        body.extend([5, 12, 0, 0]);
+        body.extend(0x1_fee0_0000u64.to_le_bytes());
+        let fake = with(&[(0x2000, table(b"APIC", &body))]);
+        assert_eq!(Acpi::new(&fake, &rsdp_v2(0x1000)).unwrap().lapic_address(), Some(0x1_fee0_0000));
     }
 
     #[test]

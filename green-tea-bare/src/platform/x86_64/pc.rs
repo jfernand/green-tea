@@ -13,7 +13,7 @@
 //! serial port is how the tests read the result. Input comes from either, and from a PS/2
 //! keyboard. It also runs in QEMU with UEFI firmware: `cargo xtask kernel --board pc`.
 
-use super::{apic_id, enable_x2apic_if_available, paging, traps, wake_cpu};
+use super::{apic_id, enable_x2apic_if_available, paging, set_lapic_base, traps, wake_cpu};
 use crate::cpus::MAX;
 use crate::platform::Platform;
 use crate::{Framebuffer, pages};
@@ -227,6 +227,9 @@ impl Platform for Pc {
 
         let acpi = info.rsdp().and_then(|rsdp| Acpi::new(Identity4G, rsdp));
         TSC_PER_MS.store(measure_tsc(acpi.as_ref()), Ordering::Relaxed);
+        if let Some(address) = acpi.as_ref().and_then(|a| a.lapic_address()) {
+            set_lapic_base(address);
+        }
         enable_x2apic_if_available();
         init_cpus(acpi.as_ref());
 

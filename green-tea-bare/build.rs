@@ -9,6 +9,13 @@ use std::{env, fs, path::PathBuf};
 
 fn main() {
     println!("cargo::rerun-if-changed=linker.ld");
+    println!("cargo::rerun-if-env-changed=GREEN_TEA_MAX_CPUS");
+    let max_cpus = env::var("GREEN_TEA_MAX_CPUS").unwrap_or_else(|_| "8".into());
+    match max_cpus.parse::<usize>() {
+        Ok(1..=256) if max_cpus.bytes().all(|b| b.is_ascii_digit()) => {}
+        _ => panic!("GREEN_TEA_MAX_CPUS must be a number from 1 to 256, not {max_cpus:?}"),
+    }
+    println!("cargo::rustc-env=GREEN_TEA_MAX_CPUS={max_cpus}");
     if env::var("CARGO_CFG_TARGET_OS").unwrap() != "none" {
         return; // not a bare-metal target: nothing will link
     }

@@ -17,8 +17,19 @@ use alloc::vec;
 use core::hint::spin_loop;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-/// The most CPUs `start_all` will start, the boot CPU included.
-pub const MAX: usize = 8;
+/// The most CPUs `start_all` will start, the boot CPU included: 8, unless the build sets
+/// `GREEN_TEA_MAX_CPUS` (1 to 256, checked by build.rs). Each costs a fault stack in .bss.
+pub const MAX: usize = parse(env!("GREEN_TEA_MAX_CPUS"));
+
+const fn parse(digits: &str) -> usize {
+    let digits = digits.as_bytes();
+    let (mut value, mut i) = (0, 0);
+    while i < digits.len() {
+        value = value * 10 + (digits[i] - b'0') as usize;
+        i += 1;
+    }
+    value
+}
 
 /// A started CPU's stack. It has no guard page.
 const STACK: usize = 64 * 1024;

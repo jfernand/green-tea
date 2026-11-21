@@ -35,7 +35,7 @@ use crate::Global;
 use crate::{pages, stack};
 use core::arch::{asm, global_asm};
 use core::ptr::{read_volatile, write_volatile};
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use green_tea_io::port::outb;
 
 #[cfg(feature = "board-pc")]
@@ -541,10 +541,16 @@ fn wake_cpu(apic_id: u32, stack_top: usize) {
     lapic_write(LAPIC_SPURIOUS, APIC_ENABLE | SPURIOUS_VECTOR as u32);
     send_ipi(apic_id, INIT);
     crate::delay_ms(10);
-    send_ipi(apic_id, STARTUP | (AP_TRAMPOLINE >> 12) as u32); // the page to start at
+    // Twice, as Intel's startup sequence says: a CPU that took the first ignores the second.
+    let startup = STARTUP | (AP_TRAMPOLINE >> 12) as u32; // the page to start at
+    send_ipi(apic_id, startup);
+    crate::delay_ms(1);
+    send_ipi(apic_id, startup);
 }
 
-const LAPIC: usize = 0xfee0_0000;
+/// Where the local APIC's registers are in xAPIC mode: this, unless the firmware says
+/// otherwise (`set_lapic_base`).
+static LAPIC: AtomicUsize = AtomicUsize::new(0xfee0_0000);
 const LAPIC_ID: usize = 0x20;
 const LAPIC_EOI: usize = 0xb0;
 const LAPIC_ICR_LOW: usize = 0x300; // the interrupt command register: writing it sends
@@ -611,14 +617,21 @@ fn lapic_read(register: usize) -> u32 {
     if X2APIC.load(Ordering::Relaxed) {
         return rdmsr(X2APIC_MSRS + (register >> 4) as u32) as u32;
     }
-    unsafe { read_volatile((LAPIC + register) as *const u32) }
+    unsafe { read_volatile((LAPIC.load(Ordering::Relaxed) + register) as *const u32) }
 }
 
 fn lapic_write(register: usize, value: u32) {
     if X2APIC.load(Ordering::Relaxed) {
         return wrmsr(X2APIC_MSRS + (register >> 4) as u32, u64::from(value));
     }
-    unsafe { write_volatile((LAPIC + register) as *mut u32, value) }
+    unsafe { write_volatile((LAPIC.load(Ordering::Relaxed) + register) as *mut u32, value) }
+}
+
+/// Use the address ACPI gives for the local APICs. It must be in the 4 GiB `_start` maps.
+#[cfg_attr(not(feature = "board-pc"), allow(dead_code))]
+fn set_lapic_base(address: u64) {
+    assert!(address < 1 << 32, "the local APIC is at {address:#x}, above 4 GiB");
+    LAPIC.store(address as usize, Ordering::Relaxed);
 }
 
 /// This CPU's local APIC id.
@@ -632,6 +645,10 @@ fn send_ipi(apic_id: u32, command: u32) {
     if X2APIC.load(Ordering::Relaxed) {
         wrmsr(X2APIC_ICR, u64::from(apic_id) << 32 | u64::from(command));
     } else {
+        const SEND_PENDING: u32 = 1 << 12;
+        while lapic_read(LAPIC_ICR_LOW) & SEND_PENDING != 0 {
+            core::hint::spin_loop();
+        }
         lapic_write(LAPIC_ICR_HIGH, apic_id << 24);
         lapic_write(LAPIC_ICR_LOW, command);
     }
