@@ -112,6 +112,7 @@ dependencies = [
  "green-tea-pl011",
  "green-tea-pool",
  "green-tea-ramfb",
+ "green-tea-smp",
  "green-tea-virtio",
  "green-tea-virtio-blk",
 ]
@@ -176,6 +177,13 @@ name = "green-tea-shell"
 version = "0.1.0"
 dependencies = [
  "green-tea-bare",
+]
+
+[[package]]
+name = "green-tea-smp"
+version = "0.1.0"
+dependencies = [
+ "green-tea-fit",
 ]
 
 [[package]]

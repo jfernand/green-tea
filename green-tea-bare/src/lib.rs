@@ -21,7 +21,10 @@
 //!
 //! Memory is identity-mapped: aarch64 runs with the MMU off, and riscv64 and x86_64 with
 //! an identity map that leaves out the task stacks' guard pages.
-//! There is one CPU.
+//!
+//! Everything runs on the CPU that booted, unless a kernel starts the others ([`cpus`]).
+//! Then the heap is safe to use from all of them, and nothing else is: tasks, the
+//! scheduler, the console and every [`Global`] belong to the boot CPU.
 
 #![no_std]
 
@@ -29,6 +32,7 @@ extern crate alloc;
 
 pub mod arena;
 pub mod console;
+pub mod cpus;
 mod global;
 pub mod heap;
 pub mod memory;
@@ -41,7 +45,7 @@ pub mod task;
 pub use global::Global;
 pub use {
     green_tea_fit as fit, green_tea_fw_cfg as fw_cfg, green_tea_pci as pci, green_tea_pool as pool, green_tea_ramfb as ramfb,
-    green_tea_virtio as virtio, green_tea_virtio_blk as virtio_blk,
+    green_tea_smp as smp, green_tea_virtio as virtio, green_tea_virtio_blk as virtio_blk,
 };
 pub use platform::{Board, Platform, TimerInterrupt};
 

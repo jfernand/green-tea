@@ -7,6 +7,13 @@
 //! floating point, and neither swap_context nor the interrupt entry has float registers to
 //! save.
 //!
+//! Other CPUs: with `-smp 4` the machine has four, and the firmware leaves all but the
+//! first waiting. `start_cpu` wakes one with two messages from the local APIC, INIT and
+//! STARTUP. A woken CPU begins in 16-bit real mode, at an address below 1 MiB that the
+//! STARTUP message names, so `start_cpu` first copies a few instructions there
+//! (`ap_trampoline`) that bring the CPU to 32-bit mode and jump to `ap_start32`, which
+//! repeats what `_start` does. A CPU's number is its local APIC's id.
+//!
 //! Interrupts: `init` loads an IDT (and the GDT and TSS it needs), and masks the legacy
 //! PIC. The timer interrupt comes from the local APIC's timer, in one-shot mode; it counts
 //! at its own rate, which `init_timer` measures against the HPET that `ticks` reads.
@@ -107,6 +114,72 @@ boot_start64:
 3:  hlt
     jmp 3b
 
+    # A CPU woken by `start_cpu` arrives here from `ap_trampoline`, in 32-bit protected
+    # mode with paging off, as `_start` was entered. The page tables are already built.
+    .code32
+ap_start32:
+    mov $0x10, %ax
+    mov %ax, %ds
+    mov %ax, %es
+    mov %ax, %ss
+    mov %cr4, %eax
+    or $(1 << 5), %eax          # PAE
+    mov %eax, %cr4
+    mov $boot_pml4, %eax
+    mov %eax, %cr3
+    mov $0xC0000080, %ecx       # EFER
+    rdmsr
+    or $(1 << 8), %eax          # LME
+    wrmsr
+    mov %cr0, %eax
+    or $0x80000001, %eax        # PG | PE
+    mov %eax, %cr0
+    lgdt boot_gdt_ptr
+    ljmp $0x08, $ap_start64
+
+    .code64
+ap_start64:
+    mov $0x10, %ax
+    mov %ax, %ds
+    mov %ax, %es
+    mov %ax, %ss
+    xor %ax, %ax
+    mov %ax, %fs
+    mov %ax, %gs
+    mov green_tea_ap_stack, %rsp
+    call green_tea_secondary    # doesn't return
+4:  hlt
+    jmp 4b
+
+    # What `start_cpu` copies to 0x8000, where a woken CPU starts, in real mode: load a GDT
+    # with a 32-bit code segment, turn on protected mode, and jump out of the copy. The
+    # code runs at 0x8000 and not where it is linked, so its addresses are worked out here.
+    .section .rodata.ap_trampoline, "a"
+    .code16
+    .globl ap_trampoline
+    .globl ap_trampoline_end
+ap_trampoline:
+    cli
+    cld
+    xor %ax, %ax
+    mov %ax, %ds
+    lgdtl 0x8000 + (ap_gdt_ptr - ap_trampoline)
+    mov %cr0, %eax
+    or $1, %eax                 # PE
+    mov %eax, %cr0
+    ljmpl $0x08, $ap_start32
+    .balign 8
+ap_gdt:
+    .quad 0
+    .quad 0x00cf9a000000ffff    # 0x08: 32-bit code
+    .quad 0x00cf92000000ffff    # 0x10: data
+ap_gdt_end:
+ap_gdt_ptr:
+    .word ap_gdt_end - ap_gdt - 1
+    .long 0x8000 + (ap_gdt - ap_trampoline)
+ap_trampoline_end:
+    .code64
+
     .section .rodata.boot_gdt, "a"
     .balign 8
 boot_gdt:
@@ -127,6 +200,28 @@ boot_pds:  .skip 4 * 4096
 "#,
     options(att_syntax)
 );
+
+unsafe extern "C" {
+    static ap_trampoline: u8;
+    static ap_trampoline_end: u8;
+}
+
+/// Where the trampoline is copied: a page of ordinary memory below 1 MiB that nothing
+/// else of ours uses.
+const AP_TRAMPOLINE: usize = 0x8000;
+
+/// The top of the stack of the CPU being started, which `ap_start64` loads. One CPU is
+/// started at a time.
+#[unsafe(no_mangle)]
+static mut green_tea_ap_stack: u64 = 0;
+
+/// A started CPU's first Rust: the interrupt tables of the boot CPU, then the code every
+/// CPU shares.
+#[unsafe(no_mangle)]
+extern "C" fn green_tea_secondary() -> ! {
+    traps::join();
+    crate::cpus::enter(Q35::cpu())
+}
 
 const HPET: usize = 0xfed0_0000;
 const HPET_CAPABILITIES: *const u64 = HPET as *const u64;
@@ -169,6 +264,41 @@ impl Platform for Q35 {
         loop {
             unsafe { asm!("hlt") };
         }
+    }
+
+    /// The local APIC's id: each CPU reads its own APIC at the same address.
+    fn cpu() -> usize {
+        (lapic_read(LAPIC_ID) >> 24) as usize
+    }
+
+    /// INIT, then STARTUP, sent to the CPU's local APIC from ours. Neither message is
+    /// answered, so whether the CPU exists has to come from elsewhere: fw_cfg's item 5 is
+    /// the number of CPUs QEMU was started with.
+    fn start_cpu(cpu: usize, stack_top: usize) -> Result<(), &'static str> {
+        use green_tea_fw_cfg::FwCfgPort;
+        IoPorts.select(0x05);
+        let cpus = u16::from_le_bytes([IoPorts.read_u8(), IoPorts.read_u8()]) as usize;
+        if cpu >= cpus {
+            return Err("no such CPU");
+        }
+        const APIC_ENABLE: u32 = 1 << 8;
+        const INIT: u32 = 0x4500;
+        const STARTUP: u32 = 0x4600;
+        // SAFETY: the page at 0x8000 is free memory, mapped by `_start`; the previous CPU
+        // started has left the trampoline and loaded its stack, since `cpus::start_all`
+        // waits for each CPU before it starts the next.
+        unsafe {
+            let (start, end) = (&raw const ap_trampoline, &raw const ap_trampoline_end);
+            core::ptr::copy_nonoverlapping(start, AP_TRAMPOLINE as *mut u8, end as usize - start as usize);
+            green_tea_ap_stack = stack_top as u64;
+        }
+        lapic_write(LAPIC_SPURIOUS, APIC_ENABLE | SPURIOUS_VECTOR as u32);
+        lapic_write(LAPIC_ICR_HIGH, (cpu as u32) << 24);
+        lapic_write(LAPIC_ICR_LOW, INIT);
+        crate::delay_ms(10);
+        lapic_write(LAPIC_ICR_HIGH, (cpu as u32) << 24);
+        lapic_write(LAPIC_ICR_LOW, STARTUP | (AP_TRAMPOLINE >> 12) as u32); // the page to start at
+        Ok(())
     }
 
     type FwCfg = IoPorts;
@@ -354,6 +484,24 @@ mod traps {
         base: u64,
     }
 
+    /// Load the tables `init` built into a CPU started after the boot CPU. The TSS is
+    /// shared, and with it the one fault stack: a fault on any CPU panics the kernel.
+    pub fn join() {
+        // SAFETY: `init` finished before any other CPU was started, and CPUs are started
+        // one at a time.
+        unsafe {
+            let (gdt, idt) = (&raw mut GDT, &raw const IDT);
+            let pointer = Pointer { limit: size_of::<[u64; 5]>() as u16 - 1, base: gdt as u64 };
+            asm!("lgdt [{}]", in(reg) &raw const pointer, options(readonly, nostack));
+            // Loading a TSS marks its descriptor busy, and loading a busy one faults.
+            const BUSY: u64 = 1 << 41;
+            (*gdt)[3] &= !BUSY;
+            asm!("ltr {:x}", in(reg) TSS_SELECTOR, options(nostack));
+            let pointer = Pointer { limit: size_of::<[Gate; 256]>() as u16 - 1, base: idt as u64 };
+            asm!("lidt [{}]", in(reg) &raw const pointer, options(readonly, nostack));
+        }
+    }
+
     pub fn init() {
         // Only ever touched here, with interrupts off: no other references exist.
         unsafe {
@@ -412,7 +560,10 @@ extern "C" fn green_tea_fault(frame: &ExceptionFrame) -> ! {
 // ---- The local APIC timer --------------------------------------------------------------
 
 const LAPIC: usize = 0xfee0_0000;
+const LAPIC_ID: usize = 0x20;
 const LAPIC_EOI: usize = 0xb0;
+const LAPIC_ICR_LOW: usize = 0x300; // the interrupt command register: writing it sends
+const LAPIC_ICR_HIGH: usize = 0x310; // the message, to the APIC whose id is here
 const LAPIC_SPURIOUS: usize = 0xf0;
 const LAPIC_LVT_TIMER: usize = 0x320;
 const LAPIC_INITIAL_COUNT: usize = 0x380;

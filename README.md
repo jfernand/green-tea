@@ -23,6 +23,7 @@ kernels built on the same context switch:
 | [`green-tea-arch`](green-tea-arch) | The `arch` layer on its own: `Context` and `swap_context` for each architecture. `no_std`, so v2 and the kernels share it. |
 | [`green-tea-pool`](green-tea-pool) | Pools of fixed-size blocks, two ways: a bitmap and an intrusive free list. `no_std`; the kernels' task stacks come from one. |
 | [`green-tea-fit`](green-tea-fit) | An allocator for blocks of any size: a free list searched first-fit, next-fit or best-fit, with boundary tags to merge freed neighbours. `no_std`; the kernels' heap is one. Also replays recorded traces of allocations against each policy, and measures the fragmentation. |
+| [`green-tea-smp`](green-tea-smp) | Allocating from several CPUs: a spin lock, and a cache of free blocks for each CPU in front of a heap behind the lock. `no_std`; its tests run on the host with real threads. |
 | [`drivers/`](drivers) | The device drivers, one crate each, which know their device but not the machine: serial ports (16550, PL011), QEMU's fw_cfg and ramfb, PCI through ECAM, virtio (MMIO and PCI transports, split virtqueues) and virtio-blk. |
 | [`green-tea-bare`](green-tea-bare) | What the kernels share: boot code per board behind the `Platform` and `TimerInterrupt` traits (timers, interrupts, paging, and where each device is), a port of v2's `Task` and scheduler, and a heap. |
 | [`green-tea-coop`](green-tea-coop) | A bare-metal kernel for QEMU on riscv64, aarch64 and x86_64 whose tasks yield to each other, so you can watch the context switches on screen. |
@@ -68,6 +69,7 @@ cargo xtask kernel --kernel memmap    # where the linker put each section
 cargo xtask kernel --kernel pool      # two pools compared, and a thousand tasks on one stack
 cargo xtask kernel --kernel fit       # the heap's allocator: merging, three ways to search, a thousand tasks
 cargo xtask kernel --kernel frag      # fragmentation: an adversary, and a random workload
+cargo xtask kernel --kernel smp       # four CPUs: the heap behind a lock, then a cache for each CPU
 cargo xtask kernel --kernel shell     # the shell's test, typed at its serial console
 cargo xtask kernel --kernel trace     # the shell records its heap, and replays the trace against each policy
 cargo xtask shell                     # the shell, on this terminal (--target to pick a board)
@@ -214,6 +216,32 @@ free. `--kernel trace` has the shell record itself running a script of 1,970 com
 that set, read and unset variables, and then replay the trace against all six
 combinations of policy and list order. It replays it twice more: with the same sizes and
 lifetimes dealt out at random, and with the long-lived blocks in a region of their own.
+
+### Several CPUs
+
+Every kernel boots on one CPU, and all but one test stay there. `--kernel smp` is run on a
+machine with four (`-smp 4`), and starts the other three
+([`green-tea-bare/src/cpus.rs`](green-tea-bare/src/cpus.rs)). How is the board's business:
+
+| | riscv64 (`virt`) | aarch64 (`virt`) | x86_64 (`q35`) |
+|---|---|---|---|
+| Start a CPU | SBI HSM `hart_start` | PSCI `CPU_ON`, by `hvc` | INIT and STARTUP from the local APIC, to a real-mode trampoline copied to 0x8000 |
+| Which CPU am I | `tp`, set when the hart starts | `MPIDR_EL1` | the local APIC's id |
+| What a started CPU sets up | FPU, `stvec`, `satp` | FP/SIMD, `VBAR_EL1` | long mode on the boot CPU's page tables, then its GDT, TSS and IDT |
+
+A started CPU gets a stack of 64 KiB from the heap and waits to be handed a function;
+`cpus::run` gives the same one to every CPU and returns when all are done. That is all the
+multiprocessing there is. The scheduler, tasks, the console and every `Global` still belong
+to the boot CPU, and a started CPU runs with interrupts off. What is safe from every CPU is
+the heap: each operation takes a spin lock as well as turning interrupts off.
+
+[`green-tea-smp`](green-tea-smp) has the lock, and a `Cache`: one CPU's free blocks, in
+twelve size classes, filled from and emptied into a `Central` (a heap, and a depot of
+spare batches) eight blocks at a time, so that the lock is taken once per batch. The test
+has four CPUs add to a counter with and without a lock, then make 80,128 allocations and
+frees from the kernel's heap, which takes its lock 80,128 times, and then the same
+through a cache each, which takes the lock behind them 2,680 times. The crate's own tests
+run on the host, with threads: `cargo test -p green-tea-smp`.
 
 ### A shell, and an arena
 

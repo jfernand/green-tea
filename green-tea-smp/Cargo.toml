@@ -1,0 +1,16 @@
+[package]
+name = "green-tea-smp"
+description = "Allocating from several CPUs: a spin lock, a heap behind one, and per-CPU caches of blocks in front of it."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+# no_std, so the bare-metal kernels can use it, and its tests run on the host with real
+# threads: cargo test -p green-tea-smp
+
+[dependencies]
+green-tea-fit = { path = "../green-tea-fit" }

@@ -33,6 +33,7 @@ extern crate alloc;
 
 mod fit;
 mod frag;
+mod smp;
 mod tlsf;
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -54,6 +55,7 @@ extern "C" fn kmain() -> ! {
         b"fit" => fit::test(fb),
         b"frag" => frag::test(fb),
         b"tlsf" => tlsf::test(fb),
+        b"smp" => smp::test(fb),
         other => panic!("unknown test {:?}", core::str::from_utf8(other)),
     }
     println!("halting");

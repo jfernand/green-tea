@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use std::{env, thread};
 
 pub const USAGE: &str = "\
-usage: cargo xtask kernel [--kernel coop|preempt|overflow|disk|memmap|pool|fit|frag|tlsf|shell|trace]...
+usage: cargo xtask kernel [--kernel coop|preempt|overflow|disk|memmap|pool|fit|frag|tlsf|smp|shell|trace]...
                           [--target riscv64|aarch64|x86_64]...
                           [--release] [--headless] [--screenshot]
 
@@ -46,6 +46,10 @@ is echoed here, and the run passes when every kernel reports PASS.
   tlsf      green-tea-coop's test of the allocators that don't search: a buddy system and
             TLSF, which is the kernel's heap, against first fit and best fit on the same
             requests, and on a heap built to make a search long (riscv64, aarch64, x86_64)
+  smp       green-tea-coop's test of allocation from several CPUs: starts the machine's
+            other three, and has all four use the kernel's heap at once, behind its lock,
+            and then a heap with a cache for each CPU in front of it (riscv64, aarch64,
+            x86_64)
   shell     green-tea-shell: types two commands at the shell on the serial console; the
             second is its `test`, which checks that commands free what they allocate,
             from the heap or from an arena
@@ -84,6 +88,7 @@ const KERNELS: &[Kernel] = &[
     Kernel { name: "fit", package: "green-tea-coop", arches: ALL, test: Some("fit"), disk: false, input: None },
     Kernel { name: "frag", package: "green-tea-coop", arches: ALL, test: Some("frag"), disk: false, input: None },
     Kernel { name: "tlsf", package: "green-tea-coop", arches: ALL, test: Some("tlsf"), disk: false, input: None },
+    Kernel { name: "smp", package: "green-tea-coop", arches: ALL, test: Some("smp"), disk: false, input: None },
     Kernel {
         name: "shell",
         package: "green-tea-shell",
@@ -105,6 +110,10 @@ const KERNELS: &[Kernel] = &[
 ];
 
 const ALL: &[&str] = &["riscv64", "aarch64", "x86_64"];
+
+/// The kernels that are given more than one CPU (`-smp`). Every other kernel runs on a
+/// machine with one.
+const SMP_KERNELS: &[(&str, &str)] = &[("smp", "4")];
 
 struct Arch {
     name: &'static str,
@@ -266,7 +275,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 let kernel = KERNELS
                     .iter()
                     .find(|k| k.name == value)
-                    .ok_or_else(|| format!("unknown kernel {value}; known: coop, preempt, overflow, disk, memmap, pool, fit, frag, tlsf, shell, trace"))?;
+                    .ok_or_else(|| format!("unknown kernel {value}; known: coop, preempt, overflow, disk, memmap, pool, fit, frag, tlsf, smp, shell, trace"))?;
                 kernels.push(kernel);
             }
             "-h" | "--help" => return Err(String::new()),
@@ -459,6 +468,9 @@ impl Run {
         if headless {
             cmd.args(["-display", "none"]);
         }
+        if let Some((_, cpus)) = SMP_KERNELS.iter().find(|(name, _)| *name == job.kernel.name) {
+            cmd.args(["-smp", cpus]);
+        }
         if let Some(test) = job.kernel.test {
             cmd.arg("-fw_cfg").arg(format!("name=opt/green-tea/test,string={test}"));
         }
@@ -621,6 +633,9 @@ mod tests {
                 "tlsf-riscv64",
                 "tlsf-aarch64",
                 "tlsf-x86_64",
+                "smp-riscv64",
+                "smp-aarch64",
+                "smp-x86_64",
                 "shell-riscv64",
                 "shell-aarch64",
                 "shell-x86_64",
@@ -633,7 +648,7 @@ mod tests {
 
     #[test]
     fn unsupported_combinations_are_skipped() {
-        assert_eq!(labels(&["--target", "aarch64"]), ["coop-aarch64", "preempt-aarch64", "disk-aarch64", "memmap-aarch64", "pool-aarch64", "fit-aarch64", "frag-aarch64", "tlsf-aarch64", "shell-aarch64", "trace-aarch64"]);
+        assert_eq!(labels(&["--target", "aarch64"]), ["coop-aarch64", "preempt-aarch64", "disk-aarch64", "memmap-aarch64", "pool-aarch64", "fit-aarch64", "frag-aarch64", "tlsf-aarch64", "smp-aarch64", "shell-aarch64", "trace-aarch64"]);
         let args = ["--kernel".to_string(), "overflow".into(), "--target".into(), "aarch64".into()];
         assert!(parse(&args).is_err());
     }

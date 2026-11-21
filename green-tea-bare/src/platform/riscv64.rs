@@ -1,6 +1,11 @@
 //! QEMU `virt`, riscv64. OpenSBI (`-bios default`) jumps to `_start` in S-mode at
 //! 0x80200000 with a0 = hart id, a1 = device tree.
 //!
+//! Other harts: with `-smp 4` the machine has four, and OpenSBI starts the kernel on one
+//! of them (not always hart 0) and keeps the rest stopped. `start_cpu` asks it to start
+//! one, with the SBI HSM extension's `hart_start`. Each hart keeps its CPU number in `tp`,
+//! which compiled code leaves alone on this target.
+//!
 //! Timer interrupts: the timer hardware (the CLINT's mtime/mtimecmp) belongs to M-mode,
 //! so S-mode asks OpenSBI to set a deadline (the SBI TIME extension), and gets a
 //! supervisor timer interrupt when it passes. The trap lands in `trap_entry` below, which
@@ -41,11 +46,47 @@ _start:
     li t0, 1 << 13
     csrs sstatus, t0
 
+    # This hart is CPU 0. Remember which hart it is: the others are started by hart id.
+    mv tp, zero
+    la t0, green_tea_boot_hart
+    sd a0, 0(t0)
+
     call kmain
 3:  wfi
     j 3b
+
+    # Where a hart started by `start_cpu` begins: in S-mode with paging and interrupts
+    # off, a0 = its hart id, and a1 = what `start_cpu` passed, which is the address of a
+    # word just under the top of its stack, holding its CPU number.
+    .globl green_tea_secondary_entry
+green_tea_secondary_entry:
+    mv sp, a1
+    ld tp, 0(sp)
+    li t0, 1 << 13              # the FPU, as above
+    csrs sstatus, t0
+    mv a0, tp
+    call green_tea_secondary    # doesn't return
+4:  wfi
+    j 4b
 "#
 );
+
+/// The hart `_start` ran on.
+#[unsafe(no_mangle)]
+static mut green_tea_boot_hart: usize = 0;
+
+unsafe extern "C" {
+    fn green_tea_secondary_entry();
+}
+
+/// A started hart's first Rust: the trap entry and the page tables of the boot hart, then
+/// the code every CPU shares.
+#[unsafe(no_mangle)]
+extern "C" fn green_tea_secondary(cpu: usize) -> ! {
+    unsafe { asm!("csrw stvec, {}", in(reg) green_tea_trap_entry as *const () as usize) };
+    paging::join();
+    crate::cpus::enter(cpu)
+}
 
 impl Platform for RiscvVirt {
     const NAME: &'static str = "riscv64";
@@ -81,6 +122,39 @@ impl Platform for RiscvVirt {
     fn halt() -> ! {
         loop {
             unsafe { asm!("wfi") };
+        }
+    }
+
+    fn cpu() -> usize {
+        let cpu: usize;
+        unsafe { asm!("mv {}, tp", out(reg) cpu) };
+        cpu
+    }
+
+    /// SBI HSM extension ("HSM"), function 0: `sbi_hart_start(hartid, start_addr, opaque)`.
+    /// CPUs 1, 2, ... are the harts other than the boot hart, in order of hart id.
+    fn start_cpu(cpu: usize, stack_top: usize) -> Result<(), &'static str> {
+        // SAFETY: written once, by `_start`, before any Rust ran.
+        let boot_hart = unsafe { green_tea_boot_hart };
+        let hart = if cpu <= boot_hart { cpu - 1 } else { cpu };
+        let word = stack_top - 16; // keeps the stack 16-byte aligned
+        // SAFETY: the stack is the caller's to give, and nothing runs on it yet.
+        unsafe { (word as *mut usize).write(cpu) };
+        let error: isize;
+        unsafe {
+            asm!(
+                "ecall",
+                inlateout("a0") hart => error,
+                inlateout("a1") green_tea_secondary_entry as *const () as usize => _,
+                in("a2") word,
+                in("a6") 0,
+                in("a7") 0x48_534d,
+            );
+        }
+        match error {
+            0 => Ok(()),
+            -3 => Err("no such hart"), // SBI_ERR_INVALID_PARAM
+            _ => Err("the firmware refused to start the hart"),
         }
     }
 
@@ -326,9 +400,21 @@ mod paging {
                 (*pool).0[(guard - stacks) / stack::PAGE] = 0; // not valid: any access faults
             }
 
-            const SV39: usize = 8 << 60;
-            let satp = SV39 | (&raw const ROOT as usize >> 12);
-            asm!("sfence.vma", "csrw satp, {}", "sfence.vma", in(reg) satp);
+            switch_on();
         }
+    }
+
+    /// Point this hart at the tables. `satp` is a register of each hart's own.
+    unsafe fn switch_on() {
+        const SV39: usize = 8 << 60;
+        let satp = SV39 | (&raw const ROOT as usize >> 12);
+        unsafe { asm!("sfence.vma", "csrw satp, {}", "sfence.vma", in(reg) satp) };
+    }
+
+    /// Turn paging on for a hart started after the boot hart, with the tables `enable` built.
+    pub fn join() {
+        // SAFETY: `enable` finished before any other hart was started, and nothing writes
+        // the tables after it.
+        unsafe { switch_on() };
     }
 }
