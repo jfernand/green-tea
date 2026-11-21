@@ -41,6 +41,31 @@ pub trait Platform {
     /// needs paging; boards without it run with the MMU off, or with a plain identity map.
     const GUARD_PAGES: bool;
 
+    /// Whether the heap's pages start out unmapped, and the fault handler maps each one the
+    /// first time it is touched (see [`crate::pages`]). That needs paging, and a fault
+    /// handler that returns to the code it interrupted.
+    const DEMAND_PAGING: bool = false;
+
+    /// Map or unmap the 4 KiB page of the heap at `page`, and forget any translation of it
+    /// the CPU has cached. Returns whether the page was mapped before. A board without
+    /// `DEMAND_PAGING` has every page mapped, always.
+    fn set_mapped(page: usize, mapped: bool) -> bool {
+        let _ = (page, mapped);
+        true
+    }
+
+    /// Whether the page of the heap at `page` is mapped.
+    fn is_mapped(page: usize) -> bool {
+        let _ = page;
+        true
+    }
+
+    /// The page table's entries for `addr`, root first: see [`crate::pages::walk`].
+    fn walk(addr: usize) -> [Option<crate::pages::Step>; 4] {
+        let _ = addr;
+        [None; 4]
+    }
+
     /// Bring up what the other functions need (e.g. start x86_64's HPET). Call once, first.
     fn init();
 
@@ -57,6 +82,19 @@ pub trait Platform {
 
     /// Stop for good.
     fn halt() -> !;
+
+    /// The number of the CPU running this code: 0 for the one that booted, then 1, 2 and so
+    /// on for each one started with `start_cpu`. A board that can't start another has CPU 0.
+    fn cpu() -> usize {
+        0
+    }
+
+    /// Start CPU `cpu` (1 or more) on the stack whose top is `stack_top`. The new CPU sets
+    /// itself up as `_start` and `init` set up the first, and calls [`crate::cpus::enter`].
+    /// An error if the board has no such CPU, or doesn't know how to start one.
+    fn start_cpu(_cpu: usize, _stack_top: usize) -> Result<(), &'static str> {
+        Err("this board can't start another CPU")
+    }
 
     /// How this board reaches QEMU's fw_cfg device.
     type FwCfg: FwCfgPort;

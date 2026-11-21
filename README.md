@@ -22,7 +22,11 @@ kernels built on the same context switch:
 | [`green-tea-v2`](green-tea-v2) | The same ideas split into layers: `arch` (save/restore registers, prime a stack) → `Task` (an asymmetric coroutine that switches back to whoever resumed it) → `run`/`spawn` (a round-robin scheduler on a thread-local run queue). No `static mut`. Runs on x86_64, aarch64 (including Apple Silicon) and riscv64. |
 | [`green-tea-arch`](green-tea-arch) | The `arch` layer on its own: `Context` and `swap_context` for each architecture. `no_std`, so v2 and the kernels share it. |
 | [`green-tea-pool`](green-tea-pool) | Pools of fixed-size blocks, two ways: a bitmap and an intrusive free list. `no_std`; the kernels' task stacks come from one. |
-| [`green-tea-fit`](green-tea-fit) | An allocator for blocks of any size: a free list searched first-fit, next-fit or best-fit, with boundary tags to merge freed neighbours. `no_std`; the kernels' heap is one. Also replays recorded traces of allocations against each policy, and measures the fragmentation. |
+| [`green-tea-fit`](green-tea-fit) | An allocator for blocks of any size: a free list searched first-fit, next-fit or best-fit, with boundary tags to merge freed neighbours. `no_std`. Also a binary buddy system and TLSF, which is the kernels' heap, and replays recorded traces of allocations against each policy, and measures the fragmentation. |
+| [`green-tea-kmem`](green-tea-kmem) | What a kernel allocates for itself with: page frames from a buddy system that keeps its records in a table, apart from the pages, and slab caches of constructed objects on top. `no_std`; the kernels' task records come from one. |
+| [`green-tea-region`](green-tea-region) | Regions: a bump allocator over chunks taken from the heap, freed all at once. `alloc` returns a reference that lives as long as the borrow of the region, so the borrow checker refuses a use after the region is dropped or reset, and a pointer from a long-lived region into a short-lived one. `no_std`. |
+| [`green-tea-trace`](green-tea-trace) | A command for the host that reads a trace file (`green-tea-fit`'s `tracefile` module: a text form and a binary form) and replays it against each allocator, as the shell's `replay` does in the kernel. `cargo xtask trace` gets such a file out of the kernel, over its serial console. |
+| [`green-tea-smp`](green-tea-smp) | Allocating from several CPUs: a spin lock, and a cache of free blocks for each CPU in front of a heap behind the lock. `no_std`; its tests run on the host with real threads. |
 | [`drivers/`](drivers) | The device drivers, one crate each, which know their device but not the machine: serial ports (16550, PL011), QEMU's fw_cfg and ramfb, PCI through ECAM, virtio (MMIO and PCI transports, split virtqueues) and virtio-blk. |
 | [`green-tea-bare`](green-tea-bare) | What the kernels share: boot code per board behind the `Platform` and `TimerInterrupt` traits (timers, interrupts, paging, and where each device is), a port of v2's `Task` and scheduler, and a heap. |
 | [`green-tea-coop`](green-tea-coop) | A bare-metal kernel for QEMU on riscv64, aarch64 and x86_64 whose tasks yield to each other, so you can watch the context switches on screen. |
@@ -68,8 +72,17 @@ cargo xtask kernel --kernel memmap    # where the linker put each section
 cargo xtask kernel --kernel pool      # two pools compared, and a thousand tasks on one stack
 cargo xtask kernel --kernel fit       # the heap's allocator: merging, three ways to search, a thousand tasks
 cargo xtask kernel --kernel frag      # fragmentation: an adversary, and a random workload
+cargo xtask kernel --kernel tlsf      # allocators that don't search: a buddy system and TLSF, against the ones that do
+cargo xtask kernel --kernel slab      # page frames from a buddy system, and a slab cache for task records
+cargo xtask kernel --kernel smp       # four CPUs: the heap behind a lock, then a cache for each CPU
 cargo xtask kernel --kernel shell     # the shell's test, typed at its serial console
 cargo xtask kernel --kernel trace     # the shell records its heap, and replays the trace against each policy
+cargo xtask kernel --kernel safety    # a task corrupts the free list; the allocator hardened, a defence at a time
+cargo xtask kernel --kernel harden    # the recorded trace against the hardened allocator
+cargo xtask kernel --kernel region    # the shell's script again, with its memory from two regions
+cargo xtask kernel --kernel gtt       # the shell writes its recording as a trace file, and reads it back
+cargo xtask trace                     # saves the shell's recording to target/kernel/shell-riscv64.gtt
+cargo run --release -p green-tea-trace -- replay target/kernel/shell-riscv64.gtt   # replays it on the host
 cargo xtask shell                     # the shell, on this terminal (--target to pick a board)
 cargo xtask kernel --target aarch64   # just one architecture
 cargo xtask kernel --headless --screenshot   # no windows; saves target/kernel/<kernel>-<arch>.png
@@ -96,7 +109,7 @@ the drivers it picks are in [`drivers/`](drivers). Per architecture:
 | virtio | MMIO, 8 slots from 0x1000_1000 | MMIO, 32 slots from 0x0a00_0000 | PCI, found through ECAM at 0xb000_0000 |
 | Timer | `time` CSR | `cntvct_el0` | HPET |
 | Timer interrupt | SBI `set_timer` → supervisor timer interrupt | virtual timer → GICv2, IRQ 27 | local APIC timer, one-shot, measured against the HPET |
-| Paging | Sv39 identity map, guard pages unmapped | off | identity map (2 MiB pages; 4 KiB for the stack pool, guard pages unmapped) |
+| Paging | Sv39 identity map; guard pages unmapped, the heap's pages mapped on first touch | off | identity map (2 MiB pages; 4 KiB for the stack pool and the heap; guard pages unmapped, the heap's pages mapped on first touch) |
 
 Differences from v2: `thread_local!` becomes a plain static (there's one CPU), and stacks
 come from a pool in which each 16 KiB stack has a 4 KiB guard page under it. riscv64 and
@@ -215,6 +228,116 @@ that set, read and unset variables, and then replay the trace against all six
 combinations of policy and list order. It replays it twice more: with the same sizes and
 lifetimes dealt out at random, and with the long-lived blocks in a region of their own.
 
+### Allocators that don't search
+
+First fit by address, which the heap used to be, walks a list: with 8,000 holes in the way
+it looks at 8,001 free blocks to allocate and passes 8,000 to free, with interrupts off.
+green-tea-fit has two allocators that keep a list for each size instead.
+[`Buddy`](green-tea-fit/src/buddy.rs) allows only powers of two, splits a block only in
+half, and merges a freed block only with the half it was split from, which it finds with
+an exclusive or. [`Tlsf`](green-tea-fit/src/tlsf.rs), two-level segregated fit, keeps
+`Fit`'s blocks and boundary tags and replaces the one free list by a table of lists, one
+for each size below 256 bytes and sixteen for each power of two above, with two bitmaps
+that say which lists have a block. An allocation is two masks and two counts of trailing
+zeros. The kernels' heap is now a `Tlsf`.
+
+`--kernel tlsf` shows a buddy system splitting and merging, the block each allocator
+makes for a request, which TLSF lists hold a block as blocks come and go, and then
+compares four allocators on the random workload and on a heap built to make a search as
+long as it can be.
+
+### Page frames, and a slab cache
+
+Under the heap the kernel has two allocators of its own, from
+[`green-tea-kmem`](green-tea-kmem). The first hands out page frames: the 16 MiB of RAM
+after the kernel's last section, in blocks of 1 to 1,024 pages, by a binary buddy system.
+It keeps a 12-byte record per frame in a table (in the region's first 12 pages) and
+nothing in the pages, so it never touches a free page, knows the order of every allocated
+block, and refuses a block freed twice. The kernel doesn't ask the board how much RAM
+there is: `cargo xtask kernel` gives QEMU 128 MiB, and the region ends well inside it.
+
+The second is a slab cache, after Bonwick's. A slab is one page cut into objects of one
+type, with the slab's record in its last 40 bytes. Objects are constructed when the slab
+is made and stay constructed while they are free, with the free list's link in a word
+after each object. A task's record now comes from such a cache, and what its constructor
+does is take a stack from the pool: a thousand tasks run one after another take 8 stacks
+on riscv64 (one slab's worth of records) where they used to take a thousand. The cost is
+that a slab of records holds a stack for each, used or not, so the most tasks alive at
+once falls from 102 to 96 on riscv64, 100 on aarch64 and 92 on x86_64. When the scheduler
+has nothing left to run it reaps the cache, and the stacks and the pages go back.
+
+`--kernel slab` prints the free blocks by order as blocks are split and merged, frees
+every other page to leave half the memory free with no two pages together, runs a random
+workload, and then shows a cache of 200-byte objects: when objects are constructed, what
+a freed slab keeps, and that ten objects can hold ten pages or one. The crate's own tests
+run on the host: `cargo test -p green-tea-kmem`.
+
+### A hardened heap
+
+[`green-tea-fit/src/hardened.rs`](green-tea-fit/src/hardened.rs) is the first-fit allocator
+again, with five defences that can each be switched on: safe unlinking (a block's
+neighbours on the free list must point back at it before it is taken off), links stored
+XORed with a secret, a canary word after the caller's bytes, a quarantine that holds freed
+blocks filled with 0xdd and checks the fill as they leave, and random choices of free block
+and quarantine slot from a seeded generator. `Hardened<D>` takes the defences as a const
+parameter, so each combination is compiled on its own and its cost shows in the
+disassembly. With `D` 0 it places blocks exactly where `Fit` does. The plain allocators
+are unchanged.
+
+`--kernel safety` first runs two tasks over a plain `Fit`: one writes to a block after
+freeing it, and the other is handed memory inside a block that is still allocated. Then it
+makes six mistakes against the allocator with one defence more each time and prints which
+call caught each, counts how long a freed block waits before it is reused and where the
+next blocks go, and replays the `fit` test's workload for the cost. `--kernel harden` has
+the shell record itself as `trace` does, and replays that recording the same way.
+
+### The heap's pages, mapped on demand
+On riscv64 and x86_64 the page tables start with every page of the heap missing. The
+first access to a page faults, the fault handler maps it
+([pages.rs](green-tea-bare/src/pages.rs)), and the instruction runs again. The map is
+still the identity. `pages::release` zeroes a page and unmaps it, and `pages::trim` does
+that for the pages of the heap's free blocks that hold no header, link or footer
+([green-tea-fit's pages.rs](green-tea-fit/src/pages.rs) says which those are). aarch64
+runs with the MMU off, and has every page all the time.
+```sh
+cargo xtask kernel --kernel pages      # riscv64, x86_64
+cargo xtask kernel --kernel resident   # riscv64, x86_64
+```
+`--kernel pages` allocates a megabyte, writes to part of it, then all of it, frees it and
+trims, printing after each step which of the heap's 1,024 pages are mapped. It walks the
+page table for six addresses and prints the entry at each level. Then it allocates a
+megabyte of 48-byte blocks and frees all but one in 64, one in 128, and so on: one block
+to a page keeps every page. `--kernel resident` has the shell record its script, as
+`--kernel trace` does, and `pages replay` replays the recording against each allocator in
+a region with no page mapped, counting the pages each one touches and the pages left
+after trimming.
+
+### Several CPUs
+
+Every kernel boots on one CPU, and all but one test stay there. `--kernel smp` is run on a
+machine with four (`-smp 4`), and starts the other three
+([`green-tea-bare/src/cpus.rs`](green-tea-bare/src/cpus.rs)). How is the board's business:
+
+| | riscv64 (`virt`) | aarch64 (`virt`) | x86_64 (`q35`) |
+|---|---|---|---|
+| Start a CPU | SBI HSM `hart_start` | PSCI `CPU_ON`, by `hvc` | INIT and STARTUP from the local APIC, to a real-mode trampoline copied to 0x8000 |
+| Which CPU am I | `tp`, set when the hart starts | `MPIDR_EL1` | the local APIC's id |
+| What a started CPU sets up | FPU, `stvec`, `satp` | FP/SIMD, `VBAR_EL1` | long mode on the boot CPU's page tables, then its GDT, TSS and IDT |
+
+A started CPU gets a stack of 64 KiB from the heap and waits to be handed a function;
+`cpus::run` gives the same one to every CPU and returns when all are done. That is all the
+multiprocessing there is. The scheduler, tasks, the console and every `Global` still belong
+to the boot CPU, and a started CPU runs with interrupts off. What is safe from every CPU is
+the heap: each operation takes a spin lock as well as turning interrupts off.
+
+[`green-tea-smp`](green-tea-smp) has the lock, and a `Cache`: one CPU's free blocks, in
+twelve size classes, filled from and emptied into a `Central` (a heap, and a depot of
+spare batches) eight blocks at a time, so that the lock is taken once per batch. The test
+has four CPUs add to a counter with and without a lock, then make 80,128 allocations and
+frees from the kernel's heap, which takes its lock 80,128 times, and then the same
+through a cache each, which takes the lock behind them 2,680 times. The crate's own tests
+run on the host, with threads: `cargo test -p green-tea-smp`.
+
 ### A shell, and an arena
 
 green-tea-shell is one task that reads a line from the serial console and runs it as a
@@ -236,6 +359,27 @@ serial port. The second is `test`, which runs 1,000 commands each way and checks
 commands run from the heap free everything they allocate, and that commands run from the
 arena don't touch the heap. (The script starts with an empty line,
 because on riscv64 the first byte typed before the kernel is up doesn't arrive.)
+
+### Regions
+
+[`green-tea-region`](green-tea-region) is the arena again with its lifetimes in the types.
+A `Region` takes chunks from the heap as it fills, and gives them all back when it is
+dropped; `reset` keeps one chunk to fill again. `region.alloc(value)` returns `&mut T`
+borrowed from the region, `Vec::new_in(&region)` grows in it, and `scope` is a region that
+lasts for one call. A region runs no destructors, so `alloc` refuses, at build time, a type
+that has one. The crate's documentation has five programs the compiler refuses, as
+`compile_fail` tests: `cargo test -p green-tea-region`.
+
+`--kernel region` types `regions` at the shell, which runs the session's script of 1,970
+commands four ways with the heap recording: everything on the heap (10,316 allocations),
+commands in the arena (2,996), commands in a region that is reset and variables in a
+region for the session (16), and the same with a new region for every command (1,985).
+It also prints what the session's region held at the end: 57,693 bytes, of which the
+variables still set are 6,609. A region frees nothing until it frees everything.
+
+`cargo run --release -p green-tea-region --example cost -- region 100000` runs the shell's
+`echo` on the host with its memory from `malloc`, first fit, TLSF or a region, for counting
+instructions under valgrind.
 
 ## Testing
 

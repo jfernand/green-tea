@@ -9,7 +9,8 @@
 //!   (`println!` on the board's serial port) and [`screen`], the demos' layout drawn on
 //!   the framebuffer.
 //! - [`heap`] (the global allocator: a free list searched first-fit, from [`fit`]),
-//!   [`arena`] (a bump allocator that can be reset), [`stack`]
+//!   [`arena`] (a bump allocator that can be reset), [`kmem`] (page frames and slab caches,
+//!   under the heap: where task records come from), [`stack`]
 //!   (task stacks with guard pages, from a pool), [`memory`] (where the linker put each
 //!   section), [`Global`] (statics in place of `thread_local!`).
 //! - [`task`] and [`runtime`]: green-tea-v2's tasks and round-robin scheduler, ported to
@@ -20,8 +21,12 @@
 //! allocator live here.
 //!
 //! Memory is identity-mapped: aarch64 runs with the MMU off, and riscv64 and x86_64 with
-//! an identity map that leaves out the task stacks' guard pages.
-//! There is one CPU.
+//! an identity map that leaves out the task stacks' guard pages, and each page of the heap
+//! until it is first touched ([`pages`]).
+//!
+//! Everything runs on the CPU that booted, unless a kernel starts the others ([`cpus`]).
+//! Then the heap is safe to use from all of them, and nothing else is: tasks, the
+//! scheduler, the console and every [`Global`] belong to the boot CPU.
 
 #![no_std]
 
@@ -29,9 +34,12 @@ extern crate alloc;
 
 pub mod arena;
 pub mod console;
+pub mod cpus;
 mod global;
 pub mod heap;
+pub mod kmem;
 pub mod memory;
+pub mod pages;
 pub mod platform;
 pub mod runtime;
 pub mod screen;
@@ -41,7 +49,7 @@ pub mod task;
 pub use global::Global;
 pub use {
     green_tea_fit as fit, green_tea_fw_cfg as fw_cfg, green_tea_pci as pci, green_tea_pool as pool, green_tea_ramfb as ramfb,
-    green_tea_virtio as virtio, green_tea_virtio_blk as virtio_blk,
+    green_tea_smp as smp, green_tea_virtio as virtio, green_tea_virtio_blk as virtio_blk,
 };
 pub use platform::{Board, Platform, TimerInterrupt};
 

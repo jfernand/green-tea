@@ -8,13 +8,18 @@
 //!   below it, as in v2, but only boards with paging make touching it fault (see
 //!   [`stack`](crate::stack)).
 //! - Each task has an `id`, so the demo can tell which one is about to run.
+//! - A task's record comes from a slab cache ([`kmem`](crate::kmem)) instead of a `Box`.
+//!   The cache keeps freed records constructed, and a constructed record has its stack:
+//!   a task that is created takes a stack from the pool only when the cache has to make
+//!   a new slab of records.
 //!
 //! Nothing here knows about interrupts. green-tea-preempt calls `yield_now` from its timer
 //! handler, and keeps interrupts off whenever a switch is under way.
 
 use crate::global::Global;
+use crate::kmem::{Cache, KernelCache};
 use crate::platform::{Board, Platform};
-use crate::stack::Stack;
+use crate::stack::{SLOTS, Stack};
 use alloc::boxed::Box;
 use core::ops::Range;
 use core::ptr::{self, NonNull};
@@ -26,7 +31,39 @@ static CURRENT: Global<*mut Inner> = Global::new(ptr::null_mut());
 /// Ids handed out in creation order, starting at 0.
 static NEXT_ID: Global<usize> = Global::new(0);
 
-/// An owned handle to a task. Dropping it gives the task's stack back to the pool.
+/// The tasks' records. What the constructor does once per record, and a free leaves in
+/// place, is the stack.
+static TASKS: KernelCache = KernelCache::new("task", size_of::<Inner>(), align_of::<Inner>(), Some(construct), Some(destroy));
+
+/// A record in its constructed state: no closure, not running, and a stack of its own.
+/// Fails if the pool has no stack left.
+fn construct(record: *mut u8) -> bool {
+    let Some(stack) = Stack::try_take() else { return false };
+    let inner = Inner { context: Context::default(), caller: Context::default(), func: None, done: false, id: 0, wake_at: None, stack };
+    // SAFETY: the cache hands the constructor memory of the size and alignment of an `Inner`.
+    unsafe { record.cast::<Inner>().write(inner) };
+    true
+}
+
+/// Undo `construct`: dropping the record gives its stack back to the pool.
+fn destroy(record: *mut u8) {
+    // SAFETY: the cache destroys only what `construct` constructed, once.
+    unsafe { record.cast::<Inner>().drop_in_place() };
+}
+
+/// Look at the cache of task records: its sizes and its counts.
+pub fn cache<R>(f: impl FnOnce(&Cache) -> R) -> R {
+    TASKS.with(f)
+}
+
+/// Destroy the records no task is using, which gives their stacks back to the pool and
+/// their pages back to the kernel. Returns how many slabs of records that was.
+pub fn reap() -> usize {
+    TASKS.reap()
+}
+
+/// An owned handle to a task. Dropping it gives the task's record back to the cache,
+/// with its stack.
 pub struct Task {
     inner: NonNull<Inner>,
 }
@@ -45,19 +82,18 @@ struct Inner {
 impl Task {
     pub fn new(func: impl FnOnce() + 'static) -> Task {
         let id = NEXT_ID.replace(NEXT_ID.get() + 1);
-        let stack = Stack::take();
-        let top = stack.top(); // Context::new rounds it down to 16 bytes
-        let inner = Box::into_raw(Box::new(Inner {
-            context: Context::default(),
-            caller: Context::default(),
-            func: Some(Box::new(func)),
-            done: false,
-            id,
-            wake_at: None,
-            stack,
-        }));
+        let Some(record) = TASKS.allocate() else {
+            panic!("out of tasks: no page for a slab of records, or no stack for each (the pool has {SLOTS})");
+        };
+        let inner = record as *mut Inner;
+        // SAFETY: the cache's object is a constructed `Inner`, and ours until it is freed.
         unsafe {
+            let top = (*inner).stack.top(); // Context::new rounds it down to 16 bytes
             (*inner).context = Context::new(top, task_entry, inner.cast());
+            (*inner).func = Some(Box::new(func));
+            (*inner).done = false;
+            (*inner).id = id;
+            (*inner).wake_at = None;
             Task { inner: NonNull::new_unchecked(inner) }
         }
     }
@@ -87,7 +123,14 @@ impl Task {
 
 impl Drop for Task {
     fn drop(&mut self) {
-        drop(unsafe { Box::from_raw(self.inner.as_ptr()) });
+        let inner = self.inner.as_ptr();
+        // SAFETY: the record came from the cache in `new`, and a Task is dropped once. The
+        // closure of a task that never ran goes here; the stack stays with the record.
+        let freed = unsafe {
+            (*inner).func = None;
+            TASKS.free(inner as usize)
+        };
+        assert!(freed.is_ok(), "the cache refused a task's record: {freed:?}");
     }
 }
 

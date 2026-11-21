@@ -3,6 +3,11 @@
 //! accesses fault; the aarch64-unknown-none target compiles with +strict-align, so the
 //! compiler never makes any.
 //!
+//! Other CPUs: with `-smp 4` the machine has four, and QEMU starts the kernel on CPU 0 and
+//! keeps the rest off. `start_cpu` turns one on with PSCI's `CPU_ON`, a call that QEMU
+//! itself answers when there is no firmware. A CPU's number is the low byte of its
+//! `MPIDR_EL1`.
+//!
 //! Timer interrupts: the virtual timer of the ARM Generic Timer (the counter `ticks`
 //! reads) raises PPI 11, interrupt 27, which reaches the CPU through the GICv2 interrupt
 //! controller as an IRQ. The exception vectors below save every register on the
@@ -46,8 +51,35 @@ _start:
 2:  bl kmain
 3:  wfi
     b 3b
+
+    // Where a CPU turned on by `start_cpu` begins: at EL1 with the MMU off and interrupts
+    // masked, x0 = what `start_cpu` passed, which is the top of its stack.
+    .globl green_tea_secondary_entry
+green_tea_secondary_entry:
+    mrs x1, cpacr_el1           // FP/SIMD, as above
+    orr x1, x1, #(3 << 20)
+    msr cpacr_el1, x1
+    isb
+    mov sp, x0
+    mrs x0, mpidr_el1
+    and x0, x0, #0xff
+    bl green_tea_secondary      // doesn't return
+4:  wfi
+    b 4b
 "#
 );
+
+unsafe extern "C" {
+    fn green_tea_secondary_entry();
+}
+
+/// A started CPU's first Rust: the exception vectors, so that a fault there is reported,
+/// then the code every CPU shares.
+#[unsafe(no_mangle)]
+extern "C" fn green_tea_secondary(cpu: usize) -> ! {
+    unsafe { asm!("msr vbar_el1, {}", "isb", in(reg) &raw const green_tea_vectors) };
+    crate::cpus::enter(cpu)
+}
 
 impl Platform for AarchVirt {
     const NAME: &'static str = "aarch64";
@@ -82,6 +114,33 @@ impl Platform for AarchVirt {
     fn halt() -> ! {
         loop {
             unsafe { asm!("wfi") };
+        }
+    }
+
+    fn cpu() -> usize {
+        let mpidr: usize;
+        unsafe { asm!("mrs {}, mpidr_el1", out(reg) mpidr) };
+        mpidr & 0xff
+    }
+
+    /// PSCI `CPU_ON` (function 0xc400_0003): the CPU to turn on, where it starts, and a
+    /// value it finds in x0. The call is an `hvc`: with no hypervisor and no firmware in
+    /// the machine, QEMU takes it.
+    fn start_cpu(cpu: usize, stack_top: usize) -> Result<(), &'static str> {
+        let error: i64;
+        unsafe {
+            asm!(
+                "hvc #0",
+                inlateout("x0") 0xc400_0003u64 => error,
+                inlateout("x1") cpu => _,
+                inlateout("x2") green_tea_secondary_entry as *const () as usize => _,
+                inlateout("x3") stack_top => _,
+            );
+        }
+        match error {
+            0 => Ok(()),
+            -2 => Err("no such CPU"), // INVALID_PARAMETERS
+            _ => Err("PSCI refused to turn the CPU on"),
         }
     }
 

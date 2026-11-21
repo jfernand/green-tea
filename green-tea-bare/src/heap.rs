@@ -8,15 +8,18 @@
 //! next paragraph. green-tea-fit has the allocator, and the ones that search.
 //!
 //! Every operation runs with interrupts off, so that a timer interrupt can't switch to
-//! another task half way through one (green-tea-preempt). There is one hart, so that is
-//! the only way two tasks could be in the allocator at once.
+//! another task half way through one (green-tea-preempt), and holding a spin lock, so
+//! that another CPU can't be in the allocator at the same time ([`crate::cpus`]). The
+//! lock remembers which CPU holds it, so that a use of the heap from inside itself is a
+//! panic and not a wait that never ends.
 //!
 //! The heap can record what is asked of it: [`record`] takes a buffer, and from then on
 //! every allocation and every free is written to it as a green-tea-fit trace event, until
 //! [`stop_recording`] hands the buffer back.
 
-use crate::global::Global;
-use crate::platform::{Board, TimerInterrupt};
+use crate::platform::{Board, Platform, TimerInterrupt};
+use core::hint::spin_loop;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use core::alloc::{GlobalAlloc, Layout};
 use core::cell::UnsafeCell;
 use alloc::boxed::Box;
@@ -63,14 +66,26 @@ impl Recording {
     }
 }
 
-// SAFETY: one hart, and `locked` keeps interrupts off while anything touches either field.
+// SAFETY: `locked` holds the lock, with interrupts off, while anything touches either field.
 unsafe impl Sync for Heap {}
 
 #[global_allocator]
 static HEAP: Heap = Heap { fit: UnsafeCell::new(None), recording: UnsafeCell::new(None) };
 
-/// Set while `with` is running: the heap can't be used from inside itself.
-static BUSY: Global<bool> = Global::new(false);
+/// The heap's lock: 0 when nobody is in the heap, or else the number of the CPU that is,
+/// plus one.
+static OWNER: AtomicUsize = AtomicUsize::new(0);
+
+/// How many times the lock has been taken, and how many of those found it held by
+/// another CPU and waited.
+static TAKEN: AtomicUsize = AtomicUsize::new(0);
+static WAITED: AtomicUsize = AtomicUsize::new(0);
+
+/// How many times the heap's lock has been taken, and how many of those had to wait for
+/// another CPU. Reading them doesn't take the lock.
+pub fn lock_counts() -> (usize, usize) {
+    (TAKEN.load(Ordering::Relaxed), WAITED.load(Ordering::Relaxed))
+}
 
 /// Run `f` on the heap's allocator, with interrupts off. `f` must not allocate or free:
 /// that would be a second use of the allocator inside the first, and panics.
@@ -103,8 +118,20 @@ fn start(slot: &mut Option<Tlsf>) {
 
 fn locked<R>(f: impl FnOnce(&mut Tlsf, &mut Option<Recording>) -> R) -> R {
     Board::without_interrupts(|| {
-        assert!(!BUSY.replace(true), "the heap was used from inside heap::with");
-        // SAFETY: interrupts are off and BUSY was clear, so this is the only reference.
+        let me = Board::cpu() + 1;
+        let mut waited = false;
+        // Write our number if the lock holds 0, in one step no other CPU can come between.
+        while let Err(owner) = OWNER.compare_exchange(0, me, Ordering::Acquire, Ordering::Relaxed) {
+            assert!(owner != me, "the heap was used from inside heap::with");
+            waited = true;
+            spin_loop();
+        }
+        // We hold the lock, so nobody else is writing the count.
+        TAKEN.store(TAKEN.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
+        if waited {
+            WAITED.fetch_add(1, Ordering::Relaxed);
+        }
+        // SAFETY: interrupts are off and the lock is ours, so this is the only reference.
         let slot = unsafe { &mut *HEAP.fit.get() };
         if slot.is_none() {
             start(slot);
@@ -112,7 +139,7 @@ fn locked<R>(f: impl FnOnce(&mut Tlsf, &mut Option<Recording>) -> R) -> R {
         let fit = slot.as_mut().expect("the heap was started above");
         // SAFETY: as for `fit`.
         let result = f(fit, unsafe { &mut *HEAP.recording.get() });
-        BUSY.set(false);
+        OWNER.store(0, Ordering::Release);
         result
     })
 }

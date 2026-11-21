@@ -5,17 +5,10 @@
 //! Tasks switch only when they call `yield_now`: no interrupts, one CPU. Everything else
 //! (boot, drivers, tasks, scheduler) is green-tea-bare; this is just the demo.
 //!
-//! With the fw_cfg file `opt/green-tea/test` set to "overflow", it runs a test instead: a
-//! task recurses until it overflows its stack, which on a board with guard pages must
-//! fault in that task's guard page (`cargo xtask kernel --kernel overflow`). Set to "disk",
-//! it tests the virtio-blk driver against a disk image xtask made (`--kernel disk`). Set to
-//! "memmap", it prints where the linker put each section and checks the layout
-//! (`--kernel memmap`). Set to "pool", it compares the two pools of green-tea-pool, and
-//! checks that tasks run one after another reuse one stack (`--kernel pool`). Set to "fit",
-//! it puts green-tea-fit's allocator, which is also the kernel's heap, through its paces
-//! (`--kernel fit`, in fit.rs). Set to "frag", it measures how much memory that allocator
-//! can be made to need (`--kernel frag`, in frag.rs). Set to "tlsf", it compares that allocator
-//! with two that don't search, a buddy system and TLSF (`--kernel tlsf`, in tlsf.rs).
+//! With the fw_cfg file `opt/green-tea/test` set to a test's name, it runs that test
+//! instead of the demo: `kmain` matches the name. `cargo xtask kernel --kernel <name>` sets
+//! the file, and `cargo xtask kernel --help` says what each test does. The first tests
+//! (overflow, disk, memmap, pool) are in this file; each later one has a file of its own.
 
 #![no_std]
 #![no_main]
@@ -33,6 +26,10 @@ extern crate alloc;
 
 mod fit;
 mod frag;
+mod safety;
+mod slab;
+mod pages;
+mod smp;
 mod tlsf;
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -53,7 +50,11 @@ extern "C" fn kmain() -> ! {
         b"pool" => pool_test(fb),
         b"fit" => fit::test(fb),
         b"frag" => frag::test(fb),
+        b"pages" => pages::test(fb),
         b"tlsf" => tlsf::test(fb),
+        b"slab" => slab::test(fb),
+        b"safety" => safety::test(fb),
+        b"smp" => smp::test(fb),
         other => panic!("unknown test {:?}", core::str::from_utf8(other)),
     }
     println!("halting");

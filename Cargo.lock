@@ -107,11 +107,13 @@ dependencies = [
  "green-tea-fit",
  "green-tea-fw-cfg",
  "green-tea-io",
+ "green-tea-kmem",
  "green-tea-ns16550",
  "green-tea-pci",
  "green-tea-pl011",
  "green-tea-pool",
  "green-tea-ramfb",
+ "green-tea-smp",
  "green-tea-virtio",
  "green-tea-virtio-blk",
 ]
@@ -136,6 +138,10 @@ dependencies = [
 
 [[package]]
 name = "green-tea-io"
+version = "0.1.0"
+
+[[package]]
+name = "green-tea-kmem"
 version = "0.1.0"
 
 [[package]]
@@ -172,10 +178,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "green-tea-region"
+version = "0.1.0"
+dependencies = [
+ "green-tea-fit",
+]
+
+[[package]]
 name = "green-tea-shell"
 version = "0.1.0"
 dependencies = [
  "green-tea-bare",
+ "green-tea-region",
+]
+
+[[package]]
+name = "green-tea-smp"
+version = "0.1.0"
+dependencies = [
+ "green-tea-fit",
+]
+
+[[package]]
+name = "green-tea-trace"
+version = "0.1.0"
+dependencies = [
+ "green-tea-fit",
 ]
 
 [[package]]

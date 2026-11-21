@@ -1,0 +1,15 @@
+[package]
+name = "green-tea-trace"
+description = "Reads a trace file and replays it against each of green-tea-fit's allocators, on the host."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+# The kernel's `replay` command, without the kernel:
+#   cargo run --release -p green-tea-trace -- replay shell.gtt
+[dependencies]
+green-tea-fit = { path = "../green-tea-fit" }

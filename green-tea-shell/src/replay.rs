@@ -84,55 +84,60 @@ impl Line {
     }
 }
 
-impl Shell {
-    /// Run the command `write` writes.
-    fn scripted(&mut self, write: impl FnOnce(&mut Line)) {
-        let mut line = Line { bytes: [0; 256], len: 0 };
-        write(&mut line);
-        self.command(core::str::from_utf8(&line.bytes[..line.len]).unwrap_or(""));
-    }
+/// Run the command `write` writes.
+fn scripted(run: &mut impl FnMut(&str), write: impl FnOnce(&mut Line)) {
+    let mut line = Line { bytes: [0; 256], len: 0 };
+    write(&mut line);
+    run(core::str::from_utf8(&line.bytes[..line.len]).unwrap_or(""));
+}
 
+impl Shell {
     /// `session`: a script of commands, run from the heap without their output. It works
     /// in rounds, as a person at a shell does: each round sets some variables, reads them,
     /// changes some, reads them again, and then unsets all but one in eight. Those stay.
     pub fn session(&mut self) {
         let (source, commands) = (self.source, self.commands);
         (self.source, self.quiet) = (Source::Heap, true);
-        let mut random = Random(SEED);
-        for round in 0..ROUNDS {
-            let count = 16 + random.below(48);
-            for i in 0..count {
-                self.scripted(|line| {
-                    let _ = write!(line, "set r{round}v{i}");
-                    line.words(&mut random, 12);
-                });
-            }
-            for pass in 0..2 {
-                for _ in 0..count / (pass + 1) {
-                    self.scripted(|line| {
-                        let _ = write!(line, "echo $r{round}v{}", random.below(count));
-                        line.words(&mut random, 6);
-                    });
-                }
-                for _ in 0..count / 3 * (1 - pass) {
-                    self.scripted(|line| {
-                        let _ = write!(line, "set r{round}v{}", random.below(count));
-                        line.words(&mut random, 12);
-                    });
-                }
-            }
-            for i in (0..count).filter(|i| i % 8 != 0) {
-                self.scripted(|line| {
-                    let _ = write!(line, "unset r{round}v{i}");
-                });
-            }
-        }
+        Shell::script(|line| _ = self.command(line));
         (self.source, self.quiet) = (source, false);
         println!(
             "session: {} commands in {ROUNDS} rounds, {} variables left set",
             self.commands - commands,
             self.vars.borrow().len()
         );
+    }
+
+    /// The session's script: `run` is called with each of its commands.
+    pub fn script(mut run: impl FnMut(&str)) {
+        let mut random = Random(SEED);
+        for round in 0..ROUNDS {
+            let count = 16 + random.below(48);
+            for i in 0..count {
+                scripted(&mut run, |line| {
+                    let _ = write!(line, "set r{round}v{i}");
+                    line.words(&mut random, 12);
+                });
+            }
+            for pass in 0..2 {
+                for _ in 0..count / (pass + 1) {
+                    scripted(&mut run, |line| {
+                        let _ = write!(line, "echo $r{round}v{}", random.below(count));
+                        line.words(&mut random, 6);
+                    });
+                }
+                for _ in 0..count / 3 * (1 - pass) {
+                    scripted(&mut run, |line| {
+                        let _ = write!(line, "set r{round}v{}", random.below(count));
+                        line.words(&mut random, 12);
+                    });
+                }
+            }
+            for i in (0..count).filter(|i| i % 8 != 0) {
+                scripted(&mut run, |line| {
+                    let _ = write!(line, "unset r{round}v{i}");
+                });
+            }
+        }
     }
 
     /// `replay`: replay the recorded trace every way, print what each way needed, and

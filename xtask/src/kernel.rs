@@ -15,9 +15,10 @@ use std::ptr;
 use std::time::{Duration, Instant};
 use std::{env, thread};
 
+pub mod capture;
+
 pub const USAGE: &str = "\
-usage: cargo xtask kernel [--kernel coop|preempt|overflow|disk|memmap|pool|fit|frag|tlsf|shell|trace]...
-                          [--target riscv64|aarch64|x86_64]...
+usage: cargo xtask kernel [--kernel <name>]... [--target riscv64|aarch64|x86_64]...
                           [--release] [--headless] [--screenshot]
 
 Builds the bare-metal kernels and boots each in QEMU on every architecture it supports,
@@ -46,6 +47,16 @@ is echoed here, and the run passes when every kernel reports PASS.
   tlsf      green-tea-coop's test of the allocators that don't search: a buddy system and
             TLSF, which is the kernel's heap, against first fit and best fit on the same
             requests, and on a heap built to make a search long (riscv64, aarch64, x86_64)
+  slab      green-tea-coop's test of the kernel's own allocators: page frames from a buddy
+            system, a slab cache of constructed objects on top, and the cache its tasks'
+            records come from (riscv64, aarch64, x86_64)
+  pages     green-tea-coop's test of demand paging: the heap's pages are mapped as they are
+            touched, a megabyte is reserved, written, freed and given back, and small
+            blocks pin the pages they are on (riscv64, x86_64: the boards that page)
+  smp       green-tea-coop's test of allocation from several CPUs: starts the machine's
+            other three, and has all four use the kernel's heap at once, behind its lock,
+            and then a heap with a cache for each CPU in front of it (riscv64, aarch64,
+            x86_64)
   shell     green-tea-shell: types two commands at the shell on the serial console; the
             second is its `test`, which checks that commands free what they allocate,
             from the heap or from an arena
@@ -53,6 +64,20 @@ is echoed here, and the run passes when every kernel reports PASS.
   trace     green-tea-shell again: records the heap while the shell runs a script of
             commands, and replays the recording against each policy (riscv64, aarch64,
             x86_64)
+  safety    green-tea-coop's heap-safety test: a task writes to a freed block and another
+            is handed memory that isn't free; then the allocator hardened one defence at a
+            time, and what each catches and costs (riscv64, aarch64, x86_64)
+  harden    green-tea-shell once more: the recorded trace replayed against the hardened
+            allocator, one defence more each time (riscv64, aarch64, x86_64)
+  region    green-tea-shell again: runs the same script with its commands' memory in a
+            region and its variables in another, and compares what each way asks of the
+            heap (riscv64, aarch64, x86_64)
+  gtt       green-tea-shell again: records the same script, writes the recording as a
+            trace file in both forms, and reads it back (riscv64, aarch64, x86_64). To get
+            the file out of QEMU: cargo xtask trace
+  resident  green-tea-shell again: records the same script, and replays the recording in a
+            region with no page mapped, counting the pages each allocator touches
+            (riscv64, x86_64: the boards that page)
 
   --kernel      only these kernels (default: all)
   --target      only these architectures (default: all three)
@@ -84,6 +109,9 @@ const KERNELS: &[Kernel] = &[
     Kernel { name: "fit", package: "green-tea-coop", arches: ALL, test: Some("fit"), disk: false, input: None },
     Kernel { name: "frag", package: "green-tea-coop", arches: ALL, test: Some("frag"), disk: false, input: None },
     Kernel { name: "tlsf", package: "green-tea-coop", arches: ALL, test: Some("tlsf"), disk: false, input: None },
+    Kernel { name: "slab", package: "green-tea-coop", arches: ALL, test: Some("slab"), disk: false, input: None },
+    Kernel { name: "pages", package: "green-tea-coop", arches: &["riscv64", "x86_64"], test: Some("pages"), disk: false, input: None },
+    Kernel { name: "smp", package: "green-tea-coop", arches: ALL, test: Some("smp"), disk: false, input: None },
     Kernel {
         name: "shell",
         package: "green-tea-shell",
@@ -102,9 +130,32 @@ const KERNELS: &[Kernel] = &[
         disk: false,
         input: Some("\ntrace on\nsession\ntrace off\nreplay\n"),
     },
+    Kernel { name: "safety", package: "green-tea-coop", arches: ALL, test: Some("safety"), disk: false, input: None },
+    Kernel {
+        name: "harden",
+        package: "green-tea-shell",
+        arches: ALL,
+        test: None,
+        disk: false,
+        input: Some("\ntrace on\nsession\ntrace off\nharden\n"),
+    },
+    Kernel { name: "region", package: "green-tea-shell", arches: ALL, test: None, disk: false, input: Some("\nregions\n") },
+    Kernel { name: "gtt", package: "green-tea-shell", arches: ALL, test: None, disk: false, input: Some("\ntrace on\nsession\ntrace off\ntrace check\n") },
+    Kernel {
+        name: "resident",
+        package: "green-tea-shell",
+        arches: &["riscv64", "x86_64"],
+        test: None,
+        disk: false,
+        input: Some("\npages\ntrace on\npages\nsession\ntrace off\npages\npages replay\npages trim\n"),
+    },
 ];
 
 const ALL: &[&str] = &["riscv64", "aarch64", "x86_64"];
+
+/// The kernels that are given more than one CPU (`-smp`). Every other kernel runs on a
+/// machine with one.
+const SMP_KERNELS: &[(&str, &str)] = &[("smp", "4")];
 
 struct Arch {
     name: &'static str,
@@ -266,7 +317,10 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 let kernel = KERNELS
                     .iter()
                     .find(|k| k.name == value)
-                    .ok_or_else(|| format!("unknown kernel {value}; known: coop, preempt, overflow, disk, memmap, pool, fit, frag, tlsf, shell, trace"))?;
+                    .ok_or_else(|| {
+                        let known: Vec<&str> = KERNELS.iter().map(|k| k.name).collect();
+                        format!("unknown kernel {value}; known: {}", known.join(", "))
+                    })?;
                 kernels.push(kernel);
             }
             "-h" | "--help" => return Err(String::new()),
@@ -459,6 +513,9 @@ impl Run {
         if headless {
             cmd.args(["-display", "none"]);
         }
+        if let Some((_, cpus)) = SMP_KERNELS.iter().find(|(name, _)| *name == job.kernel.name) {
+            cmd.args(["-smp", cpus]);
+        }
         if let Some(test) = job.kernel.test {
             cmd.arg("-fw_cfg").arg(format!("name=opt/green-tea/test,string={test}"));
         }
@@ -590,50 +647,29 @@ mod tests {
         parse(&args).unwrap().jobs.iter().map(|j| j.label()).collect()
     }
 
+    /// What `KERNELS` says should run: every kernel on every architecture it supports,
+    /// or on `only`.
+    fn expected(only: Option<&str>) -> Vec<String> {
+        let mut labels = Vec::new();
+        for kernel in super::KERNELS {
+            for arch in super::ALL.iter().filter(|a| kernel.arches.contains(a) && only.is_none_or(|only| only == **a)) {
+                labels.push(format!("{}-{arch}", kernel.name));
+            }
+        }
+        labels
+    }
+
     #[test]
     fn by_default_every_kernel_runs_everywhere_it_can() {
-        assert_eq!(
-            labels(&[]),
-            [
-                "coop-riscv64",
-                "coop-aarch64",
-                "coop-x86_64",
-                "preempt-riscv64",
-                "preempt-aarch64",
-                "preempt-x86_64",
-                "overflow-riscv64",
-                "overflow-x86_64",
-                "disk-riscv64",
-                "disk-aarch64",
-                "disk-x86_64",
-                "memmap-riscv64",
-                "memmap-aarch64",
-                "memmap-x86_64",
-                "pool-riscv64",
-                "pool-aarch64",
-                "pool-x86_64",
-                "fit-riscv64",
-                "fit-aarch64",
-                "fit-x86_64",
-                "frag-riscv64",
-                "frag-aarch64",
-                "frag-x86_64",
-                "tlsf-riscv64",
-                "tlsf-aarch64",
-                "tlsf-x86_64",
-                "shell-riscv64",
-                "shell-aarch64",
-                "shell-x86_64",
-                "trace-riscv64",
-                "trace-aarch64",
-                "trace-x86_64"
-            ]
-        );
+        assert_eq!(labels(&[]), expected(None));
+        assert!(labels(&[]).contains(&"overflow-riscv64".to_string()));
+        assert!(!labels(&[]).contains(&"overflow-aarch64".to_string()));
     }
 
     #[test]
     fn unsupported_combinations_are_skipped() {
-        assert_eq!(labels(&["--target", "aarch64"]), ["coop-aarch64", "preempt-aarch64", "disk-aarch64", "memmap-aarch64", "pool-aarch64", "fit-aarch64", "frag-aarch64", "tlsf-aarch64", "shell-aarch64", "trace-aarch64"]);
+        assert_eq!(labels(&["--target", "aarch64"]), expected(Some("aarch64")));
+        assert!(labels(&["--target", "aarch64"]).contains(&"shell-aarch64".to_string()));
         let args = ["--kernel".to_string(), "overflow".into(), "--target".into(), "aarch64".into()];
         assert!(parse(&args).is_err());
     }

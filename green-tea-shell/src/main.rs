@@ -20,13 +20,18 @@
 //!
 //! `trace on` records every allocation and free on the heap, `session` is a long script
 //! to record, and `replay` runs what was recorded against each of green-tea-fit's policies
-//! and measures the fragmentation (replay.rs).
+//! and measures the fragmentation (replay.rs). `trace dump` writes the recording to the
+//! console as a trace file, for the host to keep (dump.rs).
 
 #![no_std]
 #![no_main]
 
 extern crate alloc;
 
+mod harden;
+mod region;
+mod dump;
+mod pages;
 mod replay;
 
 use alloc::alloc::Global;
@@ -157,6 +162,15 @@ impl Shell {
         } else if text == "replay" {
             self.replay();
             Next::Prompt
+        } else if text == "harden" {
+            self.harden();
+            Next::Prompt
+        } else if text == "regions" {
+            self.regions();
+            Next::Prompt
+        } else if let Some(arg) = text.strip_prefix("pages").filter(|arg| arg.is_empty() || arg.starts_with(' ')) {
+            self.pages(arg.trim_ascii());
+            Next::Prompt
         } else {
             self.command(text)
         }
@@ -236,7 +250,9 @@ impl Shell {
                 }
                 None => println!("nothing was being recorded"),
             },
-            _ => println!("usage: trace on|off"),
+            "dump" => self.dump(),
+            "check" => self.check(),
+            _ => println!("usage: trace on|off|dump|check"),
         }
     }
 
@@ -435,8 +451,14 @@ set <name> <words> give a variable a value; `echo $name` prints it
 unset <name>       forget a variable
 vars               the variables
 trace on|off       record the heap's allocations and frees
+trace dump         write what was recorded to the console, as a trace file
+trace check        write it as a file in memory, and read it back
 session            run a script of a few thousand commands, from the heap
 replay             replay what was recorded against each policy
+harden             replay it against the hardened allocator, a defence at a time
+regions            run the session with its memory from regions, and compare
+pages [trim|replay] the heap's pages: how many are mapped; give back the idle ones;
+                   replay what was recorded and count the pages it touches
 repeat <n> <cmd>   run a command n times, without its output
 test               check that commands free what they allocate, either way
 halt               stop
