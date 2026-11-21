@@ -80,6 +80,7 @@ cargo xtask kernel --kernel smp       # four CPUs: the heap behind a lock, then 
 cargo xtask kernel --kernel shard     # four CPUs and no lock: a heap of pages for each, against the caches
 cargo xtask kernel --kernel lisp      # a small Lisp on a heap that counts references
 cargo xtask kernel --kernel gc        # the same Lisp on heaps that mark and sweep, mark and compact, and copy
+cargo xtask kernel --kernel incremental  # the same Lisp on a heap that marks and sweeps in steps, paced by a timer
 cargo xtask kernel --kernel shell     # the shell's test, typed at its serial console
 cargo xtask kernel --kernel trace     # the shell records its heap, and replays the trace against each policy
 cargo xtask kernel --kernel safety    # a task corrupts the free list; the allocator hardened, a defence at a time
@@ -394,6 +395,18 @@ each heap and counts the collections and the objects traced, walked and moved, a
 where objects are after a collection, what the mark stack holds, and what a reference
 that the heap wasn't told about refers to afterwards. The smallest heap each program runs
 in is found on the host: `cargo run --release -p green-tea-lisp --example heaps`.
+
+### A heap that marks in steps
+
+[`IncHeap`](green-tea-lisp/src/incremental.rs) is `MarkHeap`'s mark and sweep done a few
+objects at a time inside `alloc`, with the program running in between. `set_field` has a
+write barrier (`Barrier::Insertion` shades the object stored, `Barrier::Deletion` the one
+overwritten, `Barrier::None` frees objects in use), objects allocated during marking are
+born white or black (`Birth`), and the steps are paced by allocation, by a tick that
+`alloc` polls, or not at all (`Pace`). `--kernel incremental` shows an object freed in use
+without a barrier, compares the longest step with a whole cycle, and paces the steps with
+a timer interrupt. The tables are made on the host:
+`cargo run --release -p green-tea-lisp --example incremental`.
 
 ### A shell, and an arena
 

@@ -68,6 +68,10 @@ is echoed here, and the run passes when every kernel reports PASS.
             marks and sweeps, one that marks and compacts and one that copies, with every
             collection counted, and the smallest heap each program runs in (riscv64,
             aarch64, x86_64)
+  incremental  green-tea-coop's test of a heap that marks and sweeps in steps between the
+            steps of the same Lisp: an object freed in use without a write barrier and
+            kept by either of two, the longest step against a whole cycle, and steps
+            paced by a timer interrupt (riscv64, aarch64, x86_64)
   shell     green-tea-shell: types two commands at the shell on the serial console; the
             second is its `test`, which checks that commands free what they allocate,
             from the heap or from an arena
@@ -126,6 +130,7 @@ const KERNELS: &[Kernel] = &[
     Kernel { name: "lisp", package: "green-tea-coop", arches: ALL, test: Some("lisp"), disk: false, input: None },
     Kernel { name: "shard", package: "green-tea-coop", arches: ALL, test: Some("shard"), disk: false, input: None },
     Kernel { name: "gc", package: "green-tea-coop", arches: ALL, test: Some("gc"), disk: false, input: None },
+    Kernel { name: "incremental", package: "green-tea-coop", arches: ALL, test: Some("incremental"), disk: false, input: None },
     Kernel {
         name: "shell",
         package: "green-tea-shell",

@@ -60,6 +60,7 @@ extern crate alloc;
 
 pub mod eval;
 pub mod gc;
+pub mod incremental;
 pub mod mark;
 pub mod print;
 pub mod programs;

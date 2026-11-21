@@ -33,6 +33,7 @@ mod pages;
 mod smp;
 mod lisp;
 mod gc;
+mod incremental;
 mod tlsf;
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -56,6 +57,7 @@ extern "C" fn kmain() -> ! {
         b"pages" => pages::test(fb),
         b"lisp" => lisp::test(fb),
         b"gc" => gc::test(fb),
+        b"incremental" => incremental::test(fb),
         b"tlsf" => tlsf::test(fb),
         b"slab" => slab::test(fb),
         b"safety" => safety::test(fb),
