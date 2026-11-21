@@ -14,8 +14,10 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::{self, Write};
+use green_tea_bare::fit::buddy::Buddy;
+use green_tea_bare::fit::tlsf::Tlsf;
 use green_tea_bare::fit::trace::{self, Event, Random, Report};
-use green_tea_bare::fit::{Fit, Order, Policy};
+use green_tea_bare::fit::{Fit, Heap, Order, Policy};
 use green_tea_bare::println;
 
 /// The most events `trace on` records: 16 bytes each, so a mebibyte of the heap.
@@ -170,6 +172,12 @@ fn report(events: &[Event], dropped: usize) -> Result<String, &'static str> {
         return Err("a replay didn't make every allocation of the trace");
     }
 
+    println!("as recorded, against the allocators that don't search:");
+    let others = others(events, base)?;
+    if others.iter().any(|r| r.allocations != allocations || r.peak_live != recorded[0].peak_live) {
+        return Err("a replay didn't make every allocation of the trace");
+    }
+
     println!("the same sizes and the same lifetimes, dealt out at random:");
     let random = table(&trace::shuffled(events, SEED), base)?;
 
@@ -283,6 +291,46 @@ fn table(events: &[Event], base: usize) -> Result<Vec<Report>, &'static str> {
         reports.push(r);
     }
     Ok(reports)
+}
+
+/// Replay `events` against the buddy system and against TLSF, and print a row for each.
+fn others(events: &[Event], base: usize) -> Result<Vec<Report>, &'static str> {
+    println!("  allocator            peak live  peak used  footprint  over live then  over peak live  over peak used");
+    let mut reports = Vec::with_capacity(2);
+    for name in ["buddy system", "TLSF"] {
+        // SAFETY: the region is the caller's, and one allocator uses it at a time.
+        let r = unsafe {
+            if name == "TLSF" {
+                measured(events, &mut Tlsf::new(base, REGION))
+            } else {
+                measured(events, &mut Buddy::new(base, REGION))
+            }
+        }?;
+        println!(
+            "  {name:19} {:10} {:10} {:10} {:>15} {:>15} {:>15}",
+            r.peak_live,
+            r.peak_used,
+            r.footprint,
+            percent(r.footprint - r.live_at_peak_footprint, r.live_at_peak_footprint),
+            percent(r.footprint - r.peak_live, r.peak_live),
+            percent(r.footprint - r.peak_used, r.peak_used),
+        );
+        if r.failed != 0 {
+            return Err("a trace didn't fit in the region it was replayed in");
+        }
+        if r.stats.longest_walk != 0 || (name == "TLSF" && r.stats.longest_search != 1) {
+            return Err("an allocator that doesn't search searched");
+        }
+        reports.push(r);
+    }
+    Ok(reports)
+}
+
+/// Replay `events` against `heap`, and check the heap afterwards.
+fn measured(events: &[Event], heap: &mut impl Heap) -> Result<Report, &'static str> {
+    let report = trace::replay(events, heap);
+    heap.check()?;
+    Ok(report)
 }
 
 /// `part` as a percentage of `whole`, to one decimal place, without floating point.

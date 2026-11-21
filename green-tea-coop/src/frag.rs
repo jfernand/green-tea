@@ -169,7 +169,7 @@ fn adversaries(base: usize) -> Result<String, &'static str> {
 
 /// The `fit` test's workload as a trace: the same generator, the same seed, the same
 /// decisions. An address here is only a name for a block.
-fn random_trace() -> Vec<Event> {
+pub fn random_trace() -> Vec<Event> {
     let mut random = Random(0x2545_f491_4f6c_dd1d);
     let mut events = Vec::with_capacity(OPERATIONS);
     let mut live: Vec<usize> = Vec::with_capacity(LIVE + 1);

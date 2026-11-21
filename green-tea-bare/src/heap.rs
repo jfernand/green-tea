@@ -1,9 +1,11 @@
-//! The kernel's heap: a [`Fit`] over the region linker.ld reserves. It is the global
+//! The kernel's heap: a [`Tlsf`] over the region linker.ld reserves. It is the global
 //! allocator, so it is what `Box`, `Vec` and the rest of the `alloc` crate allocate from.
 //!
-//! Blocks are of any size, and a freed block is reused: the allocator searches a list of
-//! free blocks for the first one large enough, and merges a freed block with its free
-//! neighbours. green-tea-fit has the allocator itself, and the other ways to search.
+//! Blocks are of any size, and a freed block is merged with its free neighbours and
+//! reused. The free blocks are on lists by size, and two bitmaps say which lists have a
+//! block, so neither an allocation nor a free searches for anything: what each does has
+//! a bound that doesn't depend on the state of the heap. That matters here because of the
+//! next paragraph. green-tea-fit has the allocator, and the ones that search.
 //!
 //! Every operation runs with interrupts off, so that a timer interrupt can't switch to
 //! another task half way through one (green-tea-preempt). There is one hart, so that is
@@ -20,16 +22,15 @@ use core::cell::UnsafeCell;
 use alloc::boxed::Box;
 use core::ptr;
 use green_tea_fit::trace::Event;
-use green_tea_fit::{Fit, Order, Policy};
+use green_tea_fit::tlsf::Tlsf;
 
 unsafe extern "C" {
     static __heap_start: u8;
     static __heap_end: u8;
 }
 
-/// Which free block the heap takes, and where a freed block goes on its list.
-pub const POLICY: Policy = Policy::FirstFit;
-pub const ORDER: Order = Order::Address;
+/// The allocator the heap is, for the tests to print.
+pub const NAME: &str = "TLSF";
 
 /// `addr` rounded up to a multiple of `align`, which must be a power of two, as a
 /// `Layout`'s alignment always is. `None` if that overflows.
@@ -42,7 +43,7 @@ pub fn align_up(addr: usize, align: usize) -> Option<usize> {
 }
 
 struct Heap {
-    fit: UnsafeCell<Option<Fit>>, // None until the first use
+    fit: UnsafeCell<Option<Tlsf>>, // None until the first use
     recording: UnsafeCell<Option<Recording>>,
 }
 
@@ -73,7 +74,7 @@ static BUSY: Global<bool> = Global::new(false);
 
 /// Run `f` on the heap's allocator, with interrupts off. `f` must not allocate or free:
 /// that would be a second use of the allocator inside the first, and panics.
-pub fn with<R>(f: impl FnOnce(&mut Fit) -> R) -> R {
+pub fn with<R>(f: impl FnOnce(&mut Tlsf) -> R) -> R {
     locked(|fit, _| f(fit))
 }
 
@@ -88,16 +89,27 @@ pub fn stop_recording() -> Option<Recording> {
     locked(|_, recording| recording.take())
 }
 
-fn locked<R>(f: impl FnOnce(&mut Fit, &mut Option<Recording>) -> R) -> R {
+/// Make the allocator, on the heap's first use. Out of line on purpose: a `Tlsf` is 3 KiB
+/// of table, and built in `locked` it would be in the stack frame of every allocation,
+/// on task stacks of 16 KiB.
+#[cold]
+#[inline(never)]
+fn start(slot: &mut Option<Tlsf>) {
+    let start = &raw const __heap_start as usize;
+    let end = &raw const __heap_end as usize;
+    // SAFETY: linker.ld reserves the region for the heap, and nothing else uses it.
+    *slot = Some(unsafe { Tlsf::new(start, end - start) });
+}
+
+fn locked<R>(f: impl FnOnce(&mut Tlsf, &mut Option<Recording>) -> R) -> R {
     Board::without_interrupts(|| {
         assert!(!BUSY.replace(true), "the heap was used from inside heap::with");
         // SAFETY: interrupts are off and BUSY was clear, so this is the only reference.
-        let fit = unsafe { &mut *HEAP.fit.get() }.get_or_insert_with(|| {
-            let start = &raw const __heap_start as usize;
-            let end = &raw const __heap_end as usize;
-            // SAFETY: linker.ld reserves the region for the heap, and nothing else uses it.
-            unsafe { Fit::new(start, end - start, POLICY, ORDER) }
-        });
+        let slot = unsafe { &mut *HEAP.fit.get() };
+        if slot.is_none() {
+            start(slot);
+        }
+        let fit = slot.as_mut().expect("the heap was started above");
         // SAFETY: as for `fit`.
         let result = f(fit, unsafe { &mut *HEAP.recording.get() });
         BUSY.set(false);

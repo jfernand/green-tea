@@ -25,6 +25,11 @@
 //!
 //! green-tea-bare's heap is one of these (see its `heap` module).
 //!
+//! [`Fit`] keeps its free blocks on one list and searches it. Two more allocators here
+//! don't search: [`buddy::Buddy`] has a list for each power of two, and [`tlsf::Tlsf`] a
+//! list for each of a few hundred ranges of size, found through two bitmaps. All three
+//! are a [`Heap`].
+//!
 //! [`trace`] replays a recorded sequence of allocations and frees against an allocator and
 //! measures its fragmentation, and [`adversary`] is a program written to fragment one.
 //! Those two allocate (a `Vec`, a `BTreeMap`), so they need a global allocator; the
@@ -35,9 +40,11 @@
 extern crate alloc;
 
 pub mod adversary;
+pub mod buddy;
+pub mod tlsf;
 pub mod trace;
 
-const WORD: usize = size_of::<usize>();
+pub(crate) const WORD: usize = size_of::<usize>();
 /// Every address handed out is a multiple of this, and so is every block's size.
 pub const ALIGN: usize = 2 * WORD;
 /// What a block costs beyond what was asked for: its header and its footer.
@@ -45,7 +52,7 @@ pub const OVERHEAD: usize = 2 * WORD;
 /// The smallest block: a header, two links and a footer.
 pub const MIN_BLOCK: usize = 4 * WORD;
 /// The bit of a tag that says its block is allocated.
-const USED: usize = 1;
+pub(crate) const USED: usize = 1;
 
 /// Which free block an allocation takes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -106,6 +113,51 @@ pub struct Stats {
     pub merges: usize,
     /// The most bytes ever allocated at once, tags included.
     pub peak: usize,
+    /// The most free blocks any one allocation looked at, and the most any one free
+    /// walked past.
+    pub longest_search: usize,
+    pub longest_walk: usize,
+}
+
+/// What the three allocators of this crate have in common: enough to replay a trace
+/// against one and measure what it needed.
+pub trait Heap {
+    /// A block of at least `size` bytes at a multiple of `align`, or `None`.
+    fn allocate(&mut self, size: usize, align: usize) -> Option<usize>;
+    /// Give back a block.
+    ///
+    /// # Safety
+    /// `addr` must have come from `allocate` on this allocator, and not have been freed since.
+    unsafe fn free(&mut self, addr: usize) -> Result<(), FreeError>;
+    /// Bytes in allocated blocks, whatever the allocator adds to each included.
+    fn used(&self) -> usize;
+    /// The distance from the start of the region to the highest address an allocated
+    /// block has reached.
+    fn footprint(&self) -> usize;
+    fn stats(&self) -> Stats;
+    /// Check everything the allocator relies on.
+    fn check(&self) -> Result<(), &'static str>;
+}
+
+impl Heap for Fit {
+    fn allocate(&mut self, size: usize, align: usize) -> Option<usize> {
+        Fit::allocate(self, size, align)
+    }
+    unsafe fn free(&mut self, addr: usize) -> Result<(), FreeError> {
+        unsafe { Fit::free(self, addr) }
+    }
+    fn used(&self) -> usize {
+        Fit::used(self)
+    }
+    fn footprint(&self) -> usize {
+        Fit::footprint(self)
+    }
+    fn stats(&self) -> Stats {
+        Fit::stats(self)
+    }
+    fn check(&self) -> Result<(), &'static str> {
+        Fit::check(self)
+    }
 }
 
 pub struct Fit {
@@ -156,7 +208,9 @@ impl Fit {
         debug_assert!(align.is_power_of_two());
         // What the block must hold: the caller's bytes and the two tags, rounded up.
         let need = size.checked_add(OVERHEAD + ALIGN - 1).map(|n| (n & !(ALIGN - 1)).max(MIN_BLOCK));
+        let examined = self.stats.examined;
         let found = need.and_then(|need| Some((need, self.find(need, align)?)));
+        self.stats.longest_search = self.stats.longest_search.max(self.stats.examined - examined);
         let Some((need, (block, start))) = found else {
             self.stats.failed += 1;
             return None;
@@ -234,7 +288,9 @@ impl Fit {
             self.stats.merges += 1;
         }
         self.set_block(block, size, false);
+        let passed = self.stats.passed;
         self.insert(block);
+        self.stats.longest_walk = self.stats.longest_walk.max(self.stats.passed - passed);
         Ok(())
     }
 
@@ -489,7 +545,7 @@ impl Fit {
 /// With an `align` of 16 or less that is the start of the free block, since every block
 /// is aligned that far already. With more, the start may have to move up, and what it
 /// leaves below must be a block itself, 32 bytes at least.
-fn place(block: usize, size: usize, need: usize, align: usize) -> Option<usize> {
+pub(crate) fn place(block: usize, size: usize, need: usize, align: usize) -> Option<usize> {
     let mut start = (block + WORD).next_multiple_of(align) - WORD;
     if start != block && start - block < MIN_BLOCK {
         start += align;

@@ -329,9 +329,8 @@ fn kernel_heap() -> Result<(), &'static str> {
     let (after, during) = (heap_now(), DURING.get());
     let stats = heap::with(|fit| fit.stats());
     println!(
-        "the kernel's heap ({:?}, {:?}): {used} of {} bytes in {blocks} blocks, {free_blocks} free blocks",
-        heap::POLICY,
-        heap::ORDER,
+        "the kernel's heap ({}): {used} of {} bytes in {blocks} blocks, {free_blocks} free blocks",
+        heap::NAME,
         heap::capacity()
     );
     println!(

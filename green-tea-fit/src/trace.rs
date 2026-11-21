@@ -12,7 +12,7 @@
 //! same sizes and lifetimes, and [`by_lifetime`] splits a trace in two, the blocks that
 //! live long and the rest.
 
-use crate::{Fit, Stats};
+use crate::{Heap, Stats};
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
@@ -73,7 +73,7 @@ pub struct Report {
 }
 
 /// Replay `events` against `fit`, which should be new.
-pub fn replay(events: &[Event], fit: &mut Fit) -> Report {
+pub fn replay(events: &[Event], fit: &mut (impl Heap + ?Sized)) -> Report {
     let mut report = Report::default();
     // Where each block of the trace is now: the address recorded, to the address in `fit`
     // and the size asked for.
