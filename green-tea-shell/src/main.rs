@@ -299,6 +299,8 @@ impl Shell {
             println!("FAIL: the arena has {in_use} bytes in use after a reset, and peaked at {peak}");
         } else if let Err(e) = heap::with(|fit| fit.check()) {
             println!("FAIL: the heap is inconsistent: {e}");
+        } else if let Err(e) = empty_arena() {
+            println!("FAIL: {e}");
         } else {
             println!(
                 "PASS: {RUNS} commands made {from_heap} heap allocations and freed them all, or none from an arena \
@@ -306,6 +308,23 @@ impl Shell {
             );
         }
     }
+}
+
+/// An arena of no bytes asks the heap for nothing, and has nothing to give.
+fn empty_arena() -> Result<(), &'static str> {
+    let counts = || heap::with(|fit| (fit.stats().allocations, fit.stats().frees));
+    let before = counts();
+    let arena = Arena::new(0);
+    let refused = arena.allocate(core::alloc::Layout::new::<u8>()).is_err();
+    let capacity = arena.capacity();
+    drop(arena);
+    if counts() != before {
+        return Err("an arena of no bytes used the heap");
+    }
+    if capacity != 0 || !refused {
+        return Err("an arena of no bytes handed out a byte");
+    }
+    Ok(())
 }
 
 impl Source {
