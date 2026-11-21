@@ -111,6 +111,9 @@ pub enum Val {
 impl Value {
     pub const NIL: Value = Value(TAG_CONST);
     pub const TRUE: Value = Value(1 << TAG_BITS | TAG_CONST);
+    /// The largest and the smallest integer a value holds: 61 bits.
+    pub const MAX_INT: i64 = i64::MAX >> TAG_BITS;
+    pub const MIN_INT: i64 = i64::MIN >> TAG_BITS;
 
     /// Arithmetic wraps at 61 bits.
     pub fn int(n: i64) -> Value {

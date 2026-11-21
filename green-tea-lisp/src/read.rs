@@ -6,6 +6,7 @@
 
 use crate::eval::{Error, Lisp, QUOTE};
 use crate::{Heap, Kind, Value};
+use core::num::IntErrorKind;
 
 /// How deeply lists may nest in the text.
 const MAX_NESTING: usize = 32;
@@ -87,21 +88,26 @@ impl<H: Heap> Lisp<H> {
                     text.at += 1;
                 }
                 let atom = core::str::from_utf8(&text.bytes[start..text.at]).map_err(|_| Error::Syntax("not UTF-8"))?;
-                let atom = self.atom(atom);
+                let atom = self.atom(atom)?;
                 self.heap.push(atom);
                 Ok(())
             }
         }
     }
 
-    fn atom(&mut self, text: &str) -> Value {
-        match text {
+    fn atom(&mut self, text: &str) -> Result<Value, Error> {
+        const TOO_LARGE: Error = Error::Syntax("an integer outside the 61 bits of a value");
+        Ok(match text {
             "nil" => Value::NIL,
             "#t" => Value::TRUE,
             _ => match text.parse::<i64>() {
-                Ok(n) => Value::int(n),
+                Ok(n) if (Value::MIN_INT..=Value::MAX_INT).contains(&n) => Value::int(n),
+                Ok(_) => return Err(TOO_LARGE),
+                Err(e) if matches!(e.kind(), IntErrorKind::PosOverflow | IntErrorKind::NegOverflow) => {
+                    return Err(TOO_LARGE);
+                }
                 Err(_) => Value::sym(self.intern(text)),
             },
-        }
+        })
     }
 }

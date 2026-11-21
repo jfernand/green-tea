@@ -113,6 +113,18 @@ fn a_tail_call_needs_no_root_stack() {
 }
 
 #[test]
+fn an_integer_that_does_not_fit_in_61_bits_is_a_reader_error() {
+    let too_large = Error::Syntax("an integer outside the 61 bits of a value");
+    assert_eq!(value("1152921504606846975"), "1152921504606846975"); // 2^60 - 1
+    assert_eq!(value("-1152921504606846976"), "-1152921504606846976"); // -2^60
+    assert_eq!(lisp().run("1152921504606846976"), Err(too_large)); // 2^60
+    assert_eq!(lisp().run("-1152921504606846977"), Err(too_large));
+    assert_eq!(lisp().run("99999999999999999999"), Err(too_large)); // beyond an i64, too
+    assert_eq!(lisp().run("-99999999999999999999"), Err(too_large));
+    assert_eq!(value("'1+"), "1+"); // a symbol that starts with a digit is still one
+}
+
+#[test]
 fn errors() {
     let run = |source| lisp().run(source).unwrap_err();
     assert_eq!(run("(car 1)"), Error::NotAPair);
