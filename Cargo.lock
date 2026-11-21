@@ -179,6 +179,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "green-tea-trace"
+version = "0.1.0"
+dependencies = [
+ "green-tea-fit",
+]
+
+[[package]]
 name = "green-tea-v1"
 version = "0.1.0"
 dependencies = [

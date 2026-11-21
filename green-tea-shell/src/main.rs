@@ -20,13 +20,15 @@
 //!
 //! `trace on` records every allocation and free on the heap, `session` is a long script
 //! to record, and `replay` runs what was recorded against each of green-tea-fit's policies
-//! and measures the fragmentation (replay.rs).
+//! and measures the fragmentation (replay.rs). `trace dump` writes the recording to the
+//! console as a trace file, for the host to keep (dump.rs).
 
 #![no_std]
 #![no_main]
 
 extern crate alloc;
 
+mod dump;
 mod replay;
 
 use alloc::alloc::Global;
@@ -236,7 +238,9 @@ impl Shell {
                 }
                 None => println!("nothing was being recorded"),
             },
-            _ => println!("usage: trace on|off"),
+            "dump" => self.dump(),
+            "check" => self.check(),
+            _ => println!("usage: trace on|off|dump|check"),
         }
     }
 
@@ -435,6 +439,8 @@ set <name> <words> give a variable a value; `echo $name` prints it
 unset <name>       forget a variable
 vars               the variables
 trace on|off       record the heap's allocations and frees
+trace dump         write what was recorded to the console, as a trace file
+trace check        write it as a file in memory, and read it back
 session            run a script of a few thousand commands, from the heap
 replay             replay what was recorded against each policy
 repeat <n> <cmd>   run a command n times, without its output

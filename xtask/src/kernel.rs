@@ -15,8 +15,10 @@ use std::ptr;
 use std::time::{Duration, Instant};
 use std::{env, thread};
 
+pub mod capture;
+
 pub const USAGE: &str = "\
-usage: cargo xtask kernel [--kernel coop|preempt|overflow|disk|memmap|pool|fit|frag|tlsf|shell|trace]...
+usage: cargo xtask kernel [--kernel coop|preempt|overflow|disk|memmap|pool|fit|frag|tlsf|shell|trace|gtt]...
                           [--target riscv64|aarch64|x86_64]...
                           [--release] [--headless] [--screenshot]
 
@@ -53,6 +55,9 @@ is echoed here, and the run passes when every kernel reports PASS.
   trace     green-tea-shell again: records the heap while the shell runs a script of
             commands, and replays the recording against each policy (riscv64, aarch64,
             x86_64)
+  gtt       green-tea-shell again: records the same script, writes the recording as a
+            trace file in both forms, and reads it back (riscv64, aarch64, x86_64). To get
+            the file out of QEMU: cargo xtask trace
 
   --kernel      only these kernels (default: all)
   --target      only these architectures (default: all three)
@@ -102,6 +107,7 @@ const KERNELS: &[Kernel] = &[
         disk: false,
         input: Some("\ntrace on\nsession\ntrace off\nreplay\n"),
     },
+    Kernel { name: "gtt", package: "green-tea-shell", arches: ALL, test: None, disk: false, input: Some("\ntrace on\nsession\ntrace off\ntrace check\n") },
 ];
 
 const ALL: &[&str] = &["riscv64", "aarch64", "x86_64"];
@@ -266,7 +272,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 let kernel = KERNELS
                     .iter()
                     .find(|k| k.name == value)
-                    .ok_or_else(|| format!("unknown kernel {value}; known: coop, preempt, overflow, disk, memmap, pool, fit, frag, tlsf, shell, trace"))?;
+                    .ok_or_else(|| format!("unknown kernel {value}; known: coop, preempt, overflow, disk, memmap, pool, fit, frag, tlsf, shell, trace, gtt"))?;
                 kernels.push(kernel);
             }
             "-h" | "--help" => return Err(String::new()),
@@ -626,14 +632,17 @@ mod tests {
                 "shell-x86_64",
                 "trace-riscv64",
                 "trace-aarch64",
-                "trace-x86_64"
+                "trace-x86_64",
+                "gtt-riscv64",
+                "gtt-aarch64",
+                "gtt-x86_64"
             ]
         );
     }
 
     #[test]
     fn unsupported_combinations_are_skipped() {
-        assert_eq!(labels(&["--target", "aarch64"]), ["coop-aarch64", "preempt-aarch64", "disk-aarch64", "memmap-aarch64", "pool-aarch64", "fit-aarch64", "frag-aarch64", "tlsf-aarch64", "shell-aarch64", "trace-aarch64"]);
+        assert_eq!(labels(&["--target", "aarch64"]), ["coop-aarch64", "preempt-aarch64", "disk-aarch64", "memmap-aarch64", "pool-aarch64", "fit-aarch64", "frag-aarch64", "tlsf-aarch64", "shell-aarch64", "trace-aarch64", "gtt-aarch64"]);
         let args = ["--kernel".to_string(), "overflow".into(), "--target".into(), "aarch64".into()];
         assert!(parse(&args).is_err());
     }

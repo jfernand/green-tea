@@ -43,6 +43,7 @@ pub mod adversary;
 pub mod buddy;
 pub mod tlsf;
 pub mod trace;
+pub mod tracefile;
 
 pub(crate) const WORD: usize = size_of::<usize>();
 /// Every address handed out is a multiple of this, and so is every block's size.
