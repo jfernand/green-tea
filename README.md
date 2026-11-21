@@ -26,6 +26,7 @@ kernels built on the same context switch:
 | [`green-tea-kmem`](green-tea-kmem) | What a kernel allocates for itself with: page frames from a buddy system that keeps its records in a table, apart from the pages, and slab caches of constructed objects on top. `no_std`; the kernels' task records come from one. |
 | [`green-tea-region`](green-tea-region) | Regions: a bump allocator over chunks taken from the heap, freed all at once. `alloc` returns a reference that lives as long as the borrow of the region, so the borrow checker refuses a use after the region is dropped or reset, and a pointer from a long-lived region into a short-lived one. `no_std`. |
 | [`green-tea-trace`](green-tea-trace) | A command for the host that reads a trace file (`green-tea-fit`'s `tracefile` module: a text form and a binary form) and replays it against each allocator, as the shell's `replay` does in the kernel. `cargo xtask trace` gets such a file out of the kernel, over its serial console. |
+| [`green-tea-measure`](green-tea-measure) | A command for the host that replays one trace file against every allocator here that one thread can use, and prints what each needed: bytes, free blocks searched, instructions (counted by valgrind's callgrind) and time as a distribution. Also the Lisp's programs with explicit frees placed by an oracle, against the same programs on its garbage-collected heaps. |
 | [`green-tea-smp`](green-tea-smp) | Allocating from several CPUs: a spin lock, and a cache of free blocks for each CPU in front of a heap behind the lock. `no_std`; its tests run on the host with real threads. |
 | [`green-tea-lisp`](green-tea-lisp) | A small Lisp: a reader, an evaluator and a printer, over a heap it reaches only through the ten operations of a trait. The first heap counts references. `no_std`; `--kernel lisp` runs it. |
 | [`green-tea-shard`](green-tea-shard) | Allocating from several CPUs with no lock, after mimalloc: pages of one size class each, a free list in every page, and a second list in every page that other CPUs push to with a compare-and-swap. `no_std`; its tests run on the host with real threads. |
@@ -81,7 +82,9 @@ cargo xtask kernel --kernel smp       # four CPUs: the heap behind a lock, then 
 cargo xtask kernel --kernel shard     # four CPUs and no lock: a heap of pages for each, against the caches
 cargo xtask kernel --kernel lisp      # a small Lisp on a heap that counts references
 cargo xtask kernel --kernel gc        # the same Lisp on heaps that mark and sweep, mark and compact, and copy
+cargo xtask kernel --kernel gen       # the same Lisp on a heap with two generations, and what its write barrier records
 cargo xtask kernel --kernel smr       # four CPUs on a lock-free stack and queue: when to free a node
+cargo xtask kernel --kernel incremental  # the same Lisp on a heap that marks and sweeps in steps, paced by a timer
 cargo xtask kernel --kernel shell     # the shell's test, typed at its serial console
 cargo xtask kernel --kernel trace     # the shell records its heap, and replays the trace against each policy
 cargo xtask kernel --kernel safety    # a task corrupts the free list; the allocator hardened, a defence at a time
@@ -90,6 +93,7 @@ cargo xtask kernel --kernel region    # the shell's script again, with its memor
 cargo xtask kernel --kernel gtt       # the shell writes its recording as a trace file, and reads it back
 cargo xtask trace                     # saves the shell's recording to target/kernel/shell-riscv64.gtt
 cargo run --release -p green-tea-trace -- replay target/kernel/shell-riscv64.gtt   # replays it on the host
+cargo run --release -p green-tea-measure -- space target/kernel/shell-riscv64.gtt   # and against every allocator
 cargo xtask shell                     # the shell, on this terminal (--target to pick a board)
 cargo xtask kernel --target aarch64   # just one architecture
 cargo xtask kernel --headless --screenshot   # no windows; saves target/kernel/<kernel>-<arch>.png
@@ -321,7 +325,7 @@ after trimming.
 
 ### Several CPUs
 
-Every kernel boots on one CPU, and all but two tests stay there. `--kernel smp` and
+Every kernel boots on one CPU, and all but three tests stay there. `--kernel smp` and
 `--kernel smr` are run on a machine with four (`-smp 4`), and start the other three
 ([`green-tea-bare/src/cpus.rs`](green-tea-bare/src/cpus.rs)). How is the board's business:
 
@@ -413,6 +417,35 @@ afterwards from being freed and with hazard pointers keeps one; one replaces a v
 copying it while the others read it (`rcu::Rcu`, the shape of read-copy update); and a
 queue of jobs that split themselves in two is run by all four. The crate's own tests run on the host, with
 threads: `cargo test -p green-tea-smr`.
+### A heap with two generations
+
+[`GenHeap`](green-tea-lisp/src/generational.rs) is a fifth heap behind the same trait. Every
+object is made in a nursery at the top of the heap's words, by moving a pointer. A minor
+collection copies what survives to the end of an old space at the bottom, and traces
+nothing there: it starts from the root stack and from a remembered set, which the write
+barrier in `set_field` fills with the old objects that were made to refer to nursery
+objects (`Barrier::Filter`), or with every object stored into (`Barrier::Every`). The
+nursery is at most half of the unused words, so the survivors always fit, and the old
+space is compacted in place when it passes half of the heap.
+
+`--kernel gen` types a few lines at it and prints where one pair is after each, runs seven
+programs (the five, and two that store into old objects) and counts what was copied out of
+the nursery and what the barrier recorded, and shows a minor collection that traces
+nothing with 10,000 objects in the old space, and what a store without the barrier leaves
+behind. The longer tables are made on the host: `cargo run --release -p green-tea-lisp
+--example generations`, and `--example store_cost` under `valgrind --tool=callgrind` for
+what a store costs in instructions.
+### A heap that marks in steps
+
+[`IncHeap`](green-tea-lisp/src/incremental.rs) is `MarkHeap`'s mark and sweep done a few
+objects at a time inside `alloc`, with the program running in between. `set_field` has a
+write barrier (`Barrier::Insertion` shades the object stored, `Barrier::Deletion` the one
+overwritten, `Barrier::None` frees objects in use), objects allocated during marking are
+born white or black (`Birth`), and the steps are paced by allocation, by a tick that
+`alloc` polls, or not at all (`Pace`). `--kernel incremental` shows an object freed in use
+without a barrier, compares the longest step with a whole cycle, and paces the steps with
+a timer interrupt. The tables are made on the host:
+`cargo run --release -p green-tea-lisp --example incremental`.
 
 ### A shell, and an arena
 

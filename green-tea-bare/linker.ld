@@ -53,7 +53,7 @@ SECTIONS
         __stack_top = .;
     }
 
-    /* Memory for the bump allocator (tasks, closures, the run queue). */
+    /* Memory for the heap (tasks, closures, the run queue): a TLSF allocator, see heap.rs. */
     .heap (NOLOAD) : ALIGN(4096) {
         __heap_start = .;
         . += 4M;

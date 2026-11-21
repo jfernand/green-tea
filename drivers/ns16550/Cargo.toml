@@ -1,6 +1,6 @@
 [package]
 name = "green-tea-ns16550"
-description = "A transmit-only 16550 UART driver, memory-mapped or on x86 I/O ports."
+description = "A 16550 UART driver, memory-mapped or on x86 I/O ports."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

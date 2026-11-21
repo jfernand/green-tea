@@ -152,6 +152,18 @@ name = "green-tea-lisp"
 version = "0.1.0"
 
 [[package]]
+name = "green-tea-measure"
+version = "0.1.0"
+dependencies = [
+ "green-tea-fit",
+ "green-tea-kmem",
+ "green-tea-lisp",
+ "green-tea-pool",
+ "green-tea-shard",
+ "green-tea-smp",
+]
+
+[[package]]
 name = "green-tea-ns16550"
 version = "0.1.0"
 dependencies = [

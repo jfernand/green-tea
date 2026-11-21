@@ -8,7 +8,7 @@
 //!   here: [`fw_cfg`], [`ramfb`], [`pci`], [`virtio`], [`virtio_blk`]. Here are [`console`]
 //!   (`println!` on the board's serial port) and [`screen`], the demos' layout drawn on
 //!   the framebuffer.
-//! - [`heap`] (the global allocator: a free list searched first-fit, from [`fit`]),
+//! - [`heap`] (the global allocator: TLSF, from [`fit`]),
 //!   [`arena`] (a bump allocator that can be reset), [`kmem`] (page frames and slab caches,
 //!   under the heap: where task records come from), [`stack`]
 //!   (task stacks with guard pages, from a pool), [`memory`] (where the linker put each

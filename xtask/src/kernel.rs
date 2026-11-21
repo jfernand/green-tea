@@ -72,6 +72,14 @@ is echoed here, and the run passes when every kernel reports PASS.
             with their nodes on the heap, a pop interrupted where freeing a node at once
             corrupts the stack, and four CPUs sharing both with epochs and with hazard
             pointers (riscv64, aarch64, x86_64)
+  gen       green-tea-coop's test of a heap with two generations: the same Lisp with a
+            nursery in front of an old space, a write barrier and a remembered set, with
+            what dies in the nursery and what the barrier records counted (riscv64,
+            aarch64, x86_64)
+  incremental  green-tea-coop's test of a heap that marks and sweeps in steps between the
+            steps of the same Lisp: an object freed in use without a write barrier and
+            kept by either of two, the longest step against a whole cycle, and steps
+            paced by a timer interrupt (riscv64, aarch64, x86_64)
   shell     green-tea-shell: types two commands at the shell on the serial console; the
             second is its `test`, which checks that commands free what they allocate,
             from the heap or from an arena
@@ -131,6 +139,8 @@ const KERNELS: &[Kernel] = &[
     Kernel { name: "shard", package: "green-tea-coop", arches: ALL, test: Some("shard"), disk: false, input: None },
     Kernel { name: "gc", package: "green-tea-coop", arches: ALL, test: Some("gc"), disk: false, input: None },
     Kernel { name: "smr", package: "green-tea-coop", arches: ALL, test: Some("smr"), disk: false, input: None },
+    Kernel { name: "gen", package: "green-tea-coop", arches: ALL, test: Some("gen"), disk: false, input: None },
+    Kernel { name: "incremental", package: "green-tea-coop", arches: ALL, test: Some("incremental"), disk: false, input: None },
     Kernel {
         name: "shell",
         package: "green-tea-shell",

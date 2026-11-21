@@ -1,0 +1,22 @@
+[package]
+name = "green-tea-measure"
+description = "Replays one recorded trace against every single-threaded allocator of the workspace, and reports what each needed: bytes, searches, instructions, and time as a distribution."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+# A program for the host:
+#   cargo run --release -p green-tea-measure -- space shell.gtt
+# It has no dependencies outside the workspace. Instruction counts come from valgrind,
+# which it runs itself if it is installed.
+[dependencies]
+green-tea-fit = { path = "../green-tea-fit" }
+green-tea-pool = { path = "../green-tea-pool" }
+green-tea-kmem = { path = "../green-tea-kmem" }
+green-tea-smp = { path = "../green-tea-smp" }
+green-tea-shard = { path = "../green-tea-shard" }
+green-tea-lisp = { path = "../green-tea-lisp" }
