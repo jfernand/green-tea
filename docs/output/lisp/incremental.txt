@@ -1,0 +1,95 @@
+seven programs in 4096 words: the longest stop, in units of work
+                         Chapter 13     a cycle whole       a cycle in steps of 4 units an allocation
+  program   allocated  collections  most  cycles  most     cycles  steps  most  stalls  most root slots
+  list           8190            9  1292      19   803         20   4188    24       0               24
+  fib            2002            1  1063       4   596          3    473    43       0               43
+  alist         14309           17  1334      38   898         38   8417    63       0               63
+  ring           9130            9  1200      21   700         21   3905    25       0               25
+  closure        2877            2  1124       6   627          5    885    18       0               18
+  nreverse      17196           21  1397      59   922         58  14798    14       0               14
+  queue          7164            7  1210      17   711         16   3237    19       0               19
+
+the same runs: the work of the cycles, in objects
+            a cycle whole     a cycle in steps of 4 units an allocation (deletion barrier)
+  program   marked   swept    marked   swept  born marked  kept as garbage  most in one cycle
+  list        3037   11015      3296   13196         1413              935                 72
+  fib          134    2076       102    1600           59               40                 12
+  alist       7646   22501      7529   25625         3496             2135                 90
+  ring        2581   11592      2576   12897         1270              688                 40
+  closure      437    3210       364    2845          205              119                 23
+  nreverse   17388   35958     17186   40739         5973             4367                 76
+  queue       2292    9418      2187    9919         1135              605                 37
+
+the same programs, 4 units an allocation: what the write barrier did
+                    insertion, born white           insertion, born black           deletion
+  program   stores  ran  shaded  root scans  slots  ran  shaded  root scans  slots  ran  shaded  root scans  slots
+  list           0    0       0        2848  68838    0       0          42    886    0       0          21    438
+  fib            0    0       0          14    557    0       0           8    318    0       0           4    166
+  alist          0    0       0        1449  49052    0       0          78   2311    0       0          39   1271
+  ring         100   11       9         471   9340    8       0          42    897    8       0          21    443
+  closure      100    4       4          47    826    4       0          12    203    4       0           6    100
+  nreverse    4000 2940     404        9533 125434 1078      28         118   1590 1078      56          59    766
+  queue       1500  144      47         103   1300  123       6          34    421  123      16          17    241
+
+the same runs: garbage that a cycle kept, in objects
+            insertion, born white           insertion, born black           deletion
+  program   cycles  stalls  kept  most      cycles  stalls  kept  most      cycles  stalls  kept  most
+  list          18       0  2302   183           20       0   935    72           20       0   935    72     
+  fib            3       0     4     2            3       0    40    12            3       0    40    12     
+  alist         40       0  3436   114           38       0  2148    90           38       0  2135    90     
+  ring          20       0   724    62           21       0   688    40           21       0   688    40     
+  closure        5       0    78    31            5       0   117    25            5       0   119    23     
+  nreverse      38      25  9758   441           58       0  4367    76           58       0  4367    76     
+  queue         15       0   173    16           16       0   605    37           16       0   605    37     
+
+alist, deletion barrier, a reserve of 512 objects: the pace, in units at each allocation
+   units  cycles   steps  most units in a step  stalls  most units in a stall  kept as garbage
+       1      32   13581                    59      18                   1915             3775
+       2      23   13741                    68       0                      0             2530
+       3      38   11536                    47       0                      0             2434
+       4      38    8417                    63       0                      0             2135
+       8      38    4094                    71       0                      0              873
+      16      38    1993                    75       0                      0              505
+      64      38     507                    75       0                      0               52
+     256      38     152                   256       0                      0                0
+
+alist, deletion barrier: stalls, by pace and by reserve
+  reserve   1 unit  2 units  3 units  4 units  8 units  16 units
+       64       30       16        1        1        0        0
+      128       22       18        0        0        0        0
+      256       21        0        0        0        0        0
+      512       18        0        0        0        0        0
+     1024       16        0        0        0        0        0
+
+alist, deletion barrier: the same work in fewer, longer steps (a tick at every so many allocations)
+  a tick every  units a tick  cycles  steps  most units in a step  stalls  kept as garbage
+             1             4      38   8417                    63       0             2135
+             4            16      38   2165                    67       0             2222
+            16            64      38    571                    71       0             2028
+            64           256      38    152                   256       0               85
+           256          1024      30     37                  1024       0                0
+
+no barrier, 4 units an allocation:
+  program   reachable objects freed  what the program did
+  list                            0  computed 50500
+  fib                             0  computed 610
+  alist                           0  computed 250
+  ring                            0  computed 7200
+  closure                         0  computed 5500
+  nreverse                      151  stopped: a freed object was used: 1590
+  queue                           0  computed 125250
+
+list in 65536 words, with a cycle started whenever none is in progress: objects born white and black
+  barrier and birth   units  cycles finished  scans of the root stack  root slots read  marked in them
+  insertion, white        1                0                     1859            40437               0
+  insertion, white        2                8                     1580            32663            3141
+  insertion, white        4               19                     3094            73276            6063
+  insertion, white        8               36                     5014           110393            9811
+  insertion, black        1                8                       18              308             762
+  insertion, black        2               22                       46              867            2870
+  insertion, black        4               57                      116             2333            8310
+  insertion, black        8              139                      280             5768           21131
+  deletion                1                9                       10              166             809
+  deletion                2               22                       23              408            2870
+  deletion                4               58                       59             1154            8355
+  deletion                8              142                      143             2896           21280

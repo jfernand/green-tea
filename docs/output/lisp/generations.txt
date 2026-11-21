@@ -1,0 +1,152 @@
+objects copied out of the nursery, in a heap of 1048576 words, by the size of the nursery in words:
+  program   allocated     32     64    128    256    512   1024   2048   4096
+  list           8190   4613   3254   2660   2284   1964   1639   1117    586
+  fib            2002    652    429    281    188    118     75     46     33
+  alist         14309  10280   8801   7149   5092   3077   1825   1162    698
+  ring           9130   4670   3002   2104   1624   1010    547    336    212
+  closure        2877   1120    820    599    374    208    130     99     81
+  counters       5002   1910    862    546    347    252    189    154    136
+  slots          5499   2662   1773   1381   1131   1003    917    631    377
+the same, as a percentage of the objects allocated:
+  list                  56.3   39.7   32.5   27.9   24.0   20.0   13.6    7.2
+  fib                   32.6   21.4   14.0    9.4    5.9    3.7    2.3    1.6
+  alist                 71.8   61.5   50.0   35.6   21.5   12.8    8.1    4.9
+  ring                  51.2   32.9   23.0   17.8   11.1    6.0    3.7    2.3
+  closure               38.9   28.5   20.8   13.0    7.2    4.5    3.4    2.8
+  counters              38.2   17.2   10.9    6.9    5.0    3.8    3.1    2.7
+  slots                 48.4   32.2   25.1   20.6   18.2   16.7   11.5    6.9
+minor collections in those runs, and the most objects one of them copied:
+  list                1021/10 488/21 241/39 120/74 60/113 29/159 14/199 7/162 
+  fib                 249/10 124/21 62/33  31/35  15/36  7/34   3/33   1/33  
+  alist               1730/10 863/21 430/42 214/81 107/155 53/169 26/178 13/190
+  ring                1138/10 561/21 279/39 139/74 69/122 34/125 17/123 8/125 
+  closure             357/10 178/21 89/42  44/72  22/74  11/70  5/74   2/74  
+  counters            620/10 310/21 155/38 77/60  38/108 19/125 9/127  4/127 
+  slots               683/10 338/21 167/40 82/64  41/111 20/139 10/172 5/172 
+five programs in 4096 words: a heap that copies, one that compacts, and two generations:
+  program  heap             collections  minor  major  copied  marked  traced  most copied  most marked  walked  words moved
+  list     copying                   19                                  3169                                 0         9739
+  list     mark-compact               8                                  1402                             26925         2293
+  list     nursery of 128           245    241      4    2660     532    3192           39          143    7773         9379
+  list     nursery of 256           124    120      4    2284     793    3077           74          199    7959         8742
+  list     nursery of 512            63     60      3    1964     552    2516          113          199    6213         7172
+  list     nursery of 1024           31     29      2    1639     370    2009          159          197    4347         5855
+  list     nursery of half           22     20      2    1426     290    1716          199          175    4065         4958
+  fib      copying                    4                                   133                                 0          444
+  fib      mark-compact               1                                    33                              3090          107
+  fib      nursery of 128            62     62      0     281       0     281           33            0       0         1102
+  fib      nursery of 256            31     31      0     188       0     188           35            0       0          730
+  fib      nursery of 512            15     15      0     118       0     118           36            0       0          450
+  fib      nursery of 1024            7      7      0      75       0      75           34            0       0          278
+  fib      nursery of half            4      4      0      55       0      55           33            0       0          198
+  alist    copying                   37                                  7307                                 0        22692
+  alist    mark-compact              15                                  2954                             49785         2657
+  alist    nursery of 128           447    430     17    7149    3405   10554           42          224   30666        29319
+  alist    nursery of 256           225    214     11    5092    2253    7345           81          235   20250        20469
+  alist    nursery of 512           113    107      6    3077    1250    4327          155          233   11412        12216
+  alist    nursery of 1024           56     53      3    1825     659    2484          169          235    5865         7357
+  alist    nursery of half           40     38      2    1482     377    1859          178          190    3744         5668
+  ring     copying                   21                                  2573                                 0         8048
+  ring     mark-compact               9                                  1102                             28944          721
+  ring     nursery of 128           283    279      4    2104     495    2599           39          125    7077         8033
+  ring     nursery of 256           142    139      3    1624     363    1987           74          123    5460         6047
+  ring     nursery of 512            70     69      1    1010     115    1125          122          115    1827         3788
+  ring     nursery of 1024           34     34      0     547       0     547          125            0       0         1840
+  ring     nursery of half           21     21      0     372       0     372          123            0       0         1236
+  closure  copying                    6                                   436                                 0         1367
+  closure  mark-compact               2                                   148                              6294          264
+  closure  nursery of 128            90     89      1     599      73     672           42           73    1650         2484
+  closure  nursery of 256            44     44      0     374       0     374           72            0       0         1396
+  closure  nursery of 512            22     22      0     208       0     208           74            0       0          751
+  closure  nursery of 1024           11     11      0     130       0     130           70            0       0          449
+  closure  nursery of half            5      5      0      97       0      97           74            0       0          322
+the write barrier, in 4096 words with a nursery of 256:
+  program   allocated  stores  into old  old to young  recorded  most remembered  objects scanned  references found  recorded by the barrier that tests nothing
+  list           8190       0         0             0         0                0                0                 0          0
+  fib            2002       0         0             0         0                0                0                 0          0
+  alist         14309       0         0             0         0                0                0                 0          0
+  ring           9130     100        48            30        30                1               30                30        100
+  closure        2877     100         0             0         0                0                0                 0        100
+  counters       5002     250       250             0         0                0                0                 0        250
+  slots          5499     250       250           250       250                5              250               250        250
+root slots read by the minor collections of those runs, and objects they copied:
+  list       120 minor collections read   2562 root slots and    0 remembered objects, and copied  2284 objects
+  fib         31 minor collections read   1282 root slots and    0 remembered objects, and copied   188 objects
+  alist      214 minor collections read   6993 root slots and    0 remembered objects, and copied  5092 objects
+  ring       139 minor collections read   2893 root slots and   30 remembered objects, and copied  1624 objects
+  closure     44 minor collections read    810 root slots and    0 remembered objects, and copied   374 objects
+  counters    77 minor collections read   1099 root slots and    0 remembered objects, and copied   347 objects
+  slots       82 minor collections read   1218 root slots and  250 remembered objects, and copied  1131 objects
+promoted objects, in 4096 words with a nursery of 256, and how many were dead when the program ended:
+  program   allocated  promoted  dead at the end  reachable at the end
+  list           8190      2284             2191                    93
+  fib            2002       188              164                    24
+  alist         14309      5092             4947                   145
+  ring           9130      1624             1514                   110
+  closure        2877       374              308                    66
+  counters       5002       347              201                   146
+  slots          5499      1138              944                   194
+the smallest heap each program computes its value in, in words:
+  program   mark-compact  copying  two generations, nursery of 256 at most
+  list               614     1228              618
+  fib                134      268              138
+  alist              766     1532              769
+  ring               396      792              400
+  closure            237      474              241
+1000000 stores into one pair, run 1; the last two columns are times, and vary from run to run:
+  heap                         the pair  the value            recorded  ns for each store  ns for the next minor collection
+  copying, no barrier                    an integer                  0              2.6                                 -
+  two generations, filter      young     an integer                  0              3.2                               182
+  two generations, filter      old       an integer                  0              3.1                                79
+  two generations, filter      old       an old reference            0              3.5                                28
+  two generations, filter      old       a young reference           1              3.8                               162
+  two generations, every store young     an integer            1000000              3.8                            503137
+  two generations, every store old       an integer            1000000              3.8                           3367969
+  two generations, every store old       an old reference      1000000              3.7                           3373921
+  two generations, every store old       a young reference     1000000              3.8                           3492720
+1000000 stores into one pair, run 2; the last two columns are times, and vary from run to run:
+  heap                         the pair  the value            recorded  ns for each store  ns for the next minor collection
+  copying, no barrier                    an integer                  0              2.5                                 -
+  two generations, filter      young     an integer                  0              3.1                               265
+  two generations, filter      old       an integer                  0              3.1                                61
+  two generations, filter      old       an old reference            0              3.4                                42
+  two generations, filter      old       a young reference           1              3.8                                81
+  two generations, every store young     an integer            1000000              3.8                            490878
+  two generations, every store old       an integer            1000000              3.8                           3466911
+  two generations, every store old       an old reference      1000000              3.7                           3370452
+  two generations, every store old       a young reference     1000000              3.8                           3475733
+1000000 stores into one pair, run 3; the last two columns are times, and vary from run to run:
+  heap                         the pair  the value            recorded  ns for each store  ns for the next minor collection
+  copying, no barrier                    an integer                  0              2.5                                 -
+  two generations, filter      young     an integer                  0              3.1                                78
+  two generations, filter      old       an integer                  0              3.1                                65
+  two generations, filter      old       an old reference            0              3.4                                36
+  two generations, filter      old       a young reference           1              3.9                               142
+  two generations, every store young     an integer            1000000              3.8                            478271
+  two generations, every store old       an integer            1000000              3.9                           3475412
+  two generations, every store old       an old reference      1000000              3.8                           3507148
+  two generations, every store old       a young reference     1000000              4.1                           3876210
+one collection with a list that is kept and a nursery of 1024 words of garbage, run 1; the last column is a time:
+  kept objects  collection          traced   walked  words moved  nanoseconds
+          1000  minor                    0        0            0           70
+          1000  minor and major       1000     3000            0        13852
+          1000  copying               1000        0         3000         7287
+        100000  minor                    0        0            0           64
+        100000  minor and major     100000   300000            0      1238014
+        100000  copying             100000        0       300000      1483291
+one collection with a list that is kept and a nursery of 1024 words of garbage, run 2; the last column is a time:
+  kept objects  collection          traced   walked  words moved  nanoseconds
+          1000  minor                    0        0            0           52
+          1000  minor and major       1000     3000            0        11346
+          1000  copying               1000        0         3000         6522
+        100000  minor                    0        0            0           52
+        100000  minor and major     100000   300000            0      1263487
+        100000  copying             100000        0       300000       683529
+one collection with a list that is kept and a nursery of 1024 words of garbage, run 3; the last column is a time:
+  kept objects  collection          traced   walked  words moved  nanoseconds
+          1000  minor                    0        0            0           51
+          1000  minor and major       1000     3000            0        11135
+          1000  copying               1000        0         3000         6684
+        100000  minor                    0        0            0           64
+        100000  minor and major     100000   300000            0      1351153
+        100000  copying             100000        0       300000       693979
