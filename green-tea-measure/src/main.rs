@@ -658,7 +658,7 @@ fn lisp_lifetimes() -> Result<bool, String> {
     let mut all = Vec::new();
     for program in &PROGRAMS {
         let made = lifetimes(program)?;
-        let died: usize = made.deaths.iter().map(Vec::len).sum();
+        let died = made.deaths.iter().map(Vec::len).sum::<usize>() + made.died_after_last;
         println!(
             "  {:8} {:9} {:8} {:21} {:11} {:11}",
             program.name,
