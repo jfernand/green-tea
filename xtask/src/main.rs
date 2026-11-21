@@ -58,6 +58,10 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         Some("test") => match parse_test_args(&args[1..]) {
             Ok((targets, profiles)) => test(&targets, &profiles),
+            Err(e) if e.is_empty() => {
+                println!("{USAGE}");
+                ExitCode::SUCCESS
+            }
             Err(e) => {
                 eprintln!("error: {e}\n\n{USAGE}");
                 ExitCode::FAILURE
@@ -82,6 +86,9 @@ fn parse_test_args(args: &[String]) -> Result<(Vec<&'static Target>, Vec<&'stati
     let mut profiles = Vec::new();
     let mut args = args.iter();
     while let Some(arg) = args.next() {
+        if matches!(arg.as_str(), "-h" | "--help") {
+            return Err(String::new());
+        }
         let value = args.next().ok_or_else(|| format!("{arg} needs a value"))?;
         match arg.as_str() {
             "--target" => targets.push(
@@ -207,4 +214,17 @@ fn workspace_root() -> PathBuf {
         .parent()
         .expect("xtask lives one level below the workspace root")
         .to_path_buf()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_test_args;
+
+    #[test]
+    fn test_help_asks_for_the_usage() {
+        for flag in ["--help", "-h"] {
+            let parsed = parse_test_args(&[flag.to_string()]).map(|_| ());
+            assert_eq!(parsed, Err(String::new()), "{flag}");
+        }
+    }
 }
