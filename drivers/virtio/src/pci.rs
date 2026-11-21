@@ -159,6 +159,7 @@ impl Transport for PciTransport {
     }
 
     fn setup_queue(&mut self, queue: u16, size: u16, descriptors: u64, driver: u64, device: u64) {
+        assert!(usize::from(queue) < MAX_QUEUES, "virtio queue {queue} is past what this driver can notify");
         self.write(QUEUE_SELECT, queue);
         self.write(QUEUE_SIZE, size);
         self.write_u64(QUEUE_DESC, descriptors);
@@ -191,6 +192,7 @@ mod tests {
     use super::*;
     use crate::queue::Queue;
     use std::boxed::Box;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     const F: Function = Function { bus: 0, device: 0, function: 0 };
     const COMMAND: usize = 0x04;
@@ -295,5 +297,17 @@ mod tests {
     #[should_panic(expected = "never set up")]
     fn notifying_a_queue_past_the_table_panics() {
         FakeDevice::new(true).transport().notify(MAX_QUEUES as u16);
+    }
+
+    #[test]
+    fn setting_up_a_queue_past_the_table_writes_no_register() {
+        let device = FakeDevice::new(true);
+        let mut transport = device.transport();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            transport.setup_queue(MAX_QUEUES as u16, 8, 0x1000, 0x2000, 0x3000);
+        }));
+        assert!(result.is_err());
+        assert_eq!(device.bar_u16(QUEUE_SELECT), 0, "the queue was selected");
+        assert_eq!(device.bar_u16(QUEUE_SIZE), 16, "the queue's size was written");
     }
 }
