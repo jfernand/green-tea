@@ -193,14 +193,8 @@ impl Nvme {
         if depth < 2 {
             return Err("the NVMe controller's queues are too short");
         }
-        // CAP.TO: how long the controller may take to change state, in units of 500 ms.
-        let ready_ms = (cap >> 24 & 0xff).max(1) as u32 * 500;
-
-        // Clearing enable while the controller is on its way up is undefined: let it finish.
-        let enabled = read32(base + CC) & CC_ENABLE != 0;
-        wait_ready(base, enabled, ready_ms, delay_ms)?;
-        write32(base + CC, read32(base + CC) & !CC_ENABLE);
-        wait_ready(base, false, ready_ms, delay_ms)?;
+        let ready_ms = ready_timeout(cap);
+        disable(base, ready_ms, delay_ms)?;
 
         let start = memory as usize;
         // SAFETY: the caller gave us this memory, and the controller is off.
@@ -247,6 +241,14 @@ impl Nvme {
         let create_sq = command(CREATE_IO_SQ, 0, io_sq as u64, queue, (IO as u32) << 16 | PHYSICALLY_CONTIGUOUS, 0);
         nvme.run(ADMIN, create_sq).map_err(|_| FAILED)?;
         Ok(nvme)
+    }
+
+    /// Turn off the controller at `base`, so that it stops using its memory.
+    ///
+    /// # Safety
+    /// `base` must be the controller's mapped registers, and no driver may be using it.
+    pub unsafe fn disable(base: usize, delay_ms: fn(u64)) -> Result<(), &'static str> {
+        disable(base, ready_timeout(read64(base + CAP)), delay_ms)
     }
 
     /// The number of blocks in the namespace.
@@ -378,6 +380,34 @@ impl Nvme {
     }
 }
 
+/// CAP.TO: how long the controller may take to change state, in units of 500 ms.
+fn ready_timeout(cap: u64) -> u32 {
+    (cap >> 24 & 0xff).max(1) as u32 * 500
+}
+
+/// Clear CC.EN and wait for the controller to stop. Clearing it while the controller is on
+/// its way up is undefined, so we let that finish, unless it has failed: then this reset
+/// is the only way out.
+fn disable(base: usize, ready_ms: u32, delay_ms: fn(u64)) -> Result<(), &'static str> {
+    let enabled = read32(base + CC) & CC_ENABLE != 0;
+    if let Err(e) = wait_ready(base, enabled, ready_ms, delay_ms)
+        && read32(base + CSTS) & CSTS_FATAL == 0
+    {
+        return Err(e);
+    }
+    write32(base + CC, read32(base + CC) & !CC_ENABLE);
+    wait_ready(base, false, ready_ms, delay_ms)?;
+    // A failed controller isn't ready either, so give its fatal flag time to clear too. If
+    // it stays set, enabling the controller again reports it.
+    for _ in 0..ready_ms {
+        if read32(base + CSTS) & CSTS_FATAL == 0 {
+            break;
+        }
+        delay_ms(1);
+    }
+    Ok(())
+}
+
 /// Wait for CSTS.RDY to equal `ready`.
 fn wait_ready(base: usize, ready: bool, timeout_ms: u32, delay_ms: fn(u64)) -> Result<(), &'static str> {
     for _ in 0..=timeout_ms {
@@ -420,6 +450,8 @@ mod tests {
         wrong_id: bool,
         log: Vec<(u32, u64, u32)>,
         format: u32,
+        /// In a fatal state, which only clearing CC.EN ends.
+        fatal: bool,
     }
 
     std::thread_local! {
@@ -439,6 +471,13 @@ mod tests {
             let registers = f.registers.as_ptr() as usize;
             let at = move |offset: usize| registers + offset;
             let enabled = read32(at(CC)) & CC_ENABLE;
+            if f.fatal {
+                if enabled == 1 {
+                    return;
+                }
+                f.fatal = false;
+                write32(at(CSTS), 0);
+            }
             if enabled != read32(at(CSTS)) & CSTS_READY {
                 write32(at(CSTS), enabled);
                 if enabled == 1 {
@@ -524,7 +563,15 @@ mod tests {
     }
 
     fn start(format: u32) -> (Result<Nvme, &'static str>, Box<Memory>) {
+        start_in(format, false)
+    }
+
+    fn start_in(format: u32, fatal: bool) -> (Result<Nvme, &'static str>, Box<Memory>) {
         let mut registers = Box::new([0u32; 0x1000]);
+        if fatal {
+            registers[CC / 4] = CC_ENABLE;
+            registers[CSTS / 4] = CSTS_FATAL;
+        }
         // Queues of 64, 4 KiB pages, NVM commands, a doorbell stride of 4.
         registers[0] = 63 | 1 << 24;
         registers[1] = 1 << 5;
@@ -540,6 +587,7 @@ mod tests {
             wrong_id: false,
             log: Vec::new(),
             format,
+            fatal,
         };
         FAKE.with(|f| *f.borrow_mut() = Some(fake));
         let mut memory = Box::new(Memory::new());
@@ -557,6 +605,25 @@ mod tests {
         assert_eq!(nvme.capacity(), BLOCKS as u64);
         assert_eq!(nvme.block_size(), BLOCK);
         assert_eq!(nvme.serial(), b"green-tea-disk");
+    }
+
+    #[test]
+    fn a_controller_in_a_fatal_state_is_reset() {
+        let (nvme, _memory) = start_in(LBA_512, true);
+        assert_eq!(nvme.unwrap().capacity(), BLOCKS as u64);
+    }
+
+    #[test]
+    fn a_disabled_controller_has_stopped() {
+        let (nvme, _memory) = start(LBA_512);
+        nvme.unwrap();
+        // SAFETY: the fake's registers, and the driver above is gone.
+        unsafe { Nvme::disable(base(), step) }.unwrap();
+        with(|f| {
+            let registers = f.registers.as_ptr() as usize;
+            assert_eq!(read32(registers + CC) & CC_ENABLE, 0);
+            assert_eq!(read32(registers + CSTS) & CSTS_READY, 0);
+        });
     }
 
     #[test]

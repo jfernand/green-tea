@@ -104,6 +104,8 @@ static ECAM_BUSES: AtomicU32 = AtomicU32::new(0);
 /// What the NVMe controller reads and writes, for the one driver `find_nvme` makes.
 static mut NVME_MEMORY: green_tea_nvme::Memory = green_tea_nvme::Memory::new();
 static NVME_TAKEN: AtomicBool = AtomicBool::new(false);
+/// How many NVMe controllers `find_nvme` looks through.
+const MAX_NVME: usize = 8;
 static KEYBOARD_BUSY: AtomicBool = AtomicBool::new(false);
 static mut KEYBOARD: Keyboard = Keyboard::new();
 /// The test named on the command line.
@@ -254,10 +256,11 @@ fn init_cpus(acpi: Option<&Acpi<Identity4G>>) {
 }
 
 impl Pc {
-    /// Start the first NVMe controller on the PCI bus. Resetting it is safe for what's on
-    /// the disk, and nothing is written unless the caller writes. Can be called once, and
-    /// only while one CPU is running, since it changes the page tables.
-    pub fn find_nvme() -> Result<Option<Nvme>, &'static str> {
+    /// Start the NVMe controller whose serial number is `serial`. Finding it means starting
+    /// each controller to ask, and turning off the ones that don't match. Nothing is read
+    /// from or written to their disks. Can be called once, and only while one CPU is
+    /// running, since it changes the page tables.
+    pub fn find_nvme(serial: &[u8]) -> Result<Option<Nvme>, &'static str> {
         if NVME_TAKEN.swap(true, Ordering::AcqRel) {
             return Err("the NVMe driver is already in use");
         }
@@ -267,18 +270,32 @@ impl Pc {
         }
         let buses = ECAM_BUSES.load(Ordering::Relaxed);
         let ecam = Ecam(base as usize);
-        let mut found = None;
+        let mut controllers = [None; MAX_NVME];
+        let mut count = 0;
         ecam.for_each_function_on((buses >> 8) as u8..=buses as u8, |function| {
-            if found.is_none() && ecam.read_u32(function, 8) >> 8 == green_tea_nvme::PCI_CLASS {
-                found = ecam.bar(function, 0).map(|bar| (function, bar));
+            if count < MAX_NVME
+                && ecam.read_u32(function, 8) >> 8 == green_tea_nvme::PCI_CLASS
+                && let Some(bar) = ecam.bar(function, 0)
+            {
+                controllers[count] = Some((function, bar));
+                count += 1;
             }
         });
-        let Some((function, bar)) = found else { return Ok(None) };
-        paging::map_device(bar as usize, green_tea_nvme::REGISTERS)?;
-        ecam.enable(function);
-        // SAFETY: the function's registers, just mapped and enabled. NVME_TAKEN makes this
-        // the only driver for them, and the only user of NVME_MEMORY, which is in .bss.
-        unsafe { Nvme::new(bar as usize, &raw mut NVME_MEMORY, crate::delay_ms) }.map(Some)
+        for (function, bar) in controllers.into_iter().flatten() {
+            paging::map_device(bar as usize, green_tea_nvme::REGISTERS)?;
+            ecam.enable(function);
+            // SAFETY: the function's registers, just mapped and enabled. NVME_TAKEN makes
+            // this the only driver, and the last controller was off before this one starts,
+            // so one at a time uses NVME_MEMORY, which is in .bss.
+            match unsafe { Nvme::new(bar as usize, &raw mut NVME_MEMORY, crate::delay_ms) } {
+                Ok(nvme) if nvme.serial() == serial => return Ok(Some(nvme)),
+                Ok(nvme) => crate::println!("nvme: passing over {:?}", core::str::from_utf8(nvme.serial()).unwrap_or("?")),
+                Err(e) => crate::println!("nvme: {e}"),
+            }
+            // SAFETY: as above, and the driver for it is gone.
+            unsafe { Nvme::disable(bar as usize, crate::delay_ms) }?;
+        }
+        Ok(None)
     }
 }
 
