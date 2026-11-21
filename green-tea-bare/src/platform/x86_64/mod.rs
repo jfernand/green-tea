@@ -1,7 +1,10 @@
-//! QEMU `q35`, x86_64. QEMU boots the ELF through PVH: it finds the entry point in a Xen
-//! ELF note and jumps there in 32-bit protected mode, paging off. `_start` then does what
-//! a bootloader would: identity-map the first 4 GiB with 2 MiB pages, turn on long mode,
-//! and far-jump into 64-bit code.
+//! What the x86_64 boards share: the 32-bit entry that builds an identity map and enters
+//! long mode, waking other CPUs, interrupts, the local APIC timer, and paging. Each board
+//! says how it was booted and where its devices are: [`q35`] is QEMU's machine.
+//!
+//! `_start` is entered in 32-bit protected mode with paging off. It does what a bootloader
+//! would: identity-map the first 4 GiB with 2 MiB pages, turn on long mode, and far-jump
+//! into 64-bit code.
 //!
 //! The x86_64-unknown-none target is soft-float (no SSE), so nothing needs enabling for
 //! floating point, and neither swap_context nor the interrupt entry has float registers to
@@ -26,32 +29,18 @@
 //! leaves every page of the heap out. A page fault there maps the page
 //! (`crate::pages::fault`), and the exception stub returns to the instruction that faulted.
 
-use super::{Platform, Qemu, TimerInterrupt, VirtioBus};
-use crate::{Framebuffer, Global};
+use super::{Board, Platform, TimerInterrupt};
+use crate::Global;
 use crate::{pages, stack};
 use core::arch::{asm, global_asm};
 use core::ptr::{read_volatile, write_volatile};
-use green_tea_fw_cfg::IoPorts;
 use green_tea_io::port::outb;
-use green_tea_ns16550::Ns16550Port;
-use green_tea_pci::Ecam;
-use green_tea_virtio::{self as virtio, AnyTransport};
 
-pub struct Q35;
+mod q35;
+pub use q35::Q35;
 
 global_asm!(
     r#"
-    # PVH: "XEN_ELFNOTE_PHYS32_ENTRY" (type 18) holds the 32-bit entry point.
-    .section .note.Xen, "a", @note
-    .balign 4
-    .long 4
-    .long 4
-    .long 18
-    .asciz "Xen"
-    .balign 4
-    .long _start
-    .balign 4
-
     .section .text.entry, "ax"
     .code32
     .globl _start
@@ -223,137 +212,9 @@ static mut green_tea_ap_stack: u64 = 0;
 /// CPU shares.
 #[unsafe(no_mangle)]
 extern "C" fn green_tea_secondary() -> ! {
-    let cpu = Q35::cpu();
+    let cpu = Board::cpu();
     traps::join(cpu);
     crate::cpus::enter(cpu)
-}
-
-const HPET: usize = 0xfed0_0000;
-const HPET_CAPABILITIES: *const u64 = HPET as *const u64;
-const HPET_CONFIG: *mut u64 = (HPET + 0x10) as *mut u64;
-const HPET_COUNTER: *const u64 = (HPET + 0xf0) as *const u64;
-
-impl Platform for Q35 {
-    const NAME: &'static str = "x86_64";
-    const GUARD_PAGES: bool = true;
-    const DEMAND_PAGING: bool = true;
-
-    fn set_mapped(page: usize, mapped: bool) -> bool {
-        paging::set_mapped(page, mapped)
-    }
-
-    fn is_mapped(page: usize) -> bool {
-        paging::is_mapped(page)
-    }
-
-    fn walk(addr: usize) -> [Option<pages::Step>; 4] {
-        paging::walk(addr)
-    }
-
-    /// Start the HPET's main counter, which `ticks` reads. Catch exceptions (so a fault
-    /// panics with a report instead of triple-faulting into a reset), and leave out the
-    /// guard pages and the heap's pages.
-    fn init() {
-        unsafe { write_volatile(HPET_CONFIG, read_volatile(HPET_CONFIG) | 1) };
-        traps::init();
-        paging::enable_guard_pages();
-        paging::unmap_heap();
-    }
-
-    /// COM1, a 16550 on I/O ports.
-    fn putc(byte: u8) {
-        Ns16550Port(0x3f8).putc(byte);
-    }
-
-    fn getc() -> Option<u8> {
-        Ns16550Port(0x3f8).getc()
-    }
-
-    /// The HPET's main counter.
-    fn ticks() -> u64 {
-        unsafe { read_volatile(HPET_COUNTER) }
-    }
-
-    fn ticks_per_ms() -> u64 {
-        let period_fs = unsafe { read_volatile(HPET_CAPABILITIES) } >> 32; // femtoseconds per tick
-        1_000_000_000_000 / period_fs
-    }
-
-    fn halt() -> ! {
-        loop {
-            unsafe { asm!("hlt") };
-        }
-    }
-
-    /// The local APIC's id: each CPU reads its own APIC at the same address.
-    fn cpu() -> usize {
-        (lapic_read(LAPIC_ID) >> 24) as usize
-    }
-
-    /// INIT, then STARTUP, sent to the CPU's local APIC from ours. Neither message is
-    /// answered, so whether the CPU exists has to come from elsewhere: fw_cfg's item 5 is
-    /// the number of CPUs QEMU was started with.
-    fn start_cpu(cpu: usize, stack_top: usize) -> Result<(), &'static str> {
-        use green_tea_fw_cfg::FwCfgPort;
-        IoPorts.select(0x05);
-        let cpus = u16::from_le_bytes([IoPorts.read_u8(), IoPorts.read_u8()]) as usize;
-        if cpu >= cpus {
-            return Err("no such CPU");
-        }
-        const APIC_ENABLE: u32 = 1 << 8;
-        const INIT: u32 = 0x4500;
-        const STARTUP: u32 = 0x4600;
-        // SAFETY: the page at 0x8000 is free memory, mapped by `_start`; the previous CPU
-        // started has left the trampoline and loaded its stack, since `cpus::start_all`
-        // waits for each CPU before it starts the next.
-        unsafe {
-            let (start, end) = (&raw const ap_trampoline, &raw const ap_trampoline_end);
-            core::ptr::copy_nonoverlapping(start, AP_TRAMPOLINE as *mut u8, end as usize - start as usize);
-            green_tea_ap_stack = stack_top as u64;
-        }
-        lapic_write(LAPIC_SPURIOUS, APIC_ENABLE | SPURIOUS_VECTOR as u32);
-        lapic_write(LAPIC_ICR_HIGH, (cpu as u32) << 24);
-        lapic_write(LAPIC_ICR_LOW, INIT);
-        crate::delay_ms(10);
-        lapic_write(LAPIC_ICR_HIGH, (cpu as u32) << 24);
-        lapic_write(LAPIC_ICR_LOW, STARTUP | (AP_TRAMPOLINE >> 12) as u32); // the page to start at
-        Ok(())
-    }
-
-    /// RAM starts at 0, and fw_cfg's item 3 is its size in bytes: what QEMU's `-m` said. A
-    /// write past it faults on nothing here, and is lost.
-    fn ram_end() -> Option<usize> {
-        use green_tea_fw_cfg::FwCfgPort;
-        IoPorts.select(0x03);
-        Some(u64::from_le_bytes([0; 8].map(|_| IoPorts.read_u8())) as usize)
-    }
-
-    fn display() -> Result<Framebuffer, &'static str> {
-        Self::ramfb_display()
-    }
-
-    fn test_name(name: &mut [u8]) -> usize {
-        Self::fw_cfg_test_name(name)
-    }
-}
-
-impl Qemu for Q35 {
-    type FwCfg = IoPorts;
-    const FW_CFG: IoPorts = IoPorts;
-}
-
-impl VirtioBus for Q35 {
-    /// virtio devices are PCI functions here. SeaBIOS put ECAM at 0xb000_0000 (inside
-    /// the 4 GiB that `_start` maps) and gave their BARs addresses below 4 GiB.
-    fn for_each_virtio(mut f: impl FnMut(virtio::Device)) -> Result<(), &'static str> {
-        let ecam = Ecam(0xb000_0000);
-        ecam.for_each_function(|function| {
-            if let Some((id, transport)) = virtio::pci::probe(ecam, function) {
-                f(virtio::Device { id, transport: AnyTransport::Pci(transport) });
-            }
-        });
-        Ok(())
-    }
 }
 
 // ---- Traps ----------------------------------------------------------------------------
@@ -637,6 +498,29 @@ extern "C" fn green_tea_fault(frame: &ExceptionFrame) {
 
 // ---- The local APIC timer --------------------------------------------------------------
 
+/// Wake the CPU whose local APIC has id `apic_id`: INIT, then STARTUP. Neither message is
+/// answered, so the board must know the CPU exists. It arrives in `ap_trampoline`, and
+/// goes on with `stack_top` as its stack.
+fn wake_cpu(apic_id: u32, stack_top: usize) {
+    const APIC_ENABLE: u32 = 1 << 8;
+    const INIT: u32 = 0x4500;
+    const STARTUP: u32 = 0x4600;
+    // SAFETY: the page at 0x8000 is free memory, mapped by `_start`; the previous CPU
+    // started has left the trampoline and loaded its stack, since `cpus::start_all`
+    // waits for each CPU before it starts the next.
+    unsafe {
+        let (start, end) = (&raw const ap_trampoline, &raw const ap_trampoline_end);
+        core::ptr::copy_nonoverlapping(start, AP_TRAMPOLINE as *mut u8, end as usize - start as usize);
+        green_tea_ap_stack = stack_top as u64;
+    }
+    lapic_write(LAPIC_SPURIOUS, APIC_ENABLE | SPURIOUS_VECTOR as u32);
+    lapic_write(LAPIC_ICR_HIGH, apic_id << 24);
+    lapic_write(LAPIC_ICR_LOW, INIT);
+    crate::delay_ms(10);
+    lapic_write(LAPIC_ICR_HIGH, apic_id << 24);
+    lapic_write(LAPIC_ICR_LOW, STARTUP | (AP_TRAMPOLINE >> 12) as u32); // the page to start at
+}
+
 const LAPIC: usize = 0xfee0_0000;
 const LAPIC_ID: usize = 0x20;
 const LAPIC_EOI: usize = 0xb0;
@@ -674,8 +558,8 @@ extern "C" fn green_tea_timer() {
     // a little early, from converting the deadline to APIC ticks. Either way, wait for the
     // deadline that's armed now.
     let deadline = DEADLINE.get();
-    if Q35::ticks() < deadline {
-        Q35::set_deadline(deadline);
+    if Board::ticks() < deadline {
+        Board::set_deadline(deadline);
         return;
     }
     DEADLINE.set(u64::MAX); // one tick per deadline
@@ -684,7 +568,7 @@ extern "C" fn green_tea_timer() {
     }
 }
 
-impl TimerInterrupt for Q35 {
+impl TimerInterrupt for Board {
     /// Turn the local APIC on, and measure its timer against the HPET.
     fn init_timer(on_tick: fn()) {
         ON_TICK.set(Some(on_tick));
