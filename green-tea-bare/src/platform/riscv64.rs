@@ -270,11 +270,18 @@ green_tea_trap_entry:
 9:  # A fault. Save the same frame as for an interrupt, on the fault stack, with the
     # faulting code's sp in the slot an interrupt leaves unused. The handler returns only
     # if it has dealt with the fault (a page of the heap, now mapped): then everything is
-    # put back and sret runs the faulting instruction again. One fault at a time: a fault
-    # in the handler would start again at the top of the fault stack.
+    # put back and sret runs the faulting instruction again. One fault at a time on each
+    # CPU: a fault in the handler would start again at the top of its fault stack.
     csrr t0, sscratch
     csrw sscratch, sp
-    la sp, green_tea_fault_stack_top
+    # This CPU's fault stack: the top of stack number tp. No register is free here, so tp
+    # is used for the sum, and put back.
+    la sp, green_tea_fault_stacks
+    addi tp, tp, 1
+    slli tp, tp, 14             # 16 KiB each
+    add sp, sp, tp
+    srli tp, tp, 14
+    addi tp, tp, -1
     addi sp, sp, -544
     .irp n, 1,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
     sd x\n, \n*8(sp)
@@ -312,10 +319,12 @@ green_tea_trap_entry:
 
     .section .bss.fault_stack, "aw", @nobits
     .balign 16
-    .skip 16384
-green_tea_fault_stack_top:
+green_tea_fault_stacks:
+    .skip 8 * 16384             # one for each of cpus::MAX
 "#
 );
+
+const _: () = assert!(crate::cpus::MAX == 8); // the fault stacks above
 
 unsafe extern "C" {
     fn green_tea_trap_entry();

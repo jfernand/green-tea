@@ -17,7 +17,7 @@ use green_tea_bare::ramfb::Framebuffer;
 use green_tea_bare::screen::Screen;
 use green_tea_bare::smp::cache::{Cache, Central};
 use green_tea_bare::smp::lock::SpinLock;
-use green_tea_bare::{Board, Platform, cpus, heap, println};
+use green_tea_bare::{Board, Platform, cpus, heap, pages, println};
 
 /// The CPUs `cargo xtask kernel` gives the machine for this test (`-smp 4`).
 const CPUS: usize = 4;
@@ -95,6 +95,7 @@ fn run() -> Result<(usize, usize), &'static str> {
     let heap_locks = kernel_heap()?;
     let cache_locks = caches(0)?;
     caches(4)?;
+    faults()?;
     parked()?;
     Ok((heap_locks, cache_locks))
 }
@@ -121,6 +122,53 @@ fn vectors() -> Result<(), &'static str> {
     if VBAR.iter().any(|vbar| vbar.load(Ordering::Relaxed) != boot) {
         return Err("the CPUs don't all have the same exception vectors");
     }
+    Ok(())
+}
+
+// ---- Faults on every CPU at once ------------------------------------------------------
+
+/// How many faults each CPU takes.
+const FAULTS: usize = 20_000;
+
+/// Pages of the heap, one for each CPU, made by `faults`.
+static FAULT_PAGES: AtomicUsize = AtomicUsize::new(0);
+static FAULTS_WRONG: AtomicUsize = AtomicUsize::new(0);
+
+/// Every CPU unmaps a page of its own and writes to it, over and over, so that all of them
+/// are in the fault handler at once. The handler maps the page and returns to the write,
+/// which works only if no other CPU's fault has overwritten this one's saved registers.
+fn faults() -> Result<(), &'static str> {
+    if !Board::DEMAND_PAGING {
+        return Ok(());
+    }
+    let layout = Layout::from_size_align(CPUS * pages::PAGE, pages::PAGE).expect("a page-aligned layout");
+    // SAFETY: the layout has a size.
+    let block = unsafe { alloc::alloc::alloc(layout) };
+    if block.is_null() {
+        return Err("the heap refused the pages for the fault test");
+    }
+    FAULT_PAGES.store(block as usize, Ordering::Release);
+    cpus::run(|cpu| {
+        let page = (FAULT_PAGES.load(Ordering::Acquire) + cpu * pages::PAGE) as *mut usize;
+        for i in 0..FAULTS {
+            let value = core::hint::black_box(cpu << 32 | i);
+            Board::set_mapped(page as usize, false);
+            // SAFETY: the page is this CPU's alone, and the write's fault maps it again.
+            let seen = unsafe {
+                page.write_volatile(value);
+                page.read_volatile()
+            };
+            if core::hint::black_box(value) != cpu << 32 | i || seen != value {
+                FAULTS_WRONG.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    });
+    // SAFETY: allocated above, and every page was mapped again by its last write.
+    unsafe { alloc::alloc::dealloc(block, layout) };
+    if FAULTS_WRONG.load(Ordering::Relaxed) != 0 {
+        return Err("a CPU came back from a fault with another CPU's registers");
+    }
+    println!("each CPU took {FAULTS} page faults, all at once, and came back from each with its own registers");
     Ok(())
 }
 

@@ -223,8 +223,9 @@ static mut green_tea_ap_stack: u64 = 0;
 /// CPU shares.
 #[unsafe(no_mangle)]
 extern "C" fn green_tea_secondary() -> ! {
-    traps::join();
-    crate::cpus::enter(Q35::cpu())
+    let cpu = Q35::cpu();
+    traps::join(cpu);
+    crate::cpus::enter(cpu)
 }
 
 const HPET: usize = 0xfed0_0000;
@@ -382,8 +383,8 @@ green_tea_exception_\n:
 
     # Every register is saved, as for the timer: the handler returns if it has dealt with
     # the fault (a page of the heap, now mapped), and then iretq runs the faulting
-    # instruction again. One fault at a time: a fault in the handler would start again at
-    # the top of IST1.
+    # instruction again. One fault at a time on each CPU: a fault in the handler would
+    # start again at the top of its IST1.
 green_tea_exception_common:
     .irp r, rax,rbx,rcx,rdx,rsi,rdi,rbp,r8,r9,r10,r11,r12,r13,r14,r15
     push %\r
@@ -441,13 +442,25 @@ unsafe extern "C" {
 /// The GDT, the TSS and the IDT: what the CPU needs to take an interrupt in long mode.
 mod traps {
     use super::{SPURIOUS_VECTOR, TIMER_VECTOR, outb};
+    use crate::cpus::MAX;
     use core::arch::asm;
 
+    const GDT_ENTRIES: usize = 3 + 2 * MAX;
+
     /// The boot GDT's segments at the same selectors (so the loaded ones stay valid), plus
-    /// the TSS at 0x18 (a system descriptor, two entries long).
-    static mut GDT: [u64; 5] = [0, 0x00af9a000000ffff, 0x00cf92000000ffff, 0, 0];
+    /// a TSS for each CPU from 0x18 on (a system descriptor, two entries long).
+    static mut GDT: [u64; GDT_ENTRIES] = {
+        let mut gdt = [0; GDT_ENTRIES];
+        gdt[1] = 0x00af9a000000ffff;
+        gdt[2] = 0x00cf92000000ffff;
+        gdt
+    };
     const CODE: u16 = 0x08;
-    const TSS_SELECTOR: u16 = 0x18;
+
+    /// The selector of CPU `cpu`'s TSS.
+    const fn tss_selector(cpu: usize) -> u16 {
+        0x18 + 16 * cpu as u16
+    }
 
     /// In long mode the TSS holds no task state, only stack pointers. `ist[0]` (IST1) is
     /// where exceptions run.
@@ -464,19 +477,22 @@ mod traps {
 
     const _: () = assert!(size_of::<Tss>() == 104);
 
-    static mut TSS: Tss = Tss {
-        _reserved0: 0,
-        rsp: [0; 3],
-        _reserved1: 0,
-        ist: [0; 7],
-        _reserved2: 0,
-        _reserved3: 0,
-        iomap_base: size_of::<Tss>() as u16, // past the end: no I/O permission bitmap
-    };
+    /// One for each CPU, since each has a fault stack of its own.
+    static mut TSS: [Tss; MAX] = [const {
+        Tss {
+            _reserved0: 0,
+            rsp: [0; 3],
+            _reserved1: 0,
+            ist: [0; 7],
+            _reserved2: 0,
+            _reserved3: 0,
+            iomap_base: size_of::<Tss>() as u16, // past the end: no I/O permission bitmap
+        }
+    }; MAX];
 
     #[repr(C, align(16))]
     struct FaultStack([u8; 16384]);
-    static mut FAULT_STACK: FaultStack = FaultStack([0; 16384]);
+    static mut FAULT_STACKS: [FaultStack; MAX] = [const { FaultStack([0; 16384]) }; MAX];
 
     #[derive(Clone, Copy)]
     #[repr(C)]
@@ -521,19 +537,17 @@ mod traps {
         base: u64,
     }
 
-    /// Load the tables `init` built into a CPU started after the boot CPU. The TSS is
-    /// shared, and with it the one fault stack: a fault on any CPU panics the kernel.
-    pub fn join() {
+    /// Load the tables `init` built into a CPU started after the boot CPU, with the TSS
+    /// that has its own fault stack.
+    pub fn join(cpu: usize) {
+        assert!(cpu < MAX);
         // SAFETY: `init` finished before any other CPU was started, and CPUs are started
         // one at a time.
         unsafe {
             let (gdt, idt) = (&raw mut GDT, &raw const IDT);
-            let pointer = Pointer { limit: size_of::<[u64; 5]>() as u16 - 1, base: gdt as u64 };
+            let pointer = Pointer { limit: size_of::<[u64; GDT_ENTRIES]>() as u16 - 1, base: gdt as u64 };
             asm!("lgdt [{}]", in(reg) &raw const pointer, options(readonly, nostack));
-            // Loading a TSS marks its descriptor busy, and loading a busy one faults.
-            const BUSY: u64 = 1 << 41;
-            (*gdt)[3] &= !BUSY;
-            asm!("ltr {:x}", in(reg) TSS_SELECTOR, options(nostack));
+            asm!("ltr {:x}", in(reg) tss_selector(cpu), options(nostack));
             let pointer = Pointer { limit: size_of::<[Gate; 256]>() as u16 - 1, base: idt as u64 };
             asm!("lidt [{}]", in(reg) &raw const pointer, options(readonly, nostack));
         }
@@ -543,20 +557,23 @@ mod traps {
         // Only ever touched here, with interrupts off: no other references exist.
         unsafe {
             let (gdt, tss, idt) = (&raw mut GDT, &raw mut TSS, &raw mut IDT);
-            (*tss).ist[0] = (&raw const FAULT_STACK as u64) + size_of::<FaultStack>() as u64;
+            for cpu in 0..MAX {
+                let stack = (&raw const FAULT_STACKS).cast::<FaultStack>().add(cpu);
+                (*tss)[cpu].ist[0] = stack as u64 + size_of::<FaultStack>() as u64;
 
-            let base = tss as u64;
-            let limit = size_of::<Tss>() as u64 - 1;
-            const PRESENT_AVAILABLE_TSS: u64 = 0x89;
-            (*gdt)[3] = (limit & 0xffff)
-                | (base & 0xff_ffff) << 16
-                | PRESENT_AVAILABLE_TSS << 40
-                | (limit >> 16 & 0xf) << 48
-                | (base >> 24 & 0xff) << 56;
-            (*gdt)[4] = base >> 32;
-            let pointer = Pointer { limit: size_of::<[u64; 5]>() as u16 - 1, base: gdt as u64 };
+                let base = &raw const (*tss)[cpu] as u64;
+                let limit = size_of::<Tss>() as u64 - 1;
+                const PRESENT_AVAILABLE_TSS: u64 = 0x89;
+                (*gdt)[3 + 2 * cpu] = (limit & 0xffff)
+                    | (base & 0xff_ffff) << 16
+                    | PRESENT_AVAILABLE_TSS << 40
+                    | (limit >> 16 & 0xf) << 48
+                    | (base >> 24 & 0xff) << 56;
+                (*gdt)[4 + 2 * cpu] = base >> 32;
+            }
+            let pointer = Pointer { limit: size_of::<[u64; GDT_ENTRIES]>() as u16 - 1, base: gdt as u64 };
             asm!("lgdt [{}]", in(reg) &raw const pointer, options(readonly, nostack));
-            asm!("ltr {:x}", in(reg) TSS_SELECTOR, options(nostack));
+            asm!("ltr {:x}", in(reg) tss_selector(0), options(nostack));
 
             for (vector, &stub) in super::green_tea_exception_stubs.iter().enumerate() {
                 (*idt)[vector] = Gate::to(stub, 1);
