@@ -57,8 +57,8 @@ pub struct PciTransport {
     queue_notify: [usize; MAX_QUEUES],
 }
 
-/// If `f` is a virtio device: its virtio id and transport. Turns on its memory decoding
-/// and DMA, which the device needs from here on.
+/// If `f` is a virtio device with the capabilities this driver needs: its virtio id and
+/// transport. Only then turns on its memory decoding and DMA, which it needs from here on.
 pub fn probe(ecam: Ecam, f: Function) -> Option<(u32, PciTransport)> {
     if ecam.vendor_id(f) != VENDOR_VIRTIO {
         return None;
@@ -89,12 +89,13 @@ pub fn probe(ecam: Ecam, f: Function) -> Option<(u32, PciTransport)> {
             _ => {}
         }
     });
+    let (common, notify) = (common?, notify?);
     ecam.enable(f);
     Some((
         id,
         PciTransport {
-            common: common?,
-            notify: notify?,
+            common,
+            notify,
             notify_multiplier,
             device: device.unwrap_or(0),
             queue_notify: [0; MAX_QUEUES],
@@ -190,6 +191,7 @@ mod tests {
     use std::boxed::Box;
 
     const F: Function = Function { bus: 0, device: 0, function: 0 };
+    const COMMAND: usize = 0x04;
     const NOTIFY_OFFSET: usize = 0x100;
     const NOTIFY_MULTIPLIER: u32 = 4;
 
@@ -236,6 +238,10 @@ mod tests {
             probe(self.ecam(), F).unwrap().1
         }
 
+        fn command(&self) -> u16 {
+            self.ecam().read_u16(F, COMMAND)
+        }
+
         fn bar_u16(&self, offset: usize) -> u16 {
             unsafe { read_volatile(self.bar.0.as_ptr().add(offset).cast::<u16>()) }
         }
@@ -261,5 +267,19 @@ mod tests {
         device.set_bar_u16(QUEUE_ENABLE, 1);
         let error = Queue::new(&mut device.transport(), 0).err();
         assert_eq!(error, Some("the virtio queue is already in use"));
+    }
+
+    #[test]
+    fn probe_turns_on_a_complete_device() {
+        let device = FakeDevice::new(true);
+        assert!(probe(device.ecam(), F).is_some());
+        assert_eq!(device.command(), 0b110);
+    }
+
+    #[test]
+    fn probe_leaves_an_incomplete_device_off() {
+        let device = FakeDevice::new(false);
+        assert!(probe(device.ecam(), F).is_none());
+        assert_eq!(device.command(), 0, "memory decoding and bus mastering were left on");
     }
 }
