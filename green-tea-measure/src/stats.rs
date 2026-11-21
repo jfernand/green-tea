@@ -12,7 +12,7 @@ pub fn percentile<T: Copy>(sorted: &[T], p: u32) -> T {
     sorted[rank.max(1) - 1]
 }
 
-/// What a set of samples looks like: the mean, and the samples at five ranks.
+/// What a set of samples looks like: the mean, and the samples at six ranks.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Summary {
     pub count: usize,

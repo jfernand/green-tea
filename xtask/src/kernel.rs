@@ -13,6 +13,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitCode, Stdio};
 use std::ptr;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use std::{env, thread};
 
@@ -111,6 +112,7 @@ counts as four.
   --target      only these architectures (default: all three)
   --release     build with optimizations
   --headless    no windows: quit each QEMU as soon as its kernel finishes
+  --jobs <n>    at most this many virtual CPUs at once
   --screenshot  save the final screen to target/kernel/<kernel>-<arch>.png";
 
 struct Kernel {
@@ -292,11 +294,8 @@ pub fn main(args: &[String]) -> ExitCode {
     }
 
     let profile = if options.release { "release" } else { "debug" };
-    for job in &options.jobs {
+    for job in builds(&options.jobs) {
         eprintln!("=== build {} {} {profile}", job.kernel.package, job.arch.name);
-        if options.jobs.iter().take_while(|j| !ptr::eq(*j, job)).any(|j| j.kernel.package == job.kernel.package && ptr::eq(j.arch, job.arch)) {
-            continue; // already built: another kernel runs the same binary
-        }
         if !build(job, options.release) {
             return ExitCode::FAILURE;
         }
@@ -338,6 +337,18 @@ pub fn main(args: &[String]) -> ExitCode {
     }
 }
 
+/// The jobs to build for: one for each package on each architecture, since several kernels
+/// run the same binary.
+fn builds(jobs: &[Job]) -> Vec<&Job> {
+    let mut builds: Vec<&Job> = Vec::new();
+    for job in jobs {
+        if !builds.iter().any(|b| b.kernel.package == job.kernel.package && ptr::eq(b.arch, job.arch)) {
+            builds.push(job);
+        }
+    }
+    builds
+}
+
 fn parse(args: &[String]) -> Result<Options, String> {
     let mut options = Options { jobs: Vec::new(), release: false, headless: false, screenshot: false, limit: None };
     let mut kernels: Vec<&'static Kernel> = Vec::new();
@@ -359,7 +370,9 @@ fn parse(args: &[String]) -> Result<Options, String> {
                     .iter()
                     .find(|a| a.name == value || a.triple == value)
                     .ok_or_else(|| format!("unknown target {value}; known: riscv64, aarch64, x86_64"))?;
-                arches.push(arch);
+                if !arches.iter().any(|a| ptr::eq(*a, arch)) {
+                    arches.push(arch);
+                }
             }
             "--kernel" => {
                 let value = args.next().ok_or("--kernel needs a value")?;
@@ -370,7 +383,10 @@ fn parse(args: &[String]) -> Result<Options, String> {
                         let known: Vec<&str> = KERNELS.iter().map(|k| k.name).collect();
                         format!("unknown kernel {value}; known: {}", known.join(", "))
                     })?;
-                kernels.push(kernel);
+                // Twice would be two runs writing to one log.
+                if !kernels.iter().any(|k| ptr::eq(*k, kernel)) {
+                    kernels.push(kernel);
+                }
             }
             "-h" | "--help" => return Err(String::new()),
             _ => return Err(format!("unknown option {arg}")),
@@ -431,10 +447,48 @@ fn build(job: &Job, release: bool) -> bool {
     cmd.status().is_ok_and(|s| s.success())
 }
 
+/// Where cargo puts what it builds, which `build.target-dir` in a config file can move.
+/// Asked once: it starts a process, and every job wants it.
 fn target_dir() -> PathBuf {
-    env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let mut cargo = Command::new(env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+        cargo.current_dir(workspace_root());
+        target_dir_from(cargo)
+    })
+    .clone()
+}
+
+/// What `cargo metadata` says the target directory is. If cargo can't say, the variable or
+/// the default.
+fn target_dir_from(mut cargo: Command) -> PathBuf {
+    let output = cargo.args(["metadata", "--no-deps", "--format-version", "1"]).stderr(Stdio::null()).output();
+    output
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|json| json_path(&json, "target_directory"))
+        .or_else(|| env::var_os("CARGO_TARGET_DIR").map(PathBuf::from))
         .unwrap_or_else(|| workspace_root().join("target"))
+}
+
+/// The string at `key` in cargo's JSON, for a path: `None` if it has an escape other than
+/// a quote or a backslash.
+fn json_path(json: &str, key: &str) -> Option<PathBuf> {
+    let pattern = format!("\"{key}\":\"");
+    let start = json.rfind(&pattern)? + pattern.len();
+    let mut path = String::new();
+    let mut chars = json[start..].chars();
+    loop {
+        match chars.next()? {
+            '"' => return Some(PathBuf::from(path)),
+            '\\' => match chars.next()? {
+                c @ ('"' | '\\') => path.push(c),
+                _ => return None,
+            },
+            c => path.push(c),
+        }
+    }
 }
 
 /// The disk test's image: 32 KiB.
@@ -460,32 +514,17 @@ you can type at it. `halt` stops the kernel; ctrl-a x leaves QEMU.";
 /// `cargo xtask shell`: one QEMU, in the foreground, with the kernel's serial port on our
 /// stdin and stdout.
 pub fn shell(args: &[String]) -> ExitCode {
-    let mut arch = &ARCHES[0];
-    let mut release = false;
-    let mut args = args.iter();
-    while let Some(arg) = args.next() {
-        match (arg.as_str(), args.clone().next()) {
-            ("--release", _) => release = true,
-            ("--target", Some(value)) => match ARCHES.iter().find(|a| a.name == value || a.triple == value) {
-                Some(found) => {
-                    arch = found;
-                    args.next();
-                }
-                None => {
-                    eprintln!("error: unknown target {value}\n\n{SHELL_USAGE}");
-                    return ExitCode::FAILURE;
-                }
-            },
-            ("-h" | "--help", _) => {
-                println!("{SHELL_USAGE}");
-                return ExitCode::SUCCESS;
-            }
-            _ => {
-                eprintln!("error: unknown option {arg}\n\n{SHELL_USAGE}");
-                return ExitCode::FAILURE;
-            }
+    let (arch, release) = match parse_shell(args) {
+        Ok(Some(parsed)) => parsed,
+        Ok(None) => {
+            println!("{SHELL_USAGE}");
+            return ExitCode::SUCCESS;
         }
-    }
+        Err(e) => {
+            eprintln!("error: {e}\n\n{SHELL_USAGE}");
+            return ExitCode::FAILURE;
+        }
+    };
     if let Err(problems) = preflight(&[arch]) {
         eprintln!("missing prerequisites:");
         for p in problems {
@@ -517,6 +556,29 @@ pub fn shell(args: &[String]) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// `shell`'s arguments: the architecture, and whether to optimize. `None` for `--help`.
+fn parse_shell(args: &[String]) -> Result<Option<(&'static Arch, bool)>, String> {
+    let mut arch = &ARCHES[0];
+    let mut release = false;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match (arg.as_str(), args.clone().next()) {
+            ("--release", _) => release = true,
+            ("--target", Some(value)) => {
+                arch = ARCHES
+                    .iter()
+                    .find(|a| a.name == value || a.triple == value)
+                    .ok_or_else(|| format!("unknown target {value}"))?;
+                args.next();
+            }
+            ("--target", None) => return Err("--target needs a value".into()),
+            ("-h" | "--help", _) => return Ok(None),
+            _ => return Err(format!("unknown option {arg}")),
+        }
+    }
+    Ok(Some((arch, release)))
 }
 
 /// One QEMU and what we've learned from it so far.
@@ -612,9 +674,7 @@ impl Run {
             if self.seen_kernel {
                 eprintln!("[{:15}] {line}", self.job.label());
             }
-            if self.outcome.is_none() {
-                self.outcome = verdict(line);
-            }
+            judge(&mut self.outcome, line);
         }
     }
 }
@@ -628,6 +688,18 @@ fn verdict(line: &str) -> Option<Result<String, String>> {
         return Some(Ok(rest.to_string()));
     }
     line.strip_prefix("FAIL: ").map(|rest| Err(rest.to_string()))
+}
+
+/// Take `line` into the run's outcome. The first failure stands, and a failure after a pass
+/// replaces it: a kernel that says PASS and then panics has not passed.
+fn judge(outcome: &mut Option<Result<String, String>>, line: &str) {
+    if !matches!(outcome, Some(Err(_))) {
+        match verdict(line) {
+            Some(Ok(_)) if outcome.is_some() => {}
+            Some(found) => *outcome = Some(found),
+            None => {}
+        }
+    }
 }
 
 /// Whether a machine of `cpus` may start while `busy` virtual CPUs are running. One too
@@ -682,7 +754,7 @@ fn watch(queue: &mut VecDeque<Job>, runs: &mut Vec<Run>, options: &Options, out_
 
 #[cfg(test)]
 mod tests {
-    use super::{disk_image, fits, parse, verdict};
+    use super::{disk_image, fits, judge, parse, verdict};
 
     #[test]
     fn the_disk_image_differs_from_sector_to_sector() {
@@ -710,6 +782,22 @@ mod tests {
     #[test]
     fn other_lines_are_not_a_verdict() {
         assert_eq!(verdict("running 5 workers; expecting 57 switches"), None);
+    }
+
+    #[test]
+    fn a_failure_after_a_pass_fails_the_run() {
+        for (line, why) in [("panic: late", "kernel panicked: late"), ("FAIL: late", "late")] {
+            let mut outcome = None;
+            judge(&mut outcome, "PASS: all done");
+            judge(&mut outcome, line);
+            assert_eq!(outcome, Some(Err(why.to_string())));
+        }
+        // The first failure is the one reported, and a pass doesn't undo it.
+        let mut outcome = None;
+        judge(&mut outcome, "FAIL: first");
+        judge(&mut outcome, "FAIL: second");
+        judge(&mut outcome, "PASS: all done");
+        assert_eq!(outcome, Some(Err("first".to_string())));
     }
 
     #[test]
@@ -752,6 +840,54 @@ mod tests {
         assert_eq!(labels(&[]), expected(None));
         assert!(labels(&[]).contains(&"overflow-riscv64".to_string()));
         assert!(!labels(&[]).contains(&"overflow-aarch64".to_string()));
+    }
+
+    /// A project whose `.cargo/config.toml` moves its target directory, asked with none of
+    /// the variables that would override that.
+    #[test]
+    fn the_target_directory_comes_from_cargos_config() {
+        let dir = std::env::temp_dir().join(format!("xtask-target-dir-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".cargo")).unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"probe\"\nversion = \"0.1.0\"\n[workspace]\n").unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "").unwrap();
+        std::fs::write(dir.join(".cargo/config.toml"), "[build]\ntarget-dir = \"elsewhere\"\n").unwrap();
+        let mut cargo = std::process::Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+        cargo.current_dir(&dir).env_remove("CARGO_TARGET_DIR").env_remove("CARGO_BUILD_TARGET_DIR");
+        let found = super::target_dir_from(cargo);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(found.ends_with("elsewhere"), "{}", found.display());
+    }
+
+    #[test]
+    fn a_path_is_read_from_cargos_json() {
+        let json = r#"{"packages":[],"target_directory":"/a \\ b/\"c\"","version":1}"#;
+        assert_eq!(super::json_path(json, "target_directory"), Some(r#"/a \ b/"c""#.into()));
+        assert_eq!(super::json_path(r#"{"target_directory":"/a\u00e9"}"#, "target_directory"), None);
+    }
+
+    #[test]
+    fn shell_says_when_target_has_no_value() {
+        let parsed = super::parse_shell(&["--target".to_string()]).map(|_| ());
+        assert_eq!(parsed, Err("--target needs a value".to_string()));
+    }
+
+    #[test]
+    fn a_binary_is_built_once_for_each_architecture() {
+        let args: Vec<String> = ["--kernel", "coop", "--kernel", "disk", "--kernel", "shell", "--target", "riscv64"]
+            .iter()
+            .map(|a| a.to_string())
+            .collect();
+        let options = parse(&args).unwrap();
+        let built: Vec<&str> = super::builds(&options.jobs).iter().map(|j| j.kernel.package).collect();
+        assert_eq!(built, ["green-tea-coop", "green-tea-shell"]);
+    }
+
+    #[test]
+    fn a_kernel_or_target_named_twice_runs_once() {
+        let once = labels(&["--kernel", "coop", "--target", "riscv64"]);
+        assert_eq!(labels(&["--kernel", "coop", "--kernel", "coop", "--target", "riscv64"]), once);
+        assert_eq!(labels(&["--kernel", "coop", "--target", "riscv64", "--target", "riscv64"]), once);
     }
 
     #[test]

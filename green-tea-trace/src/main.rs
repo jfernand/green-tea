@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! green-tea-trace stat <file>                      what the trace holds
-//! green-tea-trace replay <file> [--region-kib <n>] [--shuffle [<seed>]]
+//! green-tea-trace replay <file> [--region-kib <n>] [--shuffle [<hex seed>]]
 //!                                                  what each allocator needed for it
 //! green-tea-trace convert <file> <out> [--text|--binary]
 //!                                                  the same records in the other form
@@ -12,7 +12,7 @@
 //! the standard input. The tables are the ones the kernel prints, column for column, so
 //! that a trace dumped by the kernel can be replayed here and the two outputs compared.
 
-use green_tea_fit::buddy::Buddy;
+use green_tea_fit::buddy::{self, Buddy};
 use green_tea_fit::tlsf::Tlsf;
 use green_tea_fit::trace::{self, Event, Report};
 use green_tea_fit::tracefile::{self, Events, MAGIC, Record};
@@ -25,7 +25,7 @@ use std::{env, fs, io};
 
 const USAGE: &str = "\
 usage: green-tea-trace stat <file>
-       green-tea-trace replay <file> [--region-kib <n>] [--shuffle [<seed>]]
+       green-tea-trace replay <file> [--region-kib <n>] [--shuffle [<hex seed>]]
        green-tea-trace convert <file> <out> [--text|--binary]
 
 stat:     prints what a trace file holds: its records, the sizes asked for, how long the
@@ -35,7 +35,7 @@ replay:   replays the trace against first fit, next fit and best fit, each with 
           prints what each needed. --region-kib is the region each replay gets (default:
           the power of two at or above four times the trace's peak of live bytes, and at
           least 512). --shuffle also replays the trace with its sizes and lifetimes dealt
-          out at random.
+          out at random; a seed, in hexadecimal, goes after the file.
 convert:  writes the trace in the other form, or in the one asked for.
 
 A file is in the text form or the binary form; the first bytes say which. `-` is the
@@ -47,6 +47,8 @@ const SEED: u64 = 0x2545_f491_4f6c_dd1d;
 const LONG_LIVED: u32 = 64;
 /// The region the shell's `replay` uses, and the least this one does.
 const LEAST_REGION: usize = 512 * 1024;
+/// The largest region every allocator here can take: the buddy system's table of lists ends there.
+const MOST_REGION: usize = buddy::MIN_BLOCK << buddy::ORDERS;
 
 const WAYS: [(Policy, &str, Order, &str); 6] = [
     (Policy::FirstFit, "first fit", Order::Lifo, "LIFO"),
@@ -99,11 +101,13 @@ fn run(args: &[String]) -> Result<String, Failure> {
     while let Some(arg) = rest.next() {
         match arg.as_str() {
             "--region-kib" => {
-                let kib = rest.next().and_then(|n| n.parse::<usize>().ok()).filter(|n| *n >= 1);
-                region = Some(kib.ok_or_else(|| usage("--region-kib needs a number of KiB"))? * 1024);
+                let kib = rest.next().and_then(|n| n.parse::<usize>().ok()).filter(|n| (1..=MOST_REGION / 1024).contains(n));
+                let why = format!("--region-kib needs a number of KiB from 1 to {}", MOST_REGION / 1024);
+                region = Some(kib.ok_or_else(|| usage(&why))? * 1024);
             }
             "--shuffle" => {
-                let seed = rest.next_if(|next| u64::from_str_radix(next, 16).is_ok());
+                // Before the file, the next word is the file, whatever it looks like.
+                let seed = rest.next_if(|next| !files.is_empty() && u64::from_str_radix(next, 16).is_ok());
                 shuffle = Some(seed.map_or(SEED, |seed| u64::from_str_radix(seed, 16).unwrap_or(SEED)));
             }
             "--text" => form = Some(Form::Text),
@@ -288,7 +292,7 @@ fn describe(events: &[Event], out: &mut String) -> usize {
         "lifetimes: {} of the blocks are freed before 8 more are allocated, {} before {LONG_LIVED} more; {} are \
          never freed",
         percent(within(7), allocations),
-        percent(within(LONG_LIVED), allocations),
+        percent(within(LONG_LIVED - 1), allocations),
         lifetimes.iter().filter(|life| life.is_none()).count()
     );
     allocations
@@ -401,7 +405,7 @@ fn measured(events: &[Event], heap: &mut impl Heap) -> Result<Report, &'static s
 
 #[cfg(test)]
 mod tests {
-    use super::{Failure, Form, mismatches, peak_live, percent, replay, run, stat};
+    use super::{Failure, Form, describe, mismatches, peak_live, percent, replay, run, stat};
     use green_tea_fit::trace::Event;
     use green_tea_fit::tracefile::{self, Record};
 
@@ -441,6 +445,26 @@ mod tests {
             "live bytes: 180 at the peak; 0 frees are of blocks the trace never allocated; 0 allocations are at an \
              address that is still allocated"
         );
+    }
+
+    /// A block with `later` allocations between its allocation and its free.
+    fn lived(later: usize) -> Vec<Event> {
+        let mut events = vec![Event::allocate(1, 8, 8)];
+        events.extend((0..later).map(|n| Event::allocate(16 * (n + 2), 8, 8)));
+        events.push(Event::free(1));
+        events
+    }
+
+    #[test]
+    fn before_n_more_means_fewer_than_n() {
+        let line = |later| {
+            let mut out = String::new();
+            describe(&lived(later), &mut out);
+            out.lines().find(|l| l.starts_with("lifetimes:")).unwrap().to_string()
+        };
+        // One block of 64 freed after 63 others: counted. After 64: it wasn't freed before 64 more.
+        assert!(line(63).contains(&format!("{} before 64 more", percent(1, 64))), "{}", line(63));
+        assert!(line(64).contains(&format!("{} before 64 more", percent(0, 65))), "{}", line(64));
     }
 
     #[test]
@@ -515,6 +539,33 @@ mod tests {
         assert!(matches!(run(&args(&["replay", "a", "--frobnicate"])), Err(Failure::Usage(_))));
         assert!(run(&args(&["--help"])).unwrap().starts_with("usage:"));
         assert!(matches!(run(&args(&["stat", "/nonexistent/trace.gtt"])), Err(Failure::Refused { .. })));
+    }
+
+    #[test]
+    fn a_region_too_large_is_a_usage_error() {
+        let path = std::env::temp_dir().join(format!("green-tea-trace-region-{}.gtt", std::process::id()));
+        std::fs::write(&path, Form::Text.write(&SMALL)).unwrap();
+        let path = path.to_str().unwrap();
+        let outcome = std::panic::catch_unwind(|| run(&args(&["replay", path, "--region-kib", "5000000"])));
+        let huge = run(&args(&["replay", path, "--region-kib", "18446744073709551615"]));
+        std::fs::remove_file(path).unwrap();
+        assert!(matches!(outcome, Ok(Err(Failure::Usage(_)))), "{outcome:?}");
+        assert!(matches!(huge, Err(Failure::Usage(_))), "{huge:?}");
+    }
+
+    #[test]
+    fn a_file_named_in_hex_can_follow_shuffle() {
+        // The word after --shuffle is the file when no file has been given: here, one that isn't there.
+        let Err(Failure::Refused { why, .. }) = run(&args(&["replay", "--shuffle", "cafe"])) else {
+            panic!("`cafe` was not taken for the file");
+        };
+        assert!(why.starts_with("cafe:"), "{why}");
+        // After the file, it is the seed.
+        let Err(Failure::Refused { why, .. }) = run(&args(&["replay", "/nonexistent/x", "--shuffle", "cafe"])) else {
+            panic!("`cafe` was not taken for the seed");
+        };
+        assert!(why.starts_with("/nonexistent/x:"), "{why}");
+        assert!(super::USAGE.contains("<hex seed>"));
     }
 
     #[test]

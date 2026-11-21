@@ -88,11 +88,31 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         }
-        Err(why) => {
+        Err(Failure::Usage(why)) => {
             eprintln!("error: {why}\n\n{USAGE}");
             ExitCode::from(2)
         }
+        Err(Failure::Other(why)) => {
+            eprintln!("error: {why}");
+            ExitCode::from(2)
+        }
     }
+}
+
+/// Why a command didn't finish. Only a mistake on the command line is answered with the usage.
+enum Failure {
+    Usage(String),
+    Other(String),
+}
+
+impl From<String> for Failure {
+    fn from(why: String) -> Failure {
+        Failure::Other(why)
+    }
+}
+
+fn usage(why: impl Into<String>) -> Failure {
+    Failure::Usage(why.into())
 }
 
 #[derive(Default)]
@@ -108,12 +128,12 @@ struct Options {
     multiples: Option<Vec<usize>>,
 }
 
-fn run(args: &[String]) -> Result<bool, String> {
+fn run(args: &[String]) -> Result<bool, Failure> {
     let mut words = Vec::new();
     let mut options = Options::default();
     let mut rest = args.iter();
     let number = |value: Option<&String>, what: &str| {
-        value.and_then(|n| n.parse::<usize>().ok()).filter(|n| *n >= 1).ok_or(format!("{what} needs a number"))
+        value.and_then(|n| n.parse::<usize>().ok()).filter(|n| *n >= 1).ok_or_else(|| usage(format!("{what} needs a number")))
     };
     while let Some(arg) = rest.next() {
         match arg.as_str() {
@@ -124,39 +144,39 @@ fn run(args: &[String]) -> Result<bool, String> {
             "--no-warmup" => options.no_warmup = true,
             "--touch" => options.touch = true,
             "--only" => {
-                let names = rest.next().ok_or("--only needs a list of allocators")?;
+                let names = rest.next().ok_or_else(|| usage("--only needs a list of allocators"))?;
                 options.only = Some(names.split(',').map(String::from).collect());
             }
             "--multiples" => {
-                let list = rest.next().ok_or("--multiples needs a list")?;
+                let list = rest.next().ok_or_else(|| usage("--multiples needs a list"))?;
                 let tenths = |m: &str| m.parse::<f64>().ok().map(|m| (m * 10.0).round() as usize).filter(|m| *m >= 1);
                 let parsed: Option<Vec<usize>> = list.split(',').map(tenths).collect();
-                options.multiples = Some(parsed.ok_or("--multiples needs numbers, such as 1,1.5,2")?);
+                options.multiples = Some(parsed.ok_or_else(|| usage("--multiples needs numbers, such as 1,1.5,2"))?);
             }
-            "--pins" => options.pins = Some(rest.next().ok_or("--pins needs a file")?.clone()),
+            "--pins" => options.pins = Some(rest.next().ok_or_else(|| usage("--pins needs a file"))?.clone()),
             "-h" | "--help" => {
                 println!("{USAGE}");
                 return Ok(true);
             }
-            option if option.starts_with("--") => return Err(format!("unknown option {option}")),
+            option if option.starts_with("--") => return Err(usage(format!("unknown option {option}"))),
             word => words.push(word),
         }
     }
-    match words.as_slice() {
-        ["space", file] => space(&Loaded::new(file, &options)?, &options),
-        ["instructions", file] => instructions(file, &Loaded::new(file, &options)?, &options),
-        ["time", file] => time(&Loaded::new(file, &options)?, &options),
-        ["runs", file, a, b] => runs(&Loaded::new(file, &options)?, a, b, &options),
-        ["count", file, name] => count(&Loaded::new(file, &options)?, name),
-        ["lisp", "lifetimes"] => lisp_lifetimes(),
-        ["lisp", "instructions"] => lisp_instructions(&options),
-        ["lisp", "run", program, heap] => lisp_run(program, heap, 0),
+    Ok(match words.as_slice() {
+        ["space", file] => space(&Loaded::new(file, &options)?, &options)?,
+        ["instructions", file] => instructions(file, &Loaded::new(file, &options)?, &options)?,
+        ["time", file] => time(&Loaded::new(file, &options)?, &options)?,
+        ["runs", file, a, b] => runs(&Loaded::new(file, &options)?, a, b, &options)?,
+        ["count", file, name] => count(&Loaded::new(file, &options)?, name)?,
+        ["lisp", "lifetimes"] => lisp_lifetimes()?,
+        ["lisp", "instructions"] => lisp_instructions(&options)?,
+        ["lisp", "run", program, heap] => lisp_run(program, heap, 0)?,
         ["lisp", "run", program, heap, words] => {
-            lisp_run(program, heap, words.parse().map_err(|_| "the heap's size is a number of words")?)
+            lisp_run(program, heap, words.parse().map_err(|_| usage("the heap's size is a number of words"))?)?
         }
-        [] => Err("no command".into()),
-        _ => Err("that isn't a command, or it has the wrong number of arguments".into()),
-    }
+        [] => return Err(usage("no command")),
+        _ => return Err(usage("that isn't a command, or it has the wrong number of arguments")),
+    })
 }
 
 /// A trace, read from a file and made ready.
@@ -277,36 +297,60 @@ fn count(loaded: &Loaded, name: &str) -> Result<bool, String> {
     let mut subject = loaded.subject(name)?;
     let mut table = Table::new(&loaded.ops);
     if !green_tea_measure_counted(&loaded.ops, &mut table, &mut subject) {
-        return Err(format!("{name} refused an allocation"));
+        // On standard output, with exit status 1: what `callgrind` looks for.
+        println!("{name} refused an allocation");
+        return Ok(false);
     }
     println!("{name}: {} events replayed", loaded.ops.len());
     Ok(true)
 }
 
+/// Why callgrind gave no count.
+enum Uncounted {
+    /// The program ran and said it had no room: an allocator refused, or a heap was full.
+    NoRoom,
+    /// Anything else: valgrind failed, or the program did.
+    Failed(String),
+}
+
+impl From<Uncounted> for String {
+    fn from(why: Uncounted) -> String {
+        match why {
+            Uncounted::NoRoom => "the program ran out of room under valgrind".into(),
+            Uncounted::Failed(why) => why,
+        }
+    }
+}
+
 /// Run this program again under callgrind with `args`, and return the instructions it
 /// counted inside `function`.
-fn callgrind(function: &str, args: &[&str]) -> Result<u64, String> {
+fn callgrind(function: &str, args: &[&str]) -> Result<u64, Uncounted> {
     callgrind_with_output(function, args).map(|(counted, _)| counted)
 }
 
 /// [`callgrind`], and what the program printed.
-fn callgrind_with_output(function: &str, args: &[&str]) -> Result<(u64, String), String> {
-    let exe = env::current_exe().map_err(|e| e.to_string())?;
+fn callgrind_with_output(function: &str, args: &[&str]) -> Result<(u64, String), Uncounted> {
+    let exe = env::current_exe().map_err(|e| Uncounted::Failed(e.to_string()))?;
     let output = Command::new("valgrind")
         .args(["--tool=callgrind", "--callgrind-out-file=/dev/null"])
         .arg(format!("--toggle-collect={function}"))
         .arg(exe)
         .args(args)
         .output()
-        .map_err(|e| format!("valgrind: {e}"))?;
+        .map_err(|e| Uncounted::Failed(format!("valgrind: {e}")))?;
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
     if !output.status.success() {
-        return Err(format!("under valgrind, `{}` failed: {stderr}", args.join(" ")));
+        if output.status.code() == Some(1) && (stdout.contains("refused an allocation") || stdout.contains("HeapFull")) {
+            return Err(Uncounted::NoRoom);
+        }
+        return Err(Uncounted::Failed(format!("under valgrind, `{}` failed: {stdout}{stderr}", args.join(" "))));
     }
     let collected = stderr.lines().find_map(|line| line.split("Collected :").nth(1));
-    let counted =
-        collected.and_then(|n| n.trim().parse().ok()).ok_or(format!("valgrind printed no count: {stderr}"))?;
-    Ok((counted, String::from_utf8_lossy(&output.stdout).into_owned()))
+    let counted = collected
+        .and_then(|n| n.trim().parse().ok())
+        .ok_or_else(|| Uncounted::Failed(format!("valgrind printed no count: {stderr}")))?;
+    Ok((counted, stdout.into_owned()))
 }
 
 fn instructions(file: &str, loaded: &Loaded, options: &Options) -> Result<bool, String> {
@@ -329,9 +373,13 @@ fn instructions(file: &str, loaded: &Loaded, options: &Options) -> Result<bool, 
     );
     println!("  allocator    instructions  less the loop's  per event");
     for name in chosen(options) {
-        let Ok(all) = counted(&name) else {
-            println!("  {name:10}   refused an allocation: the trace doesn't fit in its region");
-            continue;
+        let all = match counted(&name) {
+            Ok(all) => all,
+            Err(Uncounted::NoRoom) => {
+                println!("  {name:10}   refused an allocation: the trace doesn't fit in its region");
+                continue;
+            }
+            Err(why) => return Err(why.into()),
         };
         println!("  {name:10} {all:14} {:16} {:>10}", all - null, hundredths(all - null, events));
     }
@@ -397,6 +445,8 @@ fn time(loaded: &Loaded, options: &Options) -> Result<bool, String> {
     let mut table = Table::new(ops);
     let mut samples: Vec<u32> = Vec::with_capacity(ops.len() * passes);
     let mut whole: Vec<u64> = Vec::with_capacity(passes);
+    // Written now, because the first write to it is inside a timed pass, and can be to a new page.
+    whole.resize(passes, 1);
     let mut mapped = 0;
     let _ = faults(); // the first read of the file maps what reading it needs
     for name in chosen(options) {
@@ -425,7 +475,7 @@ fn time(loaded: &Loaded, options: &Options) -> Result<bool, String> {
         }
         for _ in 0..passes {
             let ns = replay::pass(ops, &mut table, &mut *subject, options.touch);
-            whole.push(ns.ok_or(format!("{name} refused an allocation"))?);
+            whole.push(ns.ok_or_else(|| format!("{name} refused an allocation"))?);
             subject.reset();
         }
         let during = faults() - before;
@@ -658,7 +708,7 @@ fn lisp_lifetimes() -> Result<bool, String> {
     let mut all = Vec::new();
     for program in &PROGRAMS {
         let made = lifetimes(program)?;
-        let died: usize = made.deaths.iter().map(Vec::len).sum();
+        let died = made.deaths.iter().map(Vec::len).sum::<usize>() + made.died_after_last;
         println!(
             "  {:8} {:9} {:8} {:21} {:11} {:11}",
             program.name,
@@ -761,7 +811,8 @@ fn lisp_instructions(options: &Options) -> Result<bool, String> {
                             per_object(over)
                         );
                     }
-                    Err(_) => println!("  {heap:13} {times:>8} {words:7}   the program doesn't fit"),
+                    Err(Uncounted::NoRoom) => println!("  {heap:13} {times:>8} {words:7}   the program doesn't fit"),
+                    Err(why) => return Err(why.into()),
                 }
             }
         }

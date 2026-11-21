@@ -30,6 +30,9 @@ pub struct Lifetimes {
     pub words: Vec<u8>,
     /// Objects still reachable when the run ended.
     pub left: usize,
+    /// Objects that became unreachable after the last allocation. Nothing frees them: the
+    /// dead are freed before an allocation, and there is no other one.
+    pub died_after_last: usize,
     /// The most words in reachable objects at any allocation.
     pub peak_words: usize,
 }
@@ -76,15 +79,7 @@ impl Profile {
     /// deaths of the allocation that is about to happen.
     fn find_the_dead(&mut self) {
         let stamp = self.objects.len() as u32 + 1;
-        self.work.extend(self.roots.iter().filter_map(|v| v.as_obj()).map(|obj| obj.0));
-        while let Some(n) = self.work.pop() {
-            if self.reached[n as usize] == stamp {
-                continue;
-            }
-            self.reached[n as usize] = stamp;
-            let (kind, fields) = &self.objects[n as usize];
-            self.work.extend(fields[..kind.fields()].iter().filter_map(|v| v.as_obj()).map(|obj| obj.0));
-        }
+        self.mark(stamp);
         let mut dead = Vec::new();
         let (reached, words) = (&self.reached, &self.lifetimes.words);
         let mut freed = 0;
@@ -100,9 +95,27 @@ impl Profile {
         self.lifetimes.deaths.push(dead);
     }
 
+    /// Stamp everything the root stack reaches.
+    fn mark(&mut self, stamp: u32) {
+        self.work.extend(self.roots.iter().filter_map(|v| v.as_obj()).map(|obj| obj.0));
+        while let Some(n) = self.work.pop() {
+            if self.reached[n as usize] == stamp {
+                continue;
+            }
+            self.reached[n as usize] = stamp;
+            let (kind, fields) = &self.objects[n as usize];
+            self.work.extend(fields[..kind.fields()].iter().filter_map(|v| v.as_obj()).map(|obj| obj.0));
+        }
+    }
+
     /// The lifetimes of the run so far.
     pub fn finish(mut self) -> Lifetimes {
-        self.lifetimes.left = self.alive.len();
+        // One more than any allocation's stamp.
+        let stamp = self.objects.len() as u32 + 2;
+        self.mark(stamp);
+        let left = self.alive.iter().filter(|&&n| self.reached[n as usize] == stamp).count();
+        self.lifetimes.left = left;
+        self.lifetimes.died_after_last = self.alive.len() - left;
         self.lifetimes
     }
 }

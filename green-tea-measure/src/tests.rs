@@ -164,6 +164,7 @@ fn the_three_replays_make_the_same_calls() {
     let mut table = Table::new(&ops);
     let mut subject = subjects::build("first-addr", REGION, ops.total).unwrap();
     let space = replay::space(&ops, &mut *subject).unwrap();
+    subject.reset();
     assert!(replay::plain(&ops, &mut table, &mut *subject, 2));
     assert_eq!(subject.footprint(), space.footprint);
     assert_eq!(subject.searched(), space.searched);
@@ -188,6 +189,50 @@ fn the_three_replays_make_the_same_calls() {
         subject.reset();
         assert!(replay::pass(&ops, &mut table, &mut *subject, true).is_some(), "{name}");
         subject.check().unwrap_or_else(|e| panic!("{name}, after its blocks were written to: {e}"));
+    }
+}
+
+/// A subject that only counts its resets.
+#[derive(Default)]
+struct Resets(usize);
+
+impl subjects::Subject for Resets {
+    fn allocate(&mut self, _size: usize, _align: usize) -> Option<usize> {
+        Some(16)
+    }
+
+    unsafe fn free(&mut self, _addr: usize, _size: usize, _align: usize) {}
+
+    fn used(&self) -> Option<usize> {
+        None
+    }
+
+    fn footprint(&self) -> usize {
+        0
+    }
+
+    fn searched(&self) -> Option<(usize, usize)> {
+        None
+    }
+
+    fn check(&self) -> Result<(), &'static str> {
+        Ok(())
+    }
+
+    fn reset(&mut self) {
+        self.0 += 1;
+    }
+}
+
+/// `plain` is what callgrind counts, so a reset inside it is counted as the allocator's work.
+#[test]
+fn the_counted_loop_resets_only_between_passes() {
+    let ops = Ops::new(&[Event::allocate(0xa0, 10, 8), Event::free(0xa0)]);
+    let mut table = Table::new(&ops);
+    for (passes, resets) in [(1, 0), (3, 2)] {
+        let mut subject = Resets::default();
+        assert!(replay::plain(&ops, &mut table, &mut subject, passes));
+        assert_eq!(subject.0, resets, "{passes} passes");
     }
 }
 
@@ -246,6 +291,19 @@ fn the_profile_finds_an_object_dead_at_the_allocation_after_it_became_unreachabl
     assert_eq!((made.left, made.peak_words, made.allocations()), (1, 9, 5));
 }
 
+/// Dead objects are found only before an allocation, so one that dies after the last
+/// allocation must not be counted as reachable at the end.
+#[test]
+fn an_object_that_dies_after_the_last_allocation_is_not_left() {
+    let mut heap = Profile::new();
+    heap.push(Value::int(1));
+    heap.push(Value::NIL);
+    heap.alloc(Kind::Pair).unwrap();
+    heap.pop(); // nothing reaches it now, and nothing is allocated after this
+    let made = heap.finish();
+    assert_eq!((made.left, made.died_after_last), (0, 1));
+}
+
 fn lifetimes(source: &str) -> Lifetimes {
     let mut lisp = Lisp::new(Profile::new());
     lisp.run(source).unwrap();
@@ -259,7 +317,7 @@ fn every_program_computes_its_value_with_explicit_frees() {
     for program in &PROGRAMS {
         let made = lifetimes(program.source);
         let died: usize = made.deaths.iter().map(Vec::len).sum();
-        assert_eq!(died + made.left, made.allocations(), "{}", program.name);
+        assert_eq!(died + made.died_after_last + made.left, made.allocations(), "{}", program.name);
         for name in ["tlsf", "first-addr", "best-lifo", "buddy", "pools", "slabs", "caches", "shards", "hardened"] {
             let subject = subjects::build(name, REGION, 32 * made.allocations()).unwrap();
             let mut lisp = Lisp::new(Explicit::new(subject, Some(&made)));
