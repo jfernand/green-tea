@@ -97,15 +97,24 @@ impl Ecam {
 
     /// The memory address BAR `index` points at, as the firmware set it: `None` for an
     /// I/O-port BAR or one that wasn't given an address. A 64-bit BAR takes two slots,
-    /// low half first.
+    /// low half first. An endpoint has six slots and a bridge two; `None` past them, and
+    /// for any other header type.
     pub fn bar(&self, f: Function, index: usize) -> Option<u64> {
+        let slots = match self.read_u8(f, HEADER_TYPE) & !HEADER_MULTI_FUNCTION {
+            0 => 6,
+            1 => 2,
+            _ => 0,
+        };
+        if index >= slots {
+            return None;
+        }
         let low = self.read_u32(f, BAR0 + 4 * index);
         if low & 1 != 0 {
             return None; // I/O space
         }
         let address = match (low >> 1) & 0b11 {
             0b00 => u64::from(low & !0xf),
-            0b10 if index < 5 => u64::from(low & !0xf) | u64::from(self.read_u32(f, BAR0 + 4 * (index + 1))) << 32,
+            0b10 if index + 1 < slots => u64::from(low & !0xf) | u64::from(self.read_u32(f, BAR0 + 4 * (index + 1))) << 32,
             _ => return None,
         };
         (address != 0).then_some(address)
@@ -198,5 +207,46 @@ mod tests {
         space.capabilities(&[(0x40, 0x10)]);
         space.set_u32(0x10, 0x0000_5009); // would read as a capability, with a next pointer
         assert_eq!(walk(&space), [0x40]);
+    }
+
+    #[test]
+    fn an_endpoint_has_six_bars() {
+        let mut space = Space::new();
+        space.set_u32(BAR0 + 4 * 5, 0xfe00_0000);
+        assert_eq!(space.ecam().bar(F, 5), Some(0xfe00_0000));
+    }
+
+    #[test]
+    fn a_64_bit_bar_takes_two_slots() {
+        let mut space = Space::new();
+        space.set_u32(BAR0 + 4 * 4, 0xfe00_0004);
+        space.set_u32(BAR0 + 4 * 5, 0x1);
+        assert_eq!(space.ecam().bar(F, 4), Some(0x1_fe00_0000));
+    }
+
+    #[test]
+    fn there_is_no_seventh_bar() {
+        let mut space = Space::new();
+        space.set_u32(BAR0 + 4 * 6, 0xfe00_0000); // the CardBus CIS pointer
+        assert_eq!(space.ecam().bar(F, 6), None);
+    }
+
+    #[test]
+    fn a_bridge_has_two_bars() {
+        let mut space = Space::new();
+        space.0[HEADER_TYPE] = 1;
+        space.set_u32(BAR0 + 4, 0xfe00_0000);
+        space.set_u32(BAR0 + 4 * 2, 0x0002_0100); // primary, secondary, subordinate bus
+        assert_eq!(space.ecam().bar(F, 1), Some(0xfe00_0000));
+        assert_eq!(space.ecam().bar(F, 2), None);
+    }
+
+    #[test]
+    fn a_64_bit_bar_cannot_start_in_a_bridges_last_slot() {
+        let mut space = Space::new();
+        space.0[HEADER_TYPE] = 1 | HEADER_MULTI_FUNCTION;
+        space.set_u32(BAR0 + 4, 0xfe00_0004);
+        space.set_u32(BAR0 + 4 * 2, 0x0002_0100); // not a high half: bus numbers
+        assert_eq!(space.ecam().bar(F, 1), None);
     }
 }
