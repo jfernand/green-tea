@@ -26,6 +26,7 @@ kernels built on the same context switch:
 | [`green-tea-kmem`](green-tea-kmem) | What a kernel allocates for itself with: page frames from a buddy system that keeps its records in a table, apart from the pages, and slab caches of constructed objects on top. `no_std`; the kernels' task records come from one. |
 | [`green-tea-region`](green-tea-region) | Regions: a bump allocator over chunks taken from the heap, freed all at once. `alloc` returns a reference that lives as long as the borrow of the region, so the borrow checker refuses a use after the region is dropped or reset, and a pointer from a long-lived region into a short-lived one. `no_std`. |
 | [`green-tea-trace`](green-tea-trace) | A command for the host that reads a trace file (`green-tea-fit`'s `tracefile` module: a text form and a binary form) and replays it against each allocator, as the shell's `replay` does in the kernel. `cargo xtask trace` gets such a file out of the kernel, over its serial console. |
+| [`green-tea-measure`](green-tea-measure) | A command for the host that replays one trace file against every allocator here that one thread can use, and prints what each needed: bytes, free blocks searched, instructions (counted by valgrind's callgrind) and time as a distribution. Also the Lisp's programs with explicit frees placed by an oracle, against the same programs on its garbage-collected heaps. |
 | [`green-tea-smp`](green-tea-smp) | Allocating from several CPUs: a spin lock, and a cache of free blocks for each CPU in front of a heap behind the lock. `no_std`; its tests run on the host with real threads. |
 | [`green-tea-lisp`](green-tea-lisp) | A small Lisp: a reader, an evaluator and a printer, over a heap it reaches only through the ten operations of a trait. The first heap counts references. `no_std`; `--kernel lisp` runs it. |
 | [`green-tea-shard`](green-tea-shard) | Allocating from several CPUs with no lock, after mimalloc: pages of one size class each, a free list in every page, and a second list in every page that other CPUs push to with a compare-and-swap. `no_std`; its tests run on the host with real threads. |
@@ -90,6 +91,7 @@ cargo xtask kernel --kernel region    # the shell's script again, with its memor
 cargo xtask kernel --kernel gtt       # the shell writes its recording as a trace file, and reads it back
 cargo xtask trace                     # saves the shell's recording to target/kernel/shell-riscv64.gtt
 cargo run --release -p green-tea-trace -- replay target/kernel/shell-riscv64.gtt   # replays it on the host
+cargo run --release -p green-tea-measure -- space target/kernel/shell-riscv64.gtt   # and against every allocator
 cargo xtask shell                     # the shell, on this terminal (--target to pick a board)
 cargo xtask kernel --target aarch64   # just one architecture
 cargo xtask kernel --headless --screenshot   # no windows; saves target/kernel/<kernel>-<arch>.png
