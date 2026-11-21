@@ -125,6 +125,16 @@ fn an_integer_that_does_not_fit_in_61_bits_is_a_reader_error() {
 }
 
 #[test]
+fn an_if_needs_a_test_and_a_branch() {
+    let short = Error::Syntax("a form is too short");
+    assert_eq!(lisp().run("(if #t)"), Err(short));
+    assert_eq!(lisp().run("(if nil)"), Err(short));
+    assert_eq!(lisp().run("(if)"), Err(short));
+    assert_eq!(value("(if nil 1)"), "nil"); // the second branch may be left out
+    assert_eq!(value("(if #t 1)"), "1");
+}
+
+#[test]
 fn errors() {
     let run = |source| lisp().run(source).unwrap_err();
     assert_eq!(run("(car 1)"), Error::NotAPair);
