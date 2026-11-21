@@ -1,0 +1,36 @@
+Fit (first fit, address order)
+  allocate(100, 8)        = Some(region + 16), used 128
+  allocate(0, 1)          = Some(region + 144), used +32
+  allocate(24, 64)        = Some(region + 256), address % 64 = 0
+  allocate(8192, 8)       = None
+  allocate(usize::MAX, 8) = None
+  stats().failed          = 2
+  free(a)                 = Ok(())
+  free(a), again          = Err(NotAllocated)
+  free(a + 8)             = Err(NotABlock)
+  free(region + 4096)     = Err(NotABlock)
+  check()                 = Ok(())
+Buddy
+  allocate(100, 8)        = Some(region + 16), used 128
+  allocate(0, 1)          = Some(region + 144), used +32
+  allocate(24, 64)        = None, address % 64 = -
+  allocate(8192, 8)       = None
+  allocate(usize::MAX, 8) = None
+  stats().failed          = 3
+  free(a)                 = Ok(())
+  free(a), again          = Err(NotAllocated)
+  free(a + 8)             = Err(NotABlock)
+  free(region + 4096)     = Err(NotABlock)
+  check()                 = Ok(())
+Tlsf
+  allocate(100, 8)        = Some(region + 16), used 128
+  allocate(0, 1)          = Some(region + 144), used +32
+  allocate(24, 64)        = Some(region + 256), address % 64 = 0
+  allocate(8192, 8)       = None
+  allocate(usize::MAX, 8) = None
+  stats().failed          = 2
+  free(a)                 = Ok(())
+  free(a), again          = Err(NotAllocated)
+  free(a + 8)             = Err(NotABlock)
+  free(region + 4096)     = Err(NotABlock)
+  check()                 = Ok(())

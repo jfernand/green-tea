@@ -1,0 +1,17 @@
+Bitmap
+  take(), 5 times          = Some(slot 0), Some(slot 1), Some(slot 2), Some(slot 3), None
+  free()                   = 0
+  give(slot 2)             = Ok(())
+  give(slot 2), again      = Err(NotTaken)
+  free()                   = 1
+  take(), twice            = Some(slot 2), None
+FreeList
+  take(), 5 times          = Some(slot 0), Some(slot 1), Some(slot 2), Some(slot 3), None
+  free()                   = 0
+  give(slot 2)             = Ok(())
+  give(slot 2), again      = Ok(())
+  free()                   = 2
+  take(), twice            = Some(slot 2), Some(slot 2)
+Bitmap, an address inside slot 0, and one past the last slot
+  give(base + 8)           = Err(NotASlot)
+  give(base + 256)         = Err(NotASlot)
