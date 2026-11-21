@@ -13,6 +13,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitCode, Stdio};
 use std::ptr;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use std::{env, thread};
 
@@ -446,10 +447,48 @@ fn build(job: &Job, release: bool) -> bool {
     cmd.status().is_ok_and(|s| s.success())
 }
 
+/// Where cargo puts what it builds, which `build.target-dir` in a config file can move.
+/// Asked once: it starts a process, and every job wants it.
 fn target_dir() -> PathBuf {
-    env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let mut cargo = Command::new(env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+        cargo.current_dir(workspace_root());
+        target_dir_from(cargo)
+    })
+    .clone()
+}
+
+/// What `cargo metadata` says the target directory is. If cargo can't say, the variable or
+/// the default.
+fn target_dir_from(mut cargo: Command) -> PathBuf {
+    let output = cargo.args(["metadata", "--no-deps", "--format-version", "1"]).stderr(Stdio::null()).output();
+    output
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|json| json_path(&json, "target_directory"))
+        .or_else(|| env::var_os("CARGO_TARGET_DIR").map(PathBuf::from))
         .unwrap_or_else(|| workspace_root().join("target"))
+}
+
+/// The string at `key` in cargo's JSON, for a path: `None` if it has an escape other than
+/// a quote or a backslash.
+fn json_path(json: &str, key: &str) -> Option<PathBuf> {
+    let pattern = format!("\"{key}\":\"");
+    let start = json.rfind(&pattern)? + pattern.len();
+    let mut path = String::new();
+    let mut chars = json[start..].chars();
+    loop {
+        match chars.next()? {
+            '"' => return Some(PathBuf::from(path)),
+            '\\' => match chars.next()? {
+                c @ ('"' | '\\') => path.push(c),
+                _ => return None,
+            },
+            c => path.push(c),
+        }
+    }
 }
 
 /// The disk test's image: 32 KiB.
@@ -801,6 +840,30 @@ mod tests {
         assert_eq!(labels(&[]), expected(None));
         assert!(labels(&[]).contains(&"overflow-riscv64".to_string()));
         assert!(!labels(&[]).contains(&"overflow-aarch64".to_string()));
+    }
+
+    /// A project whose `.cargo/config.toml` moves its target directory, asked with none of
+    /// the variables that would override that.
+    #[test]
+    fn the_target_directory_comes_from_cargos_config() {
+        let dir = std::env::temp_dir().join(format!("xtask-target-dir-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".cargo")).unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"probe\"\nversion = \"0.1.0\"\n[workspace]\n").unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "").unwrap();
+        std::fs::write(dir.join(".cargo/config.toml"), "[build]\ntarget-dir = \"elsewhere\"\n").unwrap();
+        let mut cargo = std::process::Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+        cargo.current_dir(&dir).env_remove("CARGO_TARGET_DIR").env_remove("CARGO_BUILD_TARGET_DIR");
+        let found = super::target_dir_from(cargo);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(found.ends_with("elsewhere"), "{}", found.display());
+    }
+
+    #[test]
+    fn a_path_is_read_from_cargos_json() {
+        let json = r#"{"packages":[],"target_directory":"/a \\ b/\"c\"","version":1}"#;
+        assert_eq!(super::json_path(json, "target_directory"), Some(r#"/a \ b/"c""#.into()));
+        assert_eq!(super::json_path(r#"{"target_directory":"/a\u00e9"}"#, "target_directory"), None);
     }
 
     #[test]
