@@ -1,0 +1,22 @@
+<swap_context>:
+               	mov	qword ptr [rdi], rsp
+               	mov	qword ptr [rdi + 0x8], r15
+               	mov	qword ptr [rdi + 0x10], r14
+               	mov	qword ptr [rdi + 0x18], r13
+               	mov	qword ptr [rdi + 0x20], r12
+               	mov	qword ptr [rdi + 0x28], rbx
+               	mov	qword ptr [rdi + 0x30], rbp
+               	mov	rsp, qword ptr [rsi]
+               	mov	r15, qword ptr [rsi + 0x8]
+               	mov	r14, qword ptr [rsi + 0x10]
+               	mov	r13, qword ptr [rsi + 0x18]
+               	mov	r12, qword ptr [rsi + 0x20]
+               	mov	rbx, qword ptr [rsi + 0x28]
+               	mov	rbp, qword ptr [rsi + 0x30]
+               	ret
+<bootstrap_entry>:
+               	mov	rdi, r15
+               	and	rsp, -0x10
+               	call	r14
+               	ud2
+               	int3

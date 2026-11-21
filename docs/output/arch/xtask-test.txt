@@ -1,0 +1,21 @@
+=== summary
+ok    host                         debug   test
+ok    host                         debug   run coop-2-v2
+ok    host                         debug   run coop-n-v2
+ok    host                         release test
+ok    host                         release run coop-2-v2
+ok    host                         release run coop-n-v2
+ok    aarch64-unknown-linux-gnu    debug   test
+ok    aarch64-unknown-linux-gnu    debug   run coop-2-v2
+ok    aarch64-unknown-linux-gnu    debug   run coop-n-v2
+ok    aarch64-unknown-linux-gnu    release test
+ok    aarch64-unknown-linux-gnu    release run coop-2-v2
+ok    aarch64-unknown-linux-gnu    release run coop-n-v2
+ok    riscv64gc-unknown-linux-gnu  debug   test
+ok    riscv64gc-unknown-linux-gnu  debug   run coop-2-v2
+ok    riscv64gc-unknown-linux-gnu  debug   run coop-n-v2
+ok    riscv64gc-unknown-linux-gnu  release test
+ok    riscv64gc-unknown-linux-gnu  release run coop-2-v2
+ok    riscv64gc-unknown-linux-gnu  release run coop-n-v2
+ok    aarch64-apple-darwin         debug   build lib
+ok    aarch64-apple-darwin         release build lib

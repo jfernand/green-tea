@@ -1,0 +1,9 @@
+x86_64: at the start, rounding mode 0
+x86_64: task A sets rounding mode 2048
+x86_64: task B finds rounding mode 2048
+aarch64: at the start, rounding mode 0
+aarch64: task A sets rounding mode 4194304
+aarch64: task B finds rounding mode 4194304
+riscv64: at the start, rounding mode 0
+riscv64: task A sets rounding mode 3
+riscv64: task B finds rounding mode 3

@@ -1,0 +1,8 @@
+[2m2026-11-21T15:25:55.987377Z[0m [32m INFO[0m [2mgreen_tea_v2::stack[0m[2m:[0m guard: 4k
+[2m2026-11-21T15:25:55.987432Z[0m [32m INFO[0m [2mgreen_tea_v2::stack[0m[2m:[0m guard: 4k
+counter: 1
+words: ping
+counter: 2
+words: pong
+counter: 3
+main: all tasks finished

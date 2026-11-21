@@ -1,0 +1,19 @@
+--- the context of a fresh task (x1): sp x19 x20 x21
+0x4000012a5030:	0x00004000013aa000	0x00004000012a5030
+0x4000012a5040:	0x0000000000000000	0x00007445d7d4e820
+--- x30, at offset 96
+0x4000012a5090:	0x7445d7d5f27c <bootstrap_entry>
+--- x21, at offset 24
+0x4000012a5048:	0x7445d7d4e820 <_RNvNtCs1z9GvXhq2LS_12green_tea_v24task10task_entry>
+0x00007445d7d5f27c in bootstrap_entry ()
+--- after 25 instructions
+=> 0x7445d7d5f27c <bootstrap_entry>:	mov	x0, x19
+sp mod 16 = 0
+green_tea_v2::task::task_entry (arg=<error reading variable: Cannot access memory at address 0xffffffffffffffc8>) at green-tea-v2/src/task.rs:85
+85	extern "C" fn task_entry(arg: *mut ()) -> ! {
+Warning: the current language does not match this frame.
+--- after 2 more
+=> 0x7445d7d4e820 <_RNvNtCs1z9GvXhq2LS_12green_tea_v24task10task_entry>:	sub	sp, sp, #0x90
+sp mod 16 = 0
+x0 == x19: 1
+bootstrap_entry + 8 in section .text of <work>/target/aarch64-unknown-linux-gnu/debug/coop-n-v2

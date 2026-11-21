@@ -1,0 +1,7 @@
+a task calls run
+
+thread 'main' panicked at green-tea-v2/src/runtime.rs:34:5:
+run() called inside run()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+fatal runtime error: failed to initiate panic, error 5, aborting
+exit status 134
