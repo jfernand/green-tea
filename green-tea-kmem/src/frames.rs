@@ -61,6 +61,8 @@ pub enum FreeError {
     /// The frame isn't the first of an allocated block: the block is free already, or the
     /// address is inside a block.
     NotAllocated,
+    /// The frame is one of the first `reserved`, which stay allocated for good.
+    Reserved,
 }
 
 /// What the allocator has done.
@@ -84,6 +86,8 @@ pub struct Frames<'a> {
     heads: [u32; ORDERS],
     /// For each order, how many free blocks there are.
     free: [usize; ORDERS],
+    /// The frames below this one are reserved, and are never freed.
+    reserved: usize,
     /// Pages in allocated blocks.
     used: usize,
     stats: Stats,
@@ -104,8 +108,15 @@ impl<'a> Frames<'a> {
         assert!(table.len() < NONE as usize && reserved <= table.len(), "a table too large");
         table.fill(Frame::NEW);
         let pages = table.len();
-        let mut frames =
-            Frames { base, table, heads: [NONE; ORDERS], free: [0; ORDERS], used: pages, stats: Stats::default() };
+        let mut frames = Frames {
+            base,
+            table,
+            heads: [NONE; ORDERS],
+            free: [0; ORDERS],
+            reserved,
+            used: pages,
+            stats: Stats::default(),
+        };
         // Every page starts as an allocated block of order 0. Freeing the ones that aren't
         // reserved, one at a time, merges them into the largest blocks that fit.
         for frame in reserved..pages {
@@ -146,6 +157,9 @@ impl<'a> Frames<'a> {
         let frame = offset / PAGE;
         if !offset.is_multiple_of(PAGE) || frame >= self.table.len() {
             return Err(FreeError::NotAFrame);
+        }
+        if frame < self.reserved {
+            return Err(FreeError::Reserved);
         }
         if self.table[frame].state != State::Used {
             return Err(FreeError::NotAllocated);
@@ -435,8 +449,17 @@ mod tests {
             assert_eq!(frames.free(block), Ok(2));
             assert_eq!(frames.free(block), Err(FreeError::NotAllocated), "a second free");
             assert_eq!(frames.stats().frees, 1);
-            // The reserved pages are allocated blocks of one page: freeing one is the
-            // caller's mistake, and the table can't tell.
+            frames.check().unwrap();
+        });
+    }
+
+    #[test]
+    fn a_reserved_page_cannot_be_freed() {
+        with_frames(16, 4, |frames| {
+            let refused = frames.free(BASE + 3 * PAGE);
+            assert_eq!(frames.free_pages(), 12, "a reserved page became free");
+            assert_eq!(refused, Err(FreeError::Reserved));
+            assert_eq!(frames.stats().frees, 0);
             frames.check().unwrap();
         });
     }
