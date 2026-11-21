@@ -62,6 +62,9 @@ const HEAP_BLOCKS: usize = 24;
 /// The arena's size: far more than any command needs.
 const ARENA_SIZE: usize = 64 * 1024;
 
+/// What `Shell::line` runs itself, rather than as a command.
+const WHOLE_LINES: [&str; 8] = ["repeat", "test", "trace", "session", "replay", "harden", "regions", "pages"];
+
 /// Where a command's memory comes from.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Source {
@@ -208,6 +211,12 @@ impl Shell {
             println!("usage: repeat <n> <command>");
             return Next::Prompt;
         };
+        // These are handled by `line`, around a command's memory: `command` doesn't know them.
+        if let Some(word) = command.split_ascii_whitespace().next().filter(|word| WHOLE_LINES.contains(word)) {
+            println!("`repeat` runs one command at a time, and can't run `{word}`");
+            return Next::Prompt;
+        }
+        let unknown = self.unknown;
         let (used, before) = (heap::used(), heap::with(|fit| fit.stats()));
         self.quiet = true;
         let mut halted = false;
@@ -216,10 +225,17 @@ impl Shell {
                 halted = true;
                 break;
             }
+            if self.unknown != unknown {
+                break; // it will be unknown every time
+            }
         }
         self.quiet = false;
         if halted {
             return Next::Halt;
+        }
+        if self.unknown != unknown {
+            println!("unknown command `{command}`; try `help`");
+            return Next::Prompt;
         }
         let after = heap::with(|fit| fit.stats());
         println!(
@@ -268,6 +284,12 @@ impl Shell {
     fn repeats(&mut self) -> Result<(), &'static str> {
         if self.repeat("1 halt") != Next::Halt {
             return Err("`repeat 1 halt` didn't halt");
+        }
+        let unknown = self.unknown;
+        self.repeat("2 repeat 2 echo nested");
+        if self.unknown != unknown {
+            self.unknown = unknown;
+            return Err("a nested `repeat` counted as an unknown command");
         }
         Ok(())
     }
