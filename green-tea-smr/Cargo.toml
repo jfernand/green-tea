@@ -1,0 +1,15 @@
+[package]
+name = "green-tea-smr"
+description = "Safe memory reclamation: a lock-free stack and queue, and three answers to when a node they unlinked may be freed (never, after two epochs, when no hazard pointer names it)."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+# no_std, so the bare-metal kernels can use it, and its tests run on the host with real
+# threads: cargo test -p green-tea-smr
+
+[dependencies]

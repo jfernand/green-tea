@@ -30,6 +30,7 @@ mod safety;
 mod slab;
 mod pages;
 mod smp;
+mod smr;
 mod tlsf;
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -55,6 +56,7 @@ extern "C" fn kmain() -> ! {
         b"slab" => slab::test(fb),
         b"safety" => safety::test(fb),
         b"smp" => smp::test(fb),
+        b"smr" => smr::test(fb),
         other => panic!("unknown test {:?}", core::str::from_utf8(other)),
     }
     println!("halting");

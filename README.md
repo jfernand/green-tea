@@ -27,6 +27,7 @@ kernels built on the same context switch:
 | [`green-tea-region`](green-tea-region) | Regions: a bump allocator over chunks taken from the heap, freed all at once. `alloc` returns a reference that lives as long as the borrow of the region, so the borrow checker refuses a use after the region is dropped or reset, and a pointer from a long-lived region into a short-lived one. `no_std`. |
 | [`green-tea-trace`](green-tea-trace) | A command for the host that reads a trace file (`green-tea-fit`'s `tracefile` module: a text form and a binary form) and replays it against each allocator, as the shell's `replay` does in the kernel. `cargo xtask trace` gets such a file out of the kernel, over its serial console. |
 | [`green-tea-smp`](green-tea-smp) | Allocating from several CPUs: a spin lock, and a cache of free blocks for each CPU in front of a heap behind the lock. `no_std`; its tests run on the host with real threads. |
+| [`green-tea-smr`](green-tea-smr) | Safe memory reclamation: a lock-free stack and queue with their nodes on the heap, and when a node they have unlinked may be freed, by epochs and by hazard pointers. `no_std`; its tests run on the host with real threads. |
 | [`drivers/`](drivers) | The device drivers, one crate each, which know their device but not the machine: serial ports (16550, PL011), QEMU's fw_cfg and ramfb, PCI through ECAM, virtio (MMIO and PCI transports, split virtqueues) and virtio-blk. |
 | [`green-tea-bare`](green-tea-bare) | What the kernels share: boot code per board behind the `Platform` and `TimerInterrupt` traits (timers, interrupts, paging, and where each device is), a port of v2's `Task` and scheduler, and a heap. |
 | [`green-tea-coop`](green-tea-coop) | A bare-metal kernel for QEMU on riscv64, aarch64 and x86_64 whose tasks yield to each other, so you can watch the context switches on screen. |
@@ -75,6 +76,7 @@ cargo xtask kernel --kernel frag      # fragmentation: an adversary, and a rando
 cargo xtask kernel --kernel tlsf      # allocators that don't search: a buddy system and TLSF, against the ones that do
 cargo xtask kernel --kernel slab      # page frames from a buddy system, and a slab cache for task records
 cargo xtask kernel --kernel smp       # four CPUs: the heap behind a lock, then a cache for each CPU
+cargo xtask kernel --kernel smr       # four CPUs on a lock-free stack and queue: when to free a node
 cargo xtask kernel --kernel shell     # the shell's test, typed at its serial console
 cargo xtask kernel --kernel trace     # the shell records its heap, and replays the trace against each policy
 cargo xtask kernel --kernel safety    # a task corrupts the free list; the allocator hardened, a defence at a time
@@ -314,8 +316,8 @@ after trimming.
 
 ### Several CPUs
 
-Every kernel boots on one CPU, and all but one test stay there. `--kernel smp` is run on a
-machine with four (`-smp 4`), and starts the other three
+Every kernel boots on one CPU, and all but two tests stay there. `--kernel smp` and
+`--kernel smr` are run on a machine with four (`-smp 4`), and start the other three
 ([`green-tea-bare/src/cpus.rs`](green-tea-bare/src/cpus.rs)). How is the board's business:
 
 | | riscv64 (`virt`) | aarch64 (`virt`) | x86_64 (`q35`) |
@@ -337,6 +339,23 @@ has four CPUs add to a counter with and without a lock, then make 80,128 allocat
 frees from the kernel's heap, which takes its lock 80,128 times, and then the same
 through a cache each, which takes the lock behind them 2,680 times. The crate's own tests
 run on the host, with threads: `cargo test -p green-tea-smp`.
+
+[`green-tea-smr`](green-tea-smr) has a stack and a queue that take no lock: they change
+their lists with compare-and-swap, and keep their nodes on the heap. A thread may be
+reading a node at the moment another unlinks it, so the thread that unlinks a node doesn't
+free it but *retires* it, to a `Reclaim` that frees it when nobody can still hold its
+address. There are four: `AtOnce`, which is wrong; `Leak`, which never frees; `epoch`,
+which frees a node once every thread has begun a new operation twice over (the form of
+epoch-based reclamation that Trevor Brown calls DEBRA); and `hazard`, Maged Michael's
+hazard pointers, which frees a node when no thread has announced that it is using it.
+`--kernel smr` first interrupts a pop, on one CPU, with what another thread could do at
+its worst moment: with `AtOnce` the stack ends up sharing a node with another stack, and
+with the other two it doesn't. Then four CPUs share a stack and a queue; one of them
+stops in the middle of an operation, which with epochs keeps every node retired
+afterwards from being freed and with hazard pointers keeps one; one replaces a value by
+copying it while the others read it (`rcu::Rcu`, the shape of read-copy update); and a
+queue of jobs that split themselves in two is run by all four. The crate's own tests run on the host, with
+threads: `cargo test -p green-tea-smr`.
 
 ### A shell, and an arena
 
