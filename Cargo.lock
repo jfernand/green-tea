@@ -123,6 +123,7 @@ name = "green-tea-coop"
 version = "0.1.0"
 dependencies = [
  "green-tea-bare",
+ "green-tea-lisp",
 ]
 
 [[package]]
@@ -142,6 +143,10 @@ version = "0.1.0"
 
 [[package]]
 name = "green-tea-kmem"
+version = "0.1.0"
+
+[[package]]
+name = "green-tea-lisp"
 version = "0.1.0"
 
 [[package]]

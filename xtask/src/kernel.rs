@@ -57,6 +57,9 @@ is echoed here, and the run passes when every kernel reports PASS.
             other three, and has all four use the kernel's heap at once, behind its lock,
             and then a heap with a cache for each CPU in front of it (riscv64, aarch64,
             x86_64)
+  lisp      green-tea-coop's test of green-tea-lisp: a small Lisp on a heap that counts
+            references, with every allocation, free and count operation counted, a list
+            freed three ways, and cycles leaked and collected (riscv64, aarch64, x86_64)
   shell     green-tea-shell: types two commands at the shell on the serial console; the
             second is its `test`, which checks that commands free what they allocate,
             from the heap or from an arena
@@ -112,6 +115,7 @@ const KERNELS: &[Kernel] = &[
     Kernel { name: "slab", package: "green-tea-coop", arches: ALL, test: Some("slab"), disk: false, input: None },
     Kernel { name: "pages", package: "green-tea-coop", arches: &["riscv64", "x86_64"], test: Some("pages"), disk: false, input: None },
     Kernel { name: "smp", package: "green-tea-coop", arches: ALL, test: Some("smp"), disk: false, input: None },
+    Kernel { name: "lisp", package: "green-tea-coop", arches: ALL, test: Some("lisp"), disk: false, input: None },
     Kernel {
         name: "shell",
         package: "green-tea-shell",

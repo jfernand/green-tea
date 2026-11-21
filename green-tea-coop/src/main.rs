@@ -30,6 +30,7 @@ mod safety;
 mod slab;
 mod pages;
 mod smp;
+mod lisp;
 mod tlsf;
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -51,6 +52,7 @@ extern "C" fn kmain() -> ! {
         b"fit" => fit::test(fb),
         b"frag" => frag::test(fb),
         b"pages" => pages::test(fb),
+        b"lisp" => lisp::test(fb),
         b"tlsf" => tlsf::test(fb),
         b"slab" => slab::test(fb),
         b"safety" => safety::test(fb),
