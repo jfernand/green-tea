@@ -3,8 +3,10 @@ use core::arch::global_asm;
 global_asm!(include_str!("riscv64.s"));
 
 /// The registers `swap_context` saves and restores: `sp` and `ra`, plus the LP64D
-/// callee-saved registers s0–s11 and fs0–fs11. Everything else is caller-saved, so the
-/// compiler has already spilled anything it cares about before calling `swap_context`.
+/// callee-saved registers s0–s11 and fs0–fs11, and `fcsr`, the floating-point control and
+/// status register (rounding mode and flags), which the psABI gives thread storage duration.
+/// Everything else is caller-saved, so the compiler has already spilled anything it cares
+/// about before calling `swap_context`.
 ///
 /// Saving fs0–fs11 assumes a hard-float (LP64D) target such as riscv64gc. riscv64.s turns
 /// on the D extension for itself with `.option arch, +d`.
@@ -18,9 +20,12 @@ pub struct Context {
     s2: u64,           // 32(a0)   callee saved; on a fresh context, the entry function
     s3_s11: [u64; 9],  // 40(a0)..104(a0)
     fs0_fs11: [u64; 12], // 112(a0)..200(a0) callee-saved floating point
+    fcsr: u64,         // 208(a0)  floating-point control and status; 0 is the default
 }
 
-const _: () = assert!(size_of::<Context>() == 208); // the offsets riscv64.s uses
+// The offsets riscv64.s uses.
+const _: () = assert!(size_of::<Context>() == 216);
+const _: () = assert!(core::mem::offset_of!(Context, fcsr) == 208);
 
 unsafe extern "C" {
     /// Save the current registers into `from`, load `to`'s, and `ret` to `to`'s `ra`.

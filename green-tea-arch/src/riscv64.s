@@ -34,6 +34,8 @@ swap_context:
     fsd  fs9, 184(a0)
     fsd  fs10, 192(a0)
     fsd  fs11, 200(a0)
+    frcsr t0
+    sd   t0,  208(a0)
 
     # Load saved registers from `to` (*const Context in a1)
     ld   sp,    0(a1)
@@ -62,6 +64,8 @@ swap_context:
     fld  fs9, 184(a1)
     fld  fs10, 192(a1)
     fld  fs11, 200(a1)
+    ld   t0,  208(a1)
+    fscsr t0
 
     ret     # jalr zero, 0(ra): like aarch64, the return address is in a register
 

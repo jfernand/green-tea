@@ -3,7 +3,9 @@
 
 use crate::arch::{Context, swap_context};
 use crate::stack::Stack;
+use std::any::Any;
 use std::cell::Cell;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::ptr::{self, NonNull};
 
 const STACK_SIZE: usize = 32 * 1024;
@@ -13,7 +15,8 @@ thread_local! {
     static CURRENT: Cell<*mut Inner> = const { Cell::new(ptr::null_mut()) };
 }
 
-/// An owned handle to a task. Dropping it frees the task's stack.
+/// An owned handle to a task. Dropping it frees the task's stack, unless the task is suspended
+/// partway through its closure: then the stack is leaked (see `Drop`).
 ///
 /// The task's state lives in a separate heap allocation (`Inner`) that is only ever touched
 /// through raw pointers. That way `resume(&mut self)` borrows just this handle, while the
@@ -28,6 +31,7 @@ struct Inner {
     caller: Context,  // whoever resumed it; yield_now and finishing switch back here
     func: Option<Box<dyn FnOnce()>>,
     done: bool,
+    panic: Option<Box<dyn Any + Send>>, // a panic on its way to whoever resumed the task
     _stack: Stack,
 }
 
@@ -38,6 +42,7 @@ impl Task {
             caller: Context::default(),
             func: Some(Box::new(func)),
             done: false,
+            panic: None,
             _stack: Stack::new(STACK_SIZE),
         }));
         unsafe {
@@ -53,20 +58,31 @@ impl Task {
     /// Run the task until it yields or finishes.
     ///
     /// Tasks can resume other tasks: `CURRENT` is saved and restored around the switch.
+    ///
+    /// # Panics
+    /// If the task has already finished, and with the task's own panic if it panics.
     pub fn resume(&mut self) {
         let inner = self.inner.as_ptr();
         assert!(!self.is_done(), "resumed a task that has already finished");
         let previous = CURRENT.replace(inner);
         unsafe { swap_context(&raw mut (*inner).caller, &raw const (*inner).context) };
         CURRENT.set(previous);
+        if let Some(payload) = unsafe { (*inner).panic.take() } {
+            resume_unwind(payload);
+        }
     }
 }
 
 impl Drop for Task {
-    /// A task dropped while suspended mid-closure never gets to run its locals' destructors;
-    /// its stack is simply unmapped.
+    /// A task dropped while suspended mid-closure never gets to run its locals' destructors,
+    /// so whatever they guard stays in force: a `thread::scope` in one of its frames may still
+    /// have threads using that frame. Its state and stack are therefore leaked, not freed.
     fn drop(&mut self) {
-        drop(unsafe { Box::from_raw(self.inner.as_ptr()) });
+        let inner = self.inner.as_ptr();
+        let suspended = unsafe { (*inner).func.is_none() && !(*inner).done };
+        if !suspended {
+            drop(unsafe { Box::from_raw(inner) });
+        }
     }
 }
 
@@ -80,13 +96,15 @@ pub fn yield_now() {
     unsafe { swap_context(&raw mut (*inner).context, &raw const (*inner).caller) };
 }
 
-/// Where every task starts, on its own stack: run the closure, mark the task done, and
-/// switch back for the last time.
+/// Where every task starts, on its own stack: run the closure, mark the task done (a panic
+/// finishes it too), and switch back for the last time.
 extern "C" fn task_entry(arg: *mut ()) -> ! {
     let inner: *mut Inner = arg.cast();
     unsafe {
         if let Some(func) = (*inner).func.take() {
-            func(); // a panic here can't unwind past this extern "C" frame, so it aborts
+            // There is no frame to unwind into below this one: the stack ends here. So stop a
+            // panic at this point, and let `resume` continue it on the resumer's stack.
+            (*inner).panic = catch_unwind(AssertUnwindSafe(func)).err();
         }
         (*inner).done = true;
         swap_context(&raw mut (*inner).context, &raw const (*inner).caller);
@@ -97,8 +115,10 @@ extern "C" fn task_entry(arg: *mut ()) -> ! {
 #[cfg(test)]
 mod tests {
     use super::{Task, yield_now};
+    use core::arch::asm;
     use libc::{c_int, c_void};
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::rc::Rc;
     use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
     use std::{mem, ptr};
@@ -197,6 +217,146 @@ mod tests {
         for &(seed, got) in results.iter() {
             assert_eq!(got.to_bits(), expected(seed).to_bits(), "seed {seed}");
         }
+    }
+
+    /// Whether the page holding `addr` is mapped. Asks the kernel, because reading an unmapped
+    /// address would kill the whole test process.
+    fn is_mapped(addr: usize) -> bool {
+        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
+        let mut resident = 0;
+        unsafe { libc::mincore((addr & !(page - 1)) as *mut c_void, 1, &mut resident) == 0 }
+    }
+
+    /// Safe code can lend a task's stack to a scoped thread and then drop the suspended task
+    /// from the outside, so the frame must stay mapped and intact.
+    #[test]
+    fn dropping_a_suspended_task_keeps_its_stack() {
+        let local_addr = Rc::new(Cell::new(0usize));
+        let addr = local_addr.clone();
+        let mut task = Task::new(move || {
+            let local = std::hint::black_box(7u64);
+            addr.set(&raw const local as usize);
+            yield_now();
+            std::hint::black_box(&local);
+        });
+        task.resume();
+        let addr = local_addr.get();
+        drop(task);
+        assert!(is_mapped(addr), "the suspended task's stack was unmapped");
+        assert_eq!(unsafe { (addr as *const u64).read_volatile() }, 7);
+    }
+
+    /// A panic in a task reaches whoever resumed it, after running the task's destructors.
+    #[test]
+    fn a_panic_in_a_task_unwinds_to_the_resumer() {
+        struct SetOnDrop(Rc<Cell<bool>>);
+        impl Drop for SetOnDrop {
+            fn drop(&mut self) {
+                self.0.set(true);
+            }
+        }
+        let dropped = Rc::new(Cell::new(false));
+        let flag = SetOnDrop(dropped.clone());
+        let mut task = Task::new(move || {
+            let _flag = flag;
+            panic!("boom");
+        });
+        let payload = catch_unwind(AssertUnwindSafe(|| task.resume())).unwrap_err();
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"boom"));
+        assert!(dropped.get(), "the task's destructors did not run");
+        assert!(task.is_done());
+    }
+
+    /// The floating-point control state: the rounding mode and friends, without the sticky
+    /// status flags, which ordinary arithmetic sets.
+    fn fp_control() -> u64 {
+        #[cfg(target_arch = "x86_64")]
+        {
+            let (mut mxcsr, mut cw) = (0u32, 0u16);
+            unsafe {
+                asm!("stmxcsr [{}]", in(reg) &raw mut mxcsr);
+                asm!("fnstcw [{}]", in(reg) &raw mut cw);
+            }
+            u64::from(mxcsr & !0x3F) | u64::from(cw) << 32
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            let fpcr: u64;
+            unsafe { asm!("mrs {}, fpcr", out(reg) fpcr) };
+            fpcr
+        }
+        #[cfg(target_arch = "riscv64")]
+        {
+            let frm: u64;
+            unsafe { asm!(".option push", ".option arch, +d", "frrm {}", ".option pop", out(reg) frm) };
+            frm
+        }
+    }
+
+    /// Round toward zero, in every floating-point unit the architecture has.
+    fn round_toward_zero() {
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            let (mut mxcsr, mut cw) = (0u32, 0u16);
+            asm!("stmxcsr [{}]", in(reg) &raw mut mxcsr);
+            asm!("fnstcw [{}]", in(reg) &raw mut cw);
+            mxcsr |= 0x6000;
+            cw |= 0x0C00;
+            asm!("ldmxcsr [{}]", in(reg) &raw const mxcsr);
+            asm!("fldcw [{}]", in(reg) &raw const cw);
+        }
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            let fpcr: u64;
+            asm!("mrs {}, fpcr", out(reg) fpcr);
+            asm!("msr fpcr, {}", in(reg) fpcr | 3 << 22);
+        }
+        #[cfg(target_arch = "riscv64")]
+        unsafe {
+            asm!(".option push", ".option arch, +d", "fsrmi 1", ".option pop");
+        }
+    }
+
+    /// Each task has its own rounding mode, and so does its resumer. On a thread of its own,
+    /// so a failure can't leave the harness's thread rounding the wrong way.
+    #[test]
+    fn fp_control_state_is_per_task() {
+        std::thread::spawn(|| {
+            let resumer = fp_control();
+            let in_task = Rc::new(Cell::new(0));
+            let seen = in_task.clone();
+            let mut task = Task::new(move || {
+                round_toward_zero();
+                seen.set(fp_control());
+                yield_now();
+                seen.set(fp_control());
+            });
+            task.resume();
+            let changed = in_task.get();
+            assert_ne!(changed, resumer, "the task could not change its rounding mode");
+            assert_eq!(fp_control(), resumer, "the task's rounding mode leaked into its resumer");
+            task.resume();
+            assert_eq!(in_task.get(), changed, "the task lost its rounding mode across a yield");
+            assert_eq!(fp_control(), resumer);
+        })
+        .join()
+        .unwrap();
+    }
+
+    /// A new task starts in the default mode, whatever its creator has set.
+    #[test]
+    fn a_fresh_task_has_the_default_fp_control_state() {
+        std::thread::spawn(|| {
+            let default = fp_control();
+            round_toward_zero();
+            let in_task = Rc::new(Cell::new(0));
+            let seen = in_task.clone();
+            let mut task = Task::new(move || seen.set(fp_control()));
+            task.resume();
+            assert_eq!(in_task.get(), default);
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]

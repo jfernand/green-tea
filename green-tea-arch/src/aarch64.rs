@@ -3,8 +3,8 @@ use core::arch::global_asm;
 global_asm!(include_str!("aarch64.s"));
 
 /// The registers `swap_context` saves and restores: `sp` plus the AAPCS64 callee-saved
-/// registers, including the low halves of v8–v15 (d8–d15). Everything else is
-/// caller-saved, so the compiler has already spilled anything it cares about before
+/// registers, including the low halves of v8–v15 (d8–d15), and `fpcr`, the floating-point
+/// control register (rounding mode and friends). Everything else is caller-saved, so the compiler has already spilled anything it cares about before
 /// calling `swap_context`.
 #[derive(Debug, Default)]
 #[repr(C)]
@@ -23,9 +23,12 @@ pub struct Context {
     x29: u64,      // [x0, #88]  frame pointer
     x30: u64,      // [x0, #96]  link register: where execution resumes
     d8_d15: [u64; 8], // [x0, #104..#160] callee-saved floating point
+    fpcr: u64,     // [x0, #168] floating-point control; 0 is the default mode
 }
 
-const _: () = assert!(size_of::<Context>() == 168); // the offsets aarch64.s uses
+// The offsets aarch64.s uses.
+const _: () = assert!(size_of::<Context>() == 176);
+const _: () = assert!(core::mem::offset_of!(Context, fpcr) == 168);
 
 unsafe extern "C" {
     /// Save the current registers into `from`, load `to`'s, and `ret` to `to`'s `x30`.

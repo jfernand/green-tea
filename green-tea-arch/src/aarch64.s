@@ -18,6 +18,8 @@ swap_context:
     stp d10, d11, [x0, #120]
     stp d12, d13, [x0, #136]
     stp d14, d15, [x0, #152]
+    mrs x2, fpcr
+    str x2,       [x0, #168]
 
     // Load saved registers from `to` (*const Context in x1)
     ldr x2,       [x1, #0]
@@ -32,6 +34,8 @@ swap_context:
     ldp d10, d11, [x1, #120]
     ldp d12, d13, [x1, #136]
     ldp d14, d15, [x1, #152]
+    ldr x2,       [x1, #168]
+    msr fpcr, x2
 
     ret // jumps to x30. Unlike x86 there's no return address on the stack: `bl` put
         // it in the link register, and we just swapped that for `to`'s.
