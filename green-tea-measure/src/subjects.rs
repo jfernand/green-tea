@@ -543,7 +543,8 @@ impl Subject for Caches {
 /// One CPU's heap of pages, after mimalloc, with TLSF for the blocks no class serves.
 struct Shards {
     memory: Memory,
-    arena: &'static Arena,
+    /// From `Box::into_raw`. `heap` borrows it, and a reset frees it after replacing `heap`.
+    arena: *mut Arena,
     heap: green_tea_shard::Heap<'static>,
     large: Large,
 }
@@ -552,13 +553,20 @@ impl Shards {
     fn new(region: usize) -> Shards {
         // The arena keeps its page headers at the start of its region, and its pages are 16 KiB.
         let memory = Memory::new(region + region / 64 + 4 * green_tea_shard::PAGE);
-        let arena = Shards::arena(&memory);
-        Shards { memory, arena, heap: arena.heap(RETAIN), large: Large::new(region) }
+        let arena = Shards::make_arena(&memory);
+        // SAFETY: the arena was just made, and lives until `reset` replaces it and this heap.
+        let heap = unsafe { &*arena }.heap(RETAIN);
+        Shards { memory, arena, heap, large: Large::new(region) }
     }
 
-    fn arena(memory: &Memory) -> &'static Arena {
-        // SAFETY: the region is the subject's own. The arena is leaked, as the frame table is.
-        Box::leak(Box::new(unsafe { Arena::new(memory.base(), memory.len()) }))
+    fn make_arena(memory: &Memory) -> *mut Arena {
+        // SAFETY: the region is the subject's own.
+        Box::into_raw(Box::new(unsafe { Arena::new(memory.base(), memory.len()) }))
+    }
+
+    fn arena(&self) -> &Arena {
+        // SAFETY: `arena` is valid from `new` on: `reset` replaces it with another.
+        unsafe { &*self.arena }
     }
 }
 
@@ -586,7 +594,7 @@ impl Subject for Shards {
 
     /// The arena's pages up to the highest one a heap has been given, and what TLSF reached.
     fn footprint(&self) -> usize {
-        self.arena.footprint() + self.large.tlsf.footprint()
+        self.arena().footprint() + self.large.tlsf.footprint()
     }
 
     fn searched(&self) -> Option<(usize, usize)> {
@@ -599,8 +607,12 @@ impl Subject for Shards {
     }
 
     fn reset(&mut self) {
-        self.arena = Shards::arena(&self.memory);
-        self.heap = self.arena.heap(RETAIN);
+        let old = self.arena;
+        self.arena = Shards::make_arena(&self.memory);
+        // SAFETY: the new arena lives until the next reset, which replaces this heap too.
+        self.heap = unsafe { &*self.arena }.heap(RETAIN);
+        // SAFETY: the only heap that borrowed the old arena was replaced on the line above.
+        drop(unsafe { Box::from_raw(old) });
         self.large.reset();
     }
 }
