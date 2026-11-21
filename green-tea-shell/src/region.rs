@@ -248,8 +248,13 @@ impl Recorder {
 impl Shell {
     /// `regions`: run the script each way, print what each asked of the heap, and judge.
     pub fn regions(&mut self) {
-        drop(heap::stop_recording()); // `trace on` may have been typed
-        self.vars.take(); // a session starts with no variables, and nowhere to put them
+        // The runs record the heap themselves, and a session starts with no variables.
+        if heap::is_recording() {
+            return println!("`regions` needs the recorder: a recording is under way, `trace off` first");
+        }
+        if !self.vars.borrow().is_empty() {
+            return println!("`regions` runs with no variables: `unset` the ones in `vars` first");
+        }
         let in_use = heap::used();
         // The heap is looked at again before the verdict is put together: its text is on the heap.
         match (self.compare(), heap::used()) {

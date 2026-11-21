@@ -312,6 +312,26 @@ impl Shell {
         Ok(())
     }
 
+    /// `regions` leaves a recording under way, and the variables, as they were.
+    fn regions_refuse(&mut self) -> Result<(), &'static str> {
+        let vars = self.vars.take();
+        self.vars.borrow_mut().push((String::from("kept"), String::from("value")));
+        self.regions();
+        let kept = self.vars.borrow().len() == 1;
+        self.vars.replace(vars);
+        if !kept {
+            return Err("`regions` discarded the variables");
+        }
+        if !heap::is_recording() {
+            heap::record(alloc::vec![Default::default(); 16].into_boxed_slice());
+            self.regions();
+            if heap::stop_recording().is_none() {
+                return Err("`regions` discarded a recording under way");
+            }
+        }
+        Ok(())
+    }
+
     /// `test`: check that commands run from the heap allocate there and free all of it,
     /// and that commands run from the arena don't touch the heap. Also fails if anything
     /// typed before it wasn't a command, which is how a lost or garbled byte on the serial
@@ -355,7 +375,7 @@ impl Shell {
             println!("FAIL: the arena has {in_use} bytes in use after a reset, and peaked at {peak}");
         } else if let Err(e) = heap::with(|fit| fit.check()) {
             println!("FAIL: the heap is inconsistent: {e}");
-        } else if let Err(e) = empty_arena().and_then(|()| self.repeats()).and_then(|()| self.trace_twice()) {
+        } else if let Err(e) = empty_arena().and_then(|()| self.repeats()).and_then(|()| self.trace_twice()).and_then(|()| self.regions_refuse()) {
             println!("FAIL: {e}");
         } else {
             println!(
@@ -531,7 +551,8 @@ trace check        write it as a file in memory, and read it back
 session            run a script of a few thousand commands, from the heap
 replay             replay what was recorded against each policy
 harden             replay it against the hardened allocator, a defence at a time
-regions            run the session with its memory from regions, and compare
+regions            run the session with its memory from regions, and compare (with no
+                   variables and no recording under way)
 pages [trim|replay] the heap's pages: how many are mapped; give back the idle ones;
                    replay what was recorded and count the pages it touches
 repeat <n> <cmd>   run a command n times, without its output
