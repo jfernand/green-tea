@@ -80,6 +80,7 @@ cargo xtask kernel --kernel smp       # four CPUs: the heap behind a lock, then 
 cargo xtask kernel --kernel shard     # four CPUs and no lock: a heap of pages for each, against the caches
 cargo xtask kernel --kernel lisp      # a small Lisp on a heap that counts references
 cargo xtask kernel --kernel gc        # the same Lisp on heaps that mark and sweep, mark and compact, and copy
+cargo xtask kernel --kernel gen       # the same Lisp on a heap with two generations, and what its write barrier records
 cargo xtask kernel --kernel shell     # the shell's test, typed at its serial console
 cargo xtask kernel --kernel trace     # the shell records its heap, and replays the trace against each policy
 cargo xtask kernel --kernel safety    # a task corrupts the free list; the allocator hardened, a defence at a time
@@ -394,6 +395,25 @@ each heap and counts the collections and the objects traced, walked and moved, a
 where objects are after a collection, what the mark stack holds, and what a reference
 that the heap wasn't told about refers to afterwards. The smallest heap each program runs
 in is found on the host: `cargo run --release -p green-tea-lisp --example heaps`.
+
+### A heap with two generations
+
+[`GenHeap`](green-tea-lisp/src/generational.rs) is a fifth heap behind the same trait. Every
+object is made in a nursery at the top of the heap's words, by moving a pointer. A minor
+collection copies what survives to the end of an old space at the bottom, and traces
+nothing there: it starts from the root stack and from a remembered set, which the write
+barrier in `set_field` fills with the old objects that were made to refer to nursery
+objects (`Barrier::Filter`), or with every object stored into (`Barrier::Every`). The
+nursery is at most half of the unused words, so the survivors always fit, and the old
+space is compacted in place when it passes half of the heap.
+
+`--kernel gen` types a few lines at it and prints where one pair is after each, runs seven
+programs (the five, and two that store into old objects) and counts what was copied out of
+the nursery and what the barrier recorded, and shows a minor collection that traces
+nothing with 10,000 objects in the old space, and what a store without the barrier leaves
+behind. The longer tables are made on the host: `cargo run --release -p green-tea-lisp
+--example generations`, and `--example store_cost` under `valgrind --tool=callgrind` for
+what a store costs in instructions.
 
 ### A shell, and an arena
 
