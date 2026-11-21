@@ -475,32 +475,17 @@ you can type at it. `halt` stops the kernel; ctrl-a x leaves QEMU.";
 /// `cargo xtask shell`: one QEMU, in the foreground, with the kernel's serial port on our
 /// stdin and stdout.
 pub fn shell(args: &[String]) -> ExitCode {
-    let mut arch = &ARCHES[0];
-    let mut release = false;
-    let mut args = args.iter();
-    while let Some(arg) = args.next() {
-        match (arg.as_str(), args.clone().next()) {
-            ("--release", _) => release = true,
-            ("--target", Some(value)) => match ARCHES.iter().find(|a| a.name == value || a.triple == value) {
-                Some(found) => {
-                    arch = found;
-                    args.next();
-                }
-                None => {
-                    eprintln!("error: unknown target {value}\n\n{SHELL_USAGE}");
-                    return ExitCode::FAILURE;
-                }
-            },
-            ("-h" | "--help", _) => {
-                println!("{SHELL_USAGE}");
-                return ExitCode::SUCCESS;
-            }
-            _ => {
-                eprintln!("error: unknown option {arg}\n\n{SHELL_USAGE}");
-                return ExitCode::FAILURE;
-            }
+    let (arch, release) = match parse_shell(args) {
+        Ok(Some(parsed)) => parsed,
+        Ok(None) => {
+            println!("{SHELL_USAGE}");
+            return ExitCode::SUCCESS;
         }
-    }
+        Err(e) => {
+            eprintln!("error: {e}\n\n{SHELL_USAGE}");
+            return ExitCode::FAILURE;
+        }
+    };
     if let Err(problems) = preflight(&[arch]) {
         eprintln!("missing prerequisites:");
         for p in problems {
@@ -532,6 +517,29 @@ pub fn shell(args: &[String]) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// `shell`'s arguments: the architecture, and whether to optimize. `None` for `--help`.
+fn parse_shell(args: &[String]) -> Result<Option<(&'static Arch, bool)>, String> {
+    let mut arch = &ARCHES[0];
+    let mut release = false;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match (arg.as_str(), args.clone().next()) {
+            ("--release", _) => release = true,
+            ("--target", Some(value)) => {
+                arch = ARCHES
+                    .iter()
+                    .find(|a| a.name == value || a.triple == value)
+                    .ok_or_else(|| format!("unknown target {value}"))?;
+                args.next();
+            }
+            ("--target", None) => return Err("--target needs a value".into()),
+            ("-h" | "--help", _) => return Ok(None),
+            _ => return Err(format!("unknown option {arg}")),
+        }
+    }
+    Ok(Some((arch, release)))
 }
 
 /// One QEMU and what we've learned from it so far.
@@ -767,6 +775,12 @@ mod tests {
         assert_eq!(labels(&[]), expected(None));
         assert!(labels(&[]).contains(&"overflow-riscv64".to_string()));
         assert!(!labels(&[]).contains(&"overflow-aarch64".to_string()));
+    }
+
+    #[test]
+    fn shell_says_when_target_has_no_value() {
+        let parsed = super::parse_shell(&["--target".to_string()]).map(|_| ());
+        assert_eq!(parsed, Err("--target needs a value".to_string()));
     }
 
     #[test]
