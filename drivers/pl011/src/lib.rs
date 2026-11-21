@@ -18,8 +18,8 @@ impl Pl011 {
         }
     }
 
-    /// Turn the UART on, with its transmitter and receiver. QEMU's starts that way, but
-    /// the hardware doesn't.
+    /// Turn the UART on, with its transmitter and receiver. QEMU resets it with those two
+    /// set but UARTEN clear, and sends bytes regardless; the hardware needs all three.
     pub fn enable(&self) {
         const CR: usize = 0x30; // control register
         const CR_UARTEN: u32 = 1 << 0;
