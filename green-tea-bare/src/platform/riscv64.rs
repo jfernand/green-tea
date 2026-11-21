@@ -9,10 +9,13 @@
 //! Guard pages: `init` turns on Sv39 paging with an identity map, in which the guard page
 //! under each task stack is missing. A task that overflows takes a page fault there,
 //! which `trap_entry` handles on a stack of its own (the task's is the one that's full).
+//!
+//! Demand paging: the same map leaves out every page of the heap. A fault there maps the
+//! page (`crate::pages::fault`), and `trap_entry` returns to the instruction that faulted.
 
 use super::{Platform, TimerInterrupt};
 use crate::Global;
-use crate::stack;
+use crate::{pages, stack};
 use core::arch::{asm, global_asm};
 use green_tea_fw_cfg::Mmio;
 use green_tea_ns16550::Ns16550Mmio;
@@ -50,6 +53,19 @@ _start:
 impl Platform for RiscvVirt {
     const NAME: &'static str = "riscv64";
     const GUARD_PAGES: bool = true;
+    const DEMAND_PAGING: bool = true;
+
+    fn set_mapped(page: usize, mapped: bool) -> bool {
+        paging::set_mapped(page, mapped)
+    }
+
+    fn is_mapped(page: usize) -> bool {
+        paging::is_mapped(page)
+    }
+
+    fn walk(addr: usize) -> [Option<pages::Step>; 4] {
+        paging::walk(addr)
+    }
 
     /// Catch traps (so a fault panics with a report instead of hanging in OpenSBI), and
     /// turn on paging.
@@ -107,7 +123,8 @@ const SCAUSE_SUPERVISOR_TIMER: usize = SCAUSE_INTERRUPT | 5;
 
 /// What `trap_entry` pushes on the interrupted stack. `x[n]` holds register xn; x0 (zero)
 /// and x2 (sp, which is recovered by popping the frame) aren't saved, so `x[0]` and `x[2]`
-/// are unused. Every register is saved, not just the caller-saved ones that an ordinary
+/// are unused. For a fault the frame is on the fault stack, and `x[2]` holds the faulting
+/// code's sp. Every register is saved, not just the caller-saved ones that an ordinary
 /// call would clobber: the handler may switch tasks, and the frame is also what you'd want
 /// to inspect when an unexpected trap panics.
 #[repr(C)]
@@ -133,9 +150,9 @@ global_asm!(
     .globl green_tea_trap_entry
 green_tea_trap_entry:
     # An exception (a fault), rather than an interrupt, may be a stack overflow: then sp
-    # points into a guard page, and pushing a frame would fault again, forever. Faults
-    # never return here, so they get a stack of their own. scause's top bit says which:
-    # set (negative) for an interrupt.
+    # points into a guard page, and pushing a frame would fault again, forever. So faults
+    # get a stack of their own. scause's top bit says which: set (negative) for an
+    # interrupt.
     csrw sscratch, t0
     csrr t0, scause
     bgez t0, 9f
@@ -176,11 +193,47 @@ green_tea_trap_entry:
     addi sp, sp, 544
     sret
 
-9:  # A fault: report it from the fault stack, with the old sp and ra.
-    mv a0, sp
-    mv a1, ra
+9:  # A fault. Save the same frame as for an interrupt, on the fault stack, with the
+    # faulting code's sp in the slot an interrupt leaves unused. The handler returns only
+    # if it has dealt with the fault (a page of the heap, now mapped): then everything is
+    # put back and sret runs the faulting instruction again. One fault at a time: a fault
+    # in the handler would start again at the top of the fault stack.
+    csrr t0, sscratch
+    csrw sscratch, sp
     la sp, green_tea_fault_stack_top
-    call green_tea_fault        # doesn't return
+    addi sp, sp, -544
+    .irp n, 1,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
+    sd x\n, \n*8(sp)
+    .endr
+    csrr t0, sscratch
+    sd t0, 16(sp)
+    .irp n, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
+    fsd f\n, 288+\n*8(sp)
+    .endr
+    csrr t0, sepc
+    sd t0, 256(sp)
+    csrr t0, sstatus
+    sd t0, 264(sp)
+    frcsr t0
+    sd t0, 272(sp)
+
+    mv a0, sp
+    call green_tea_fault
+
+    ld t0, 272(sp)
+    fscsr t0
+    ld t0, 264(sp)
+    csrw sstatus, t0
+    ld t0, 256(sp)
+    csrw sepc, t0
+    .irp n, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
+    fld f\n, 288+\n*8(sp)
+    .endr
+    .irp n, 1,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
+    ld x\n, \n*8(sp)
+    .endr
+    ld sp, 16(sp)
+    sret
     .option pop
 
     .section .bss.fault_stack, "aw", @nobits
@@ -216,20 +269,23 @@ extern "C" fn green_tea_trap(frame: &TrapFrame) {
 const SCAUSE_LOAD_PAGE_FAULT: usize = 13;
 const SCAUSE_STORE_PAGE_FAULT: usize = 15;
 
-/// Called by `trap_entry` for an exception, on the fault stack. `sp` and `ra` are the
-/// faulting code's.
+/// Called by `trap_entry` for an exception, on the fault stack. Returns if the fault was
+/// for a page of the heap that wasn't mapped, and now is.
 #[unsafe(no_mangle)]
-extern "C" fn green_tea_fault(sp: usize, ra: usize) -> ! {
-    let (scause, stval, sepc): (usize, usize, usize);
+extern "C" fn green_tea_fault(frame: &TrapFrame) {
+    let (scause, stval): (usize, usize);
     unsafe {
         asm!("csrr {}, scause", out(reg) scause);
         asm!("csrr {}, stval", out(reg) stval);
-        asm!("csrr {}, sepc", out(reg) sepc);
     }
     let page_fault = scause == SCAUSE_LOAD_PAGE_FAULT || scause == SCAUSE_STORE_PAGE_FAULT;
+    if page_fault && pages::fault(stval) {
+        return;
+    }
     if page_fault && stack::guard_slot(stval).is_some() {
         stack::overflowed(stval);
     }
+    let (sepc, sp, ra) = (frame.sepc, frame.x[2], frame.x[1]);
     panic!("unexpected exception: scause {scause:#x}, stval {stval:#x}, sepc {sepc:#x}, sp {sp:#x}, ra {ra:#x}");
 }
 
@@ -270,9 +326,11 @@ impl TimerInterrupt for RiscvVirt {
 /// Sv39: three levels of 512-entry tables, translating 39-bit virtual addresses. A leaf
 /// entry at the top level maps 1 GiB, one level down 2 MiB, at the bottom 4 KiB. The map
 /// is the identity, as it was with paging off, so nothing else has to change; what paging
-/// adds is the holes.
+/// adds is the holes: the guard pages, which stay missing, and the pages of the heap,
+/// which are missing until they are first touched.
 mod paging {
-    use crate::stack;
+    use crate::Global;
+    use crate::{pages, stack};
     use core::arch::asm;
 
     const V: u64 = 1 << 0; // valid
@@ -294,6 +352,13 @@ mod paging {
     static mut ROOT: Table = Table([0; 512]); // 1 GiB per entry
     static mut RAM_2M: Table = Table([0; 512]); // 2 MiB per entry, for the GiB of RAM
     static mut STACKS_4K: Table = Table([0; 512]); // 4 KiB per entry, for the stack pool
+    /// 4 KiB per entry, for the 2 MiB pages the heap is in. The heap is 4 MiB and starts
+    /// wherever .stack ends, so it is in three of them, and shares the first and the last
+    /// with other sections.
+    static mut HEAP_4K: [Table; HEAP_TABLES] = [const { Table([0; 512]) }; HEAP_TABLES];
+    const HEAP_TABLES: usize = 3;
+    /// The address that `HEAP_4K[0]` starts at.
+    static HEAP_BASE: Global<usize> = Global::new(0);
 
     fn leaf(address: usize, flags: u64) -> u64 {
         ((address as u64 >> 12) << 10) | flags
@@ -326,9 +391,77 @@ mod paging {
                 (*pool).0[(guard - stacks) / stack::PAGE] = 0; // not valid: any access faults
             }
 
+            // The heap: a table for each 2 MiB page it is in, mapping what else is there
+            // as before and leaving every page of the heap out.
+            let heap = pages::heap_range();
+            let base = heap.start & !(MIB2 - 1);
+            assert!(heap.start >= RAM && heap.end <= base + HEAP_TABLES * MIB2 && heap.end <= stacks);
+            HEAP_BASE.set(base);
+            let tables = &raw mut HEAP_4K;
+            for (t, table) in (*tables).iter_mut().enumerate() {
+                for (i, entry) in table.0.iter_mut().enumerate() {
+                    let page = base + t * MIB2 + i * pages::PAGE;
+                    *entry = if heap.contains(&page) { 0 } else { leaf(page, MEMORY) };
+                }
+                (*ram).0[(base - RAM) / MIB2 + t] = branch(table);
+            }
+
             const SV39: usize = 8 << 60;
             let satp = SV39 | (&raw const ROOT as usize >> 12);
             asm!("sfence.vma", "csrw satp, {}", "sfence.vma", in(reg) satp);
         }
+    }
+
+    /// What the CPU does on a TLB miss, in software: start at the table satp names, and
+    /// at each of the three levels take nine more bits of the address as an index. An
+    /// entry with any of R, W and X set is a leaf, and ends the walk.
+    pub fn walk(addr: usize) -> [Option<pages::Step>; 4] {
+        use pages::PointsTo::{Nothing, Page, Table};
+        let satp: usize;
+        unsafe { asm!("csrr {}, satp", out(reg) satp) };
+        let mut table = (satp & ((1 << 44) - 1)) << 12;
+        let mut steps = [None; 4];
+        for (level, step) in steps.iter_mut().take(3).enumerate() {
+            let shift = 30 - 9 * level;
+            let index = (addr >> shift) & 511;
+            // SAFETY: a table is 512 entries, and the tables are mapped where they are.
+            let entry = unsafe { (table as *const u64).add(index).read_volatile() };
+            let target = ((entry >> 10) << 12) as usize;
+            let points_to = if entry & V == 0 {
+                Nothing
+            } else if entry & (R | W | X) != 0 {
+                Page { frame: target, size: 1 << shift }
+            } else {
+                Table(target)
+            };
+            *step = Some(pages::Step { index, entry, points_to });
+            let Table(next) = points_to else { break };
+            table = next;
+        }
+        steps
+    }
+
+    /// The entry for a page of the heap.
+    fn heap_entry(page: usize) -> *mut u64 {
+        let index = (page - HEAP_BASE.get()) / pages::PAGE;
+        assert!(pages::heap_range().contains(&page) && index < HEAP_TABLES * 512);
+        // SAFETY: in bounds, and nothing holds a reference to the tables.
+        unsafe { (&raw mut HEAP_4K).cast::<u64>().add(index) }
+    }
+
+    pub fn is_mapped(page: usize) -> bool {
+        unsafe { heap_entry(page).read_volatile() & V != 0 }
+    }
+
+    /// Write the entry, then `sfence.vma` for the one address. The CPU may have the old
+    /// entry in its TLB, and that includes an entry that was not valid.
+    pub fn set_mapped(page: usize, mapped: bool) -> bool {
+        let entry = heap_entry(page);
+        let was_mapped = is_mapped(page);
+        unsafe {
+            entry.write_volatile(if mapped { leaf(page, MEMORY) } else { 0 });
+            asm!("sfence.vma {}, zero", in(reg) page);
+        }
+        was_mapped
     }
 }

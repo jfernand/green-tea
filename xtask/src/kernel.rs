@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use std::{env, thread};
 
 pub const USAGE: &str = "\
-usage: cargo xtask kernel [--kernel coop|preempt|overflow|disk|memmap|pool|fit|frag|tlsf|shell|trace]...
+usage: cargo xtask kernel [--kernel coop|preempt|overflow|disk|memmap|pool|fit|frag|tlsf|pages|shell|trace|resident]...
                           [--target riscv64|aarch64|x86_64]...
                           [--release] [--headless] [--screenshot]
 
@@ -46,6 +46,9 @@ is echoed here, and the run passes when every kernel reports PASS.
   tlsf      green-tea-coop's test of the allocators that don't search: a buddy system and
             TLSF, which is the kernel's heap, against first fit and best fit on the same
             requests, and on a heap built to make a search long (riscv64, aarch64, x86_64)
+  pages     green-tea-coop's test of demand paging: the heap's pages are mapped as they are
+            touched, a megabyte is reserved, written, freed and given back, and small
+            blocks pin the pages they are on (riscv64, x86_64: the boards that page)
   shell     green-tea-shell: types two commands at the shell on the serial console; the
             second is its `test`, which checks that commands free what they allocate,
             from the heap or from an arena
@@ -53,6 +56,9 @@ is echoed here, and the run passes when every kernel reports PASS.
   trace     green-tea-shell again: records the heap while the shell runs a script of
             commands, and replays the recording against each policy (riscv64, aarch64,
             x86_64)
+  resident  green-tea-shell again: records the same script, and replays the recording in a
+            region with no page mapped, counting the pages each allocator touches
+            (riscv64, x86_64: the boards that page)
 
   --kernel      only these kernels (default: all)
   --target      only these architectures (default: all three)
@@ -84,6 +90,7 @@ const KERNELS: &[Kernel] = &[
     Kernel { name: "fit", package: "green-tea-coop", arches: ALL, test: Some("fit"), disk: false, input: None },
     Kernel { name: "frag", package: "green-tea-coop", arches: ALL, test: Some("frag"), disk: false, input: None },
     Kernel { name: "tlsf", package: "green-tea-coop", arches: ALL, test: Some("tlsf"), disk: false, input: None },
+    Kernel { name: "pages", package: "green-tea-coop", arches: &["riscv64", "x86_64"], test: Some("pages"), disk: false, input: None },
     Kernel {
         name: "shell",
         package: "green-tea-shell",
@@ -101,6 +108,14 @@ const KERNELS: &[Kernel] = &[
         test: None,
         disk: false,
         input: Some("\ntrace on\nsession\ntrace off\nreplay\n"),
+    },
+    Kernel {
+        name: "resident",
+        package: "green-tea-shell",
+        arches: &["riscv64", "x86_64"],
+        test: None,
+        disk: false,
+        input: Some("\npages\ntrace on\npages\nsession\ntrace off\npages\npages replay\npages trim\n"),
     },
 ];
 
@@ -266,7 +281,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 let kernel = KERNELS
                     .iter()
                     .find(|k| k.name == value)
-                    .ok_or_else(|| format!("unknown kernel {value}; known: coop, preempt, overflow, disk, memmap, pool, fit, frag, tlsf, shell, trace"))?;
+                    .ok_or_else(|| format!("unknown kernel {value}; known: coop, preempt, overflow, disk, memmap, pool, fit, frag, tlsf, pages, shell, trace, resident"))?;
                 kernels.push(kernel);
             }
             "-h" | "--help" => return Err(String::new()),
@@ -621,12 +636,16 @@ mod tests {
                 "tlsf-riscv64",
                 "tlsf-aarch64",
                 "tlsf-x86_64",
+                "pages-riscv64",
+                "pages-x86_64",
                 "shell-riscv64",
                 "shell-aarch64",
                 "shell-x86_64",
                 "trace-riscv64",
                 "trace-aarch64",
-                "trace-x86_64"
+                "trace-x86_64",
+                "resident-riscv64",
+                "resident-x86_64"
             ]
         );
     }

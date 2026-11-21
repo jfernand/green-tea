@@ -15,7 +15,9 @@
 //! it puts green-tea-fit's allocator, which is also the kernel's heap, through its paces
 //! (`--kernel fit`, in fit.rs). Set to "frag", it measures how much memory that allocator
 //! can be made to need (`--kernel frag`, in frag.rs). Set to "tlsf", it compares that allocator
-//! with two that don't search, a buddy system and TLSF (`--kernel tlsf`, in tlsf.rs).
+//! with two that don't search, a buddy system and TLSF (`--kernel tlsf`, in tlsf.rs). Set to
+//! "pages", it shows the heap's pages being mapped as they are touched, and given back
+//! (`--kernel pages`, in pages.rs).
 
 #![no_std]
 #![no_main]
@@ -33,6 +35,7 @@ extern crate alloc;
 
 mod fit;
 mod frag;
+mod pages;
 mod tlsf;
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -53,6 +56,7 @@ extern "C" fn kmain() -> ! {
         b"pool" => pool_test(fb),
         b"fit" => fit::test(fb),
         b"frag" => frag::test(fb),
+        b"pages" => pages::test(fb),
         b"tlsf" => tlsf::test(fb),
         other => panic!("unknown test {:?}", core::str::from_utf8(other)),
     }

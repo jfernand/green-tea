@@ -20,7 +20,8 @@
 //! allocator live here.
 //!
 //! Memory is identity-mapped: aarch64 runs with the MMU off, and riscv64 and x86_64 with
-//! an identity map that leaves out the task stacks' guard pages.
+//! an identity map that leaves out the task stacks' guard pages, and each page of the heap
+//! until it is first touched ([`pages`]).
 //! There is one CPU.
 
 #![no_std]
@@ -32,6 +33,7 @@ pub mod console;
 mod global;
 pub mod heap;
 pub mod memory;
+pub mod pages;
 pub mod platform;
 pub mod runtime;
 pub mod screen;

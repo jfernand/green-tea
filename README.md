@@ -96,7 +96,7 @@ the drivers it picks are in [`drivers/`](drivers). Per architecture:
 | virtio | MMIO, 8 slots from 0x1000_1000 | MMIO, 32 slots from 0x0a00_0000 | PCI, found through ECAM at 0xb000_0000 |
 | Timer | `time` CSR | `cntvct_el0` | HPET |
 | Timer interrupt | SBI `set_timer` → supervisor timer interrupt | virtual timer → GICv2, IRQ 27 | local APIC timer, one-shot, measured against the HPET |
-| Paging | Sv39 identity map, guard pages unmapped | off | identity map (2 MiB pages; 4 KiB for the stack pool, guard pages unmapped) |
+| Paging | Sv39 identity map; guard pages unmapped, the heap's pages mapped on first touch | off | identity map (2 MiB pages; 4 KiB for the stack pool and the heap; guard pages unmapped, the heap's pages mapped on first touch) |
 
 Differences from v2: `thread_local!` becomes a plain static (there's one CPU), and stacks
 come from a pool in which each 16 KiB stack has a 4 KiB guard page under it. riscv64 and
@@ -214,6 +214,30 @@ free. `--kernel trace` has the shell record itself running a script of 1,970 com
 that set, read and unset variables, and then replay the trace against all six
 combinations of policy and list order. It replays it twice more: with the same sizes and
 lifetimes dealt out at random, and with the long-lived blocks in a region of their own.
+
+### The heap's pages, mapped on demand
+
+On riscv64 and x86_64 the page tables start with every page of the heap missing. The
+first access to a page faults, the fault handler maps it
+([pages.rs](green-tea-bare/src/pages.rs)), and the instruction runs again. The map is
+still the identity. `pages::release` zeroes a page and unmaps it, and `pages::trim` does
+that for the pages of the heap's free blocks that hold no header, link or footer
+([green-tea-fit's pages.rs](green-tea-fit/src/pages.rs) says which those are). aarch64
+runs with the MMU off, and has every page all the time.
+
+```sh
+cargo xtask kernel --kernel pages      # riscv64, x86_64
+cargo xtask kernel --kernel resident   # riscv64, x86_64
+```
+
+`--kernel pages` allocates a megabyte, writes to part of it, then all of it, frees it and
+trims, printing after each step which of the heap's 1,024 pages are mapped. It walks the
+page table for six addresses and prints the entry at each level. Then it allocates a
+megabyte of 48-byte blocks and frees all but one in 64, one in 128, and so on: one block
+to a page keeps every page. `--kernel resident` has the shell record its script, as
+`--kernel trace` does, and `pages replay` replays the recording against each allocator in
+a region with no page mapped, counting the pages each one touches and the pages left
+after trimming.
 
 ### A shell, and an arena
 

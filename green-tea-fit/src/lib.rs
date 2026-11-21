@@ -41,6 +41,7 @@ extern crate alloc;
 
 pub mod adversary;
 pub mod buddy;
+pub mod pages;
 pub mod tlsf;
 pub mod trace;
 

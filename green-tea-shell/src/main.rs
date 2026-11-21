@@ -20,13 +20,15 @@
 //!
 //! `trace on` records every allocation and free on the heap, `session` is a long script
 //! to record, and `replay` runs what was recorded against each of green-tea-fit's policies
-//! and measures the fragmentation (replay.rs).
+//! and measures the fragmentation (replay.rs). `pages` counts the heap's pages that are
+//! mapped, and `pages replay` the pages the recorded trace touches (pages.rs).
 
 #![no_std]
 #![no_main]
 
 extern crate alloc;
 
+mod pages;
 mod replay;
 
 use alloc::alloc::Global;
@@ -156,6 +158,9 @@ impl Shell {
             Next::Prompt
         } else if text == "replay" {
             self.replay();
+            Next::Prompt
+        } else if let Some(arg) = text.strip_prefix("pages").filter(|arg| arg.is_empty() || arg.starts_with(' ')) {
+            self.pages(arg.trim_ascii());
             Next::Prompt
         } else {
             self.command(text)
@@ -437,6 +442,8 @@ vars               the variables
 trace on|off       record the heap's allocations and frees
 session            run a script of a few thousand commands, from the heap
 replay             replay what was recorded against each policy
+pages [trim|replay] the heap's pages: how many are mapped; give back the idle ones;
+                   replay what was recorded and count the pages it touches
 repeat <n> <cmd>   run a command n times, without its output
 test               check that commands free what they allocate, either way
 halt               stop

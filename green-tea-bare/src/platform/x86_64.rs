@@ -14,10 +14,14 @@
 //! Guard pages: `init` also maps the task stack pool with 4 KiB pages, leaving out the
 //! guard pages. Exceptions run on a stack of their own (IST1 in the TSS), since a stack
 //! overflow faults with the task's stack pointer in a guard page.
+//!
+//! Demand paging: `init` maps the 2 MiB pages the heap is in with 4 KiB pages too, and
+//! leaves every page of the heap out. A page fault there maps the page
+//! (`crate::pages::fault`), and the exception stub returns to the instruction that faulted.
 
 use super::{Platform, TimerInterrupt};
 use crate::Global;
-use crate::stack;
+use crate::{pages, stack};
 use core::arch::{asm, global_asm};
 use core::ptr::{read_volatile, write_volatile};
 use green_tea_fw_cfg::IoPorts;
@@ -136,14 +140,28 @@ const HPET_COUNTER: *const u64 = (HPET + 0xf0) as *const u64;
 impl Platform for Q35 {
     const NAME: &'static str = "x86_64";
     const GUARD_PAGES: bool = true;
+    const DEMAND_PAGING: bool = true;
+
+    fn set_mapped(page: usize, mapped: bool) -> bool {
+        paging::set_mapped(page, mapped)
+    }
+
+    fn is_mapped(page: usize) -> bool {
+        paging::is_mapped(page)
+    }
+
+    fn walk(addr: usize) -> [Option<pages::Step>; 4] {
+        paging::walk(addr)
+    }
 
     /// Start the HPET's main counter, which `ticks` reads. Catch exceptions (so a fault
     /// panics with a report instead of triple-faulting into a reset), and leave out the
-    /// guard pages.
+    /// guard pages and the heap's pages.
     fn init() {
         unsafe { write_volatile(HPET_CONFIG, read_volatile(HPET_CONFIG) | 1) };
         traps::init();
         paging::enable_guard_pages();
+        paging::unmap_heap();
     }
 
     /// COM1, a 16550 on I/O ports.
@@ -195,11 +213,16 @@ const TIMER_VECTOR: usize = 0x30;
 const SPURIOUS_VECTOR: usize = 0xff;
 const RFLAGS_IF: u64 = 1 << 9; // interrupts on
 const PAGE_FAULT: u64 = 14;
+/// The bit of a page fault's error code that says the page was present: the fault is for
+/// what was done to it, not for want of a mapping.
+const PAGE_FAULT_PRESENT: u64 = 1 << 0;
 
-/// What an exception stub leaves on the fault stack: the vector and error code (0 for
-/// exceptions without one), then what the CPU pushed.
+/// What an exception stub leaves on the fault stack: the registers of the code that
+/// faulted (r15 first: the last one pushed), the vector and error code (0 for exceptions
+/// without one), then what the CPU pushed.
 #[repr(C)]
 struct ExceptionFrame {
+    _registers: [u64; 15],
     vector: u64,
     error: u64,
     rip: u64,
@@ -227,11 +250,25 @@ green_tea_exception_\n:
     jmp green_tea_exception_common
     .endr
 
+    # Every register is saved, as for the timer: the handler returns if it has dealt with
+    # the fault (a page of the heap, now mapped), and then iretq runs the faulting
+    # instruction again. One fault at a time: a fault in the handler would start again at
+    # the top of IST1.
 green_tea_exception_common:
+    .irp r, rax,rbx,rcx,rdx,rsi,rdi,rbp,r8,r9,r10,r11,r12,r13,r14,r15
+    push %\r
+    .endr
+    cld
     mov %rsp, %rdi              # the ExceptionFrame
+    mov %rsp, %rbx              # callee-saved: still there after the call
     and $-16, %rsp              # the SysV ABI's alignment, for the call
-    call green_tea_fault        # doesn't return
-    ud2
+    call green_tea_fault
+    mov %rbx, %rsp
+    .irp r, r15,r14,r13,r12,r11,r10,r9,r8,rbp,rdi,rsi,rdx,rcx,rbx,rax
+    pop %\r
+    .endr
+    add $16, %rsp               # the vector and the error code
+    iretq
 
     # The timer interrupt, on the interrupted task's stack. In 64-bit mode the CPU aligns
     # rsp to 16 before pushing its 5-word frame; 15 more words keep it aligned for the
@@ -397,11 +434,15 @@ mod traps {
     }
 }
 
-/// Called by an exception stub, on the fault stack.
+/// Called by an exception stub, on the fault stack. Returns if the fault was for a page
+/// of the heap that wasn't mapped, and now is.
 #[unsafe(no_mangle)]
-extern "C" fn green_tea_fault(frame: &ExceptionFrame) -> ! {
+extern "C" fn green_tea_fault(frame: &ExceptionFrame) {
     let cr2: usize; // a page fault's address
     unsafe { asm!("mov {}, cr2", out(reg) cr2, options(nomem, nostack)) };
+    if frame.vector == PAGE_FAULT && frame.error & PAGE_FAULT_PRESENT == 0 && pages::fault(cr2) {
+        return;
+    }
     if frame.vector == PAGE_FAULT && stack::guard_slot(cr2).is_some() {
         stack::overflowed(cr2);
     }
@@ -500,9 +541,12 @@ impl TimerInterrupt for Q35 {
 // ---- Paging ---------------------------------------------------------------------------
 
 /// `_start` identity-maps the first 4 GiB with 2 MiB pages. The stack pool is one of them;
-/// this replaces it with a table of 4 KiB pages in which the guard pages are missing.
+/// this replaces it with a table of 4 KiB pages in which the guard pages are missing. The
+/// heap is in three more, and each of those gets a table in which the heap's pages are
+/// missing until they are first touched.
 mod paging {
-    use crate::stack;
+    use crate::Global;
+    use crate::{pages, stack};
     use core::arch::asm;
 
     const PRESENT: u64 = 1 << 0;
@@ -513,6 +557,13 @@ mod paging {
     struct Table([u64; 512]);
 
     static mut STACKS_4K: Table = Table([0; 512]);
+    /// For the 2 MiB pages the heap is in. The heap is 4 MiB and starts wherever .stack
+    /// ends, so it is in three of them, and shares the first and the last with other
+    /// sections.
+    static mut HEAP_4K: [Table; HEAP_TABLES] = [const { Table([0; 512]) }; HEAP_TABLES];
+    const HEAP_TABLES: usize = 3;
+    /// The address that `HEAP_4K[0]` starts at.
+    static HEAP_BASE: Global<usize> = Global::new(0);
 
     unsafe extern "C" {
         /// `_start`'s four page directories, back to back: entry `i` maps `i` × 2 MiB.
@@ -535,5 +586,87 @@ mod paging {
             // Reloading cr3 flushes the TLB, and with it the old 2 MiB mapping.
             asm!("mov {0}, cr3", "mov cr3, {0}", out(reg) _, options(nostack));
         }
+    }
+
+    /// Replace the 2 MiB pages the heap is in with tables of 4 KiB pages that map what
+    /// else is there as before, and leave every page of the heap out.
+    pub fn unmap_heap() {
+        let heap = pages::heap_range();
+        let base = heap.start & !(MIB2 - 1);
+        assert!(heap.end <= base + HEAP_TABLES * MIB2 && heap.end <= stack::region_start());
+        HEAP_BASE.set(base);
+        unsafe {
+            // Only ever touched here, at boot: no other references exist.
+            let (tables, pds) = (&raw mut HEAP_4K, &raw mut boot_pds);
+            for (t, table) in (*tables).iter_mut().enumerate() {
+                for (i, entry) in table.0.iter_mut().enumerate() {
+                    let page = base + t * MIB2 + i * pages::PAGE;
+                    *entry = if heap.contains(&page) { 0 } else { page as u64 | PRESENT | WRITABLE };
+                }
+                (*pds)[base / MIB2 + t] = table as *mut Table as u64 | PRESENT | WRITABLE;
+            }
+            asm!("mov {0}, cr3", "mov cr3, {0}", out(reg) _, options(nostack));
+        }
+    }
+
+    /// What the CPU does on a TLB miss, in software: start at the table cr3 names, and at
+    /// each of the four levels take nine more bits of the address as an index. An entry
+    /// with the page-size bit set is a leaf, and ends the walk, as does any entry at the
+    /// last level.
+    pub fn walk(addr: usize) -> [Option<pages::Step>; 4] {
+        use pages::PointsTo::{Nothing, Page, Table};
+        const PAGE_SIZE: u64 = 1 << 7;
+        const ADDRESS: u64 = 0x000f_ffff_ffff_f000;
+        let cr3: u64;
+        unsafe { asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack)) };
+        let mut table = (cr3 & ADDRESS) as usize;
+        let mut steps = [None; 4];
+        for (level, step) in steps.iter_mut().enumerate() {
+            let shift = 39 - 9 * level;
+            let index = (addr >> shift) & 511;
+            // SAFETY: a table is 512 entries, and the tables are mapped where they are.
+            let entry = unsafe { (table as *const u64).add(index).read_volatile() };
+            let target = (entry & ADDRESS) as usize;
+            let points_to = if entry & PRESENT == 0 {
+                Nothing
+            } else if level == 3 || entry & PAGE_SIZE != 0 {
+                Page { frame: target & !((1 << shift) - 1), size: 1 << shift }
+            } else {
+                Table(target)
+            };
+            *step = Some(pages::Step { index, entry, points_to });
+            let Table(next) = points_to else { break };
+            table = next;
+        }
+        steps
+    }
+
+    /// The entry for a page of the heap.
+    fn heap_entry(page: usize) -> *mut u64 {
+        let index = (page - HEAP_BASE.get()) / pages::PAGE;
+        assert!(pages::heap_range().contains(&page) && index < HEAP_TABLES * 512);
+        // SAFETY: in bounds, and nothing holds a reference to the tables.
+        unsafe { (&raw mut HEAP_4K).cast::<u64>().add(index) }
+    }
+
+    pub fn is_mapped(page: usize) -> bool {
+        unsafe { heap_entry(page).read_volatile() & PRESENT != 0 }
+    }
+
+    /// Write the entry. Unmapping needs `invlpg` as well, since the CPU may have the
+    /// translation in its TLB; an entry that wasn't present is never cached, so mapping
+    /// needs nothing more.
+    pub fn set_mapped(page: usize, mapped: bool) -> bool {
+        let entry = heap_entry(page);
+        let was_mapped = is_mapped(page);
+        unsafe {
+            if mapped {
+                entry.write_volatile(page as u64 | PRESENT | WRITABLE);
+            } else {
+                entry.write_volatile(0);
+                asm!("invlpg [{}]", in(reg) page, options(nostack, preserves_flags));
+            }
+        }
+        was_mapped
     }
 }
