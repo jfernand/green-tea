@@ -30,6 +30,8 @@ pub use aarch64::AarchVirt as Board;
 pub use riscv64::RiscvVirt as Board;
 #[cfg(all(target_arch = "x86_64", feature = "board-pc"))]
 pub use x86_64::Pc as Board;
+#[cfg(all(target_arch = "x86_64", feature = "board-pc"))]
+pub use x86_64::EcPort;
 #[cfg(all(target_arch = "x86_64", not(feature = "board-pc")))]
 pub use x86_64::Q35 as Board;
 

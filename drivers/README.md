@@ -19,10 +19,11 @@ caller's to say, and green-tea-bare's platforms say it.
 | [`green-tea-i8042`](i8042) | A PS/2 keyboard, polled | x86_64 `pc` |
 | [`green-tea-xhci`](xhci) | A polled xHCI (USB 3) controller, and a USB keyboard | x86_64 `pc` |
 | [`green-tea-nvme`](nvme) | A polled NVMe disk: one namespace, read, write and flush | x86_64 `pc` |
+| [`green-tea-clevo-lights`](clevo-lights) | A Clevo laptop's keyboard lights, through its embedded controller | x86_64 `pc` |
 | [`green-tea-io`](io) | not a driver: what they share (`dma_fence`, x86 port I/O) | |
 
 All are `no_std` and are built for the bare-metal targets; the ones with logic worth
-testing (framebuffer, multiboot2, acpi, i8042, nvme, xhci, pci, fw-cfg, virtio, virtio-blk) also run host tests, against fake devices
+testing (framebuffer, multiboot2, acpi, clevo-lights, i8042, nvme, xhci, pci, fw-cfg, virtio, virtio-blk) also run host tests, against fake devices
 in memory. They assume what green-tea-bare provides: memory mapped one to one, so a
 buffer's address is also the physical address a device needs for DMA. They take no locks:
 where a kernel starts several CPUs, keeping them from using one device at once is the
