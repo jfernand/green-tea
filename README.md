@@ -22,7 +22,7 @@ kernels built on the same context switch:
 | [`green-tea-v2`](green-tea-v2) | The same ideas split into layers: `arch` (save/restore registers, prime a stack) → `Task` (an asymmetric coroutine that switches back to whoever resumed it) → `run`/`spawn` (a round-robin scheduler on a thread-local run queue). No `static mut`. Runs on x86_64, aarch64 (including Apple Silicon) and riscv64. |
 | [`green-tea-arch`](green-tea-arch) | The `arch` layer on its own: `Context` and `swap_context` for each architecture. `no_std`, so v2 and the kernels share it. |
 | [`green-tea-pool`](green-tea-pool) | Pools of fixed-size blocks, two ways: a bitmap and an intrusive free list. `no_std`; the kernels' task stacks come from one. |
-| [`green-tea-fit`](green-tea-fit) | An allocator for blocks of any size: a free list searched first-fit, next-fit or best-fit, with boundary tags to merge freed neighbours. `no_std`; the kernels' heap is one. Also replays recorded traces of allocations against each policy, and measures the fragmentation. |
+| [`green-tea-fit`](green-tea-fit) | An allocator for blocks of any size: a free list searched first-fit, next-fit or best-fit, with boundary tags to merge freed neighbours. `no_std`. Also a binary buddy system and TLSF, which is the kernels' heap, and replays recorded traces of allocations against each policy, and measures the fragmentation. |
 | [`drivers/`](drivers) | The device drivers, one crate each, which know their device but not the machine: serial ports (16550, PL011), QEMU's fw_cfg and ramfb, PCI through ECAM, virtio (MMIO and PCI transports, split virtqueues) and virtio-blk. |
 | [`green-tea-bare`](green-tea-bare) | What the kernels share: boot code per board behind the `Platform` and `TimerInterrupt` traits (timers, interrupts, paging, and where each device is), a port of v2's `Task` and scheduler, and a heap. |
 | [`green-tea-coop`](green-tea-coop) | A bare-metal kernel for QEMU on riscv64, aarch64 and x86_64 whose tasks yield to each other, so you can watch the context switches on screen. |
@@ -68,6 +68,7 @@ cargo xtask kernel --kernel memmap    # where the linker put each section
 cargo xtask kernel --kernel pool      # two pools compared, and a thousand tasks on one stack
 cargo xtask kernel --kernel fit       # the heap's allocator: merging, three ways to search, a thousand tasks
 cargo xtask kernel --kernel frag      # fragmentation: an adversary, and a random workload
+cargo xtask kernel --kernel tlsf      # allocators that don't search: a buddy system and TLSF, against the ones that do
 cargo xtask kernel --kernel shell     # the shell's test, typed at its serial console
 cargo xtask kernel --kernel trace     # the shell records its heap, and replays the trace against each policy
 cargo xtask shell                     # the shell, on this terminal (--target to pick a board)
@@ -214,6 +215,24 @@ free. `--kernel trace` has the shell record itself running a script of 1,970 com
 that set, read and unset variables, and then replay the trace against all six
 combinations of policy and list order. It replays it twice more: with the same sizes and
 lifetimes dealt out at random, and with the long-lived blocks in a region of their own.
+
+### Allocators that don't search
+
+First fit by address, which the heap used to be, walks a list: with 8,000 holes in the way
+it looks at 8,001 free blocks to allocate and passes 8,000 to free, with interrupts off.
+green-tea-fit has two allocators that keep a list for each size instead.
+[`Buddy`](green-tea-fit/src/buddy.rs) allows only powers of two, splits a block only in
+half, and merges a freed block only with the half it was split from, which it finds with
+an exclusive or. [`Tlsf`](green-tea-fit/src/tlsf.rs), two-level segregated fit, keeps
+`Fit`'s blocks and boundary tags and replaces the one free list by a table of lists, one
+for each size below 256 bytes and sixteen for each power of two above, with two bitmaps
+that say which lists have a block. An allocation is two masks and two counts of trailing
+zeros. The kernels' heap is now a `Tlsf`.
+
+`--kernel tlsf` shows a buddy system splitting and merging, the block each allocator
+makes for a request, which TLSF lists hold a block as blocks come and go, and then
+compares four allocators on the random workload and on a heap built to make a search as
+long as it can be.
 
 ### A shell, and an arena
 
