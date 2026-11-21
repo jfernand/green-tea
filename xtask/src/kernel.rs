@@ -1,5 +1,5 @@
 //! `cargo xtask kernel`: build the bare-metal kernels for each architecture they support
-//! and run them all in QEMU at once.
+//! and run them in QEMU: with windows all at once, headless a few at a time.
 //!
 //! Every QEMU gets its serial port written to a log file and its monitor on a pipe. The
 //! log is followed to echo the kernel's output (prefixed with kernel and architecture)
@@ -7,6 +7,7 @@
 //! monitor is used to take a screenshot and, when headless, to quit.
 
 use crate::{on_path, workspace_root};
+use std::collections::VecDeque;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -19,11 +20,15 @@ pub mod capture;
 
 pub const USAGE: &str = "\
 usage: cargo xtask kernel [--kernel <name>]... [--target riscv64|aarch64|x86_64]...
-                          [--release] [--headless] [--screenshot]
+                          [--release] [--headless] [--screenshot] [--jobs <n>]
 
 Builds the bare-metal kernels and boots each in QEMU on every architecture it supports,
 one window apiece, all at once. Close the windows to finish. The kernels' serial output
 is echoed here, and the run passes when every kernel reports PASS.
+
+--headless runs them without windows, using at most half of this machine's CPUs. --jobs
+sets how many virtual CPUs may run at once, with or without windows; a kernel with four
+counts as four.
 
   coop      green-tea-coop: tasks yield to each other (riscv64, aarch64, x86_64)
   preempt   green-tea-preempt: a timer interrupt preempts tasks that never yield, and one
@@ -184,7 +189,7 @@ const ALL: &[&str] = &["riscv64", "aarch64", "x86_64"];
 
 /// The kernels that are given more than one CPU (`-smp`). Every other kernel runs on a
 /// machine with one.
-const SMP_KERNELS: &[(&str, &str)] = &[("smp", "4"), ("shard", "4"), ("smr", "4")];
+const SMP_KERNELS: &[(&str, usize)] = &[("smp", 4), ("shard", 4), ("smr", 4)];
 
 struct Arch {
     name: &'static str,
@@ -238,6 +243,11 @@ impl Job {
     fn label(&self) -> String {
         format!("{}-{}", self.kernel.name, self.arch.name)
     }
+
+    /// How many virtual CPUs its machine has.
+    fn cpus(&self) -> usize {
+        SMP_KERNELS.iter().find(|(name, _)| *name == self.kernel.name).map_or(1, |(_, cpus)| *cpus)
+    }
 }
 
 struct Options {
@@ -245,6 +255,14 @@ struct Options {
     release: bool,
     headless: bool,
     screenshot: bool,
+    /// How many virtual CPUs may run at once, if `--jobs` said.
+    limit: Option<usize>,
+}
+
+/// With windows, everything runs at once, to be watched. Headless, half of the host's CPUs:
+/// the kernels that check their timing need the CPU time they think they are getting.
+fn default_limit(headless: bool) -> usize {
+    if headless { thread::available_parallelism().map_or(1, |n| n.get() / 2).max(1) } else { usize::MAX }
 }
 
 pub fn main(args: &[String]) -> ExitCode {
@@ -289,22 +307,19 @@ pub fn main(args: &[String]) -> ExitCode {
         eprintln!("can't create {}: {e}", out_dir.display());
         return ExitCode::FAILURE;
     }
+    let mut queue: VecDeque<Job> = options.jobs.drain(..).collect();
     let mut runs = Vec::new();
-    for job in options.jobs.drain(..) {
-        let elf = target_dir().join(job.arch.triple).join(profile).join(job.kernel.package);
-        let qemu = job.arch.qemu;
-        match Run::start(job, &elf, &out_dir, options.headless) {
-            Ok(run) => runs.push(run),
-            Err(e) => {
-                eprintln!("failed to start {qemu}: {e}");
-                return ExitCode::FAILURE;
-            }
-        }
-    }
     if !options.headless {
         eprintln!("=== running; close the QEMU windows to finish");
     }
-    watch(&mut runs, &options, &out_dir);
+    if let Err(e) = watch(&mut queue, &mut runs, &options, &out_dir, profile) {
+        eprintln!("failed to start QEMU: {e}");
+        for run in runs.iter_mut().filter(|r| !r.exited) {
+            let _ = run.qemu.kill();
+            let _ = run.qemu.wait();
+        }
+        return ExitCode::FAILURE;
+    }
 
     eprintln!("\n=== summary");
     for run in &runs {
@@ -324,7 +339,7 @@ pub fn main(args: &[String]) -> ExitCode {
 }
 
 fn parse(args: &[String]) -> Result<Options, String> {
-    let mut options = Options { jobs: Vec::new(), release: false, headless: false, screenshot: false };
+    let mut options = Options { jobs: Vec::new(), release: false, headless: false, screenshot: false, limit: None };
     let mut kernels: Vec<&'static Kernel> = Vec::new();
     let mut arches: Vec<&'static Arch> = Vec::new();
     let mut args = args.iter();
@@ -333,6 +348,11 @@ fn parse(args: &[String]) -> Result<Options, String> {
             "--release" => options.release = true,
             "--headless" => options.headless = true,
             "--screenshot" => options.screenshot = true,
+            "--jobs" => {
+                let value = args.next().ok_or("--jobs needs a value")?;
+                let limit = value.parse().ok().filter(|n| *n > 0);
+                options.limit = Some(limit.ok_or_else(|| format!("--jobs needs a number above 0, not {value}"))?);
+            }
             "--target" => {
                 let value = args.next().ok_or("--target needs a value")?;
                 let arch = ARCHES
@@ -503,6 +523,8 @@ pub fn shell(args: &[String]) -> ExitCode {
 struct Run {
     job: Job,
     qemu: Child,
+    /// A run's time limit counts from its own start, not from the suite's.
+    started: Instant,
     log: PathBuf,
     /// How much of the log has been echoed.
     read: usize,
@@ -542,8 +564,8 @@ impl Run {
         if headless {
             cmd.args(["-display", "none"]);
         }
-        if let Some((_, cpus)) = SMP_KERNELS.iter().find(|(name, _)| *name == job.kernel.name) {
-            cmd.args(["-smp", cpus]);
+        if job.cpus() > 1 {
+            cmd.args(["-smp", &job.cpus().to_string()]);
         }
         if let Some(test) = job.kernel.test {
             cmd.arg("-fw_cfg").arg(format!("name=opt/green-tea/test,string={test}"));
@@ -558,6 +580,7 @@ impl Run {
         Ok(Run {
             job,
             qemu: cmd.spawn()?,
+            started: Instant::now(),
             log,
             read: 0,
             seen_kernel: false,
@@ -607,9 +630,26 @@ fn verdict(line: &str) -> Option<Result<String, String>> {
     line.strip_prefix("FAIL: ").map(|rest| Err(rest.to_string()))
 }
 
-fn watch(runs: &mut [Run], options: &Options, out_dir: &Path) {
-    let start = Instant::now();
-    while runs.iter().any(|r| !r.exited) {
+/// Whether a machine of `cpus` may start while `busy` virtual CPUs are running. One too
+/// big for the limit runs when nothing else does, so that it runs at all.
+fn fits(cpus: usize, busy: usize, limit: usize) -> bool {
+    busy == 0 || busy.saturating_add(cpus) <= limit
+}
+
+/// Start the queued jobs in order as there is room, and follow them until all have exited.
+fn watch(queue: &mut VecDeque<Job>, runs: &mut Vec<Run>, options: &Options, out_dir: &Path, profile: &str) -> std::io::Result<()> {
+    let limit = options.limit.unwrap_or_else(|| default_limit(options.headless));
+    while !queue.is_empty() || runs.iter().any(|r| !r.exited) {
+        let mut busy: usize = runs.iter().filter(|r| !r.exited).map(|r| r.job.cpus()).sum();
+        while let Some(job) = queue.front() {
+            if !fits(job.cpus(), busy, limit) {
+                break;
+            }
+            busy += job.cpus();
+            let job = queue.pop_front().expect("the queue has a front");
+            let elf = target_dir().join(job.arch.triple).join(profile).join(job.kernel.package);
+            runs.push(Run::start(job, &elf, out_dir, options.headless)?);
+        }
         for run in runs.iter_mut().filter(|r| !r.exited) {
             let had_outcome = run.outcome.is_some();
             run.follow();
@@ -623,7 +663,7 @@ fn watch(runs: &mut [Run], options: &Options, out_dir: &Path) {
                     run.monitor("quit"); // after the screendump: the monitor runs them in order
                 }
             }
-            if options.headless && run.outcome.is_none() && start.elapsed() > HEADLESS_TIMEOUT {
+            if options.headless && run.outcome.is_none() && run.started.elapsed() > HEADLESS_TIMEOUT {
                 run.outcome = Some(Err(format!("no result after {}s", HEADLESS_TIMEOUT.as_secs())));
                 let _ = run.qemu.kill();
             }
@@ -637,11 +677,12 @@ fn watch(runs: &mut [Run], options: &Options, out_dir: &Path) {
         }
         thread::sleep(Duration::from_millis(100));
     }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{disk_image, parse, verdict};
+    use super::{disk_image, fits, parse, verdict};
 
     #[test]
     fn the_disk_image_differs_from_sector_to_sector() {
@@ -669,6 +710,24 @@ mod tests {
     #[test]
     fn other_lines_are_not_a_verdict() {
         assert_eq!(verdict("running 5 workers; expecting 57 switches"), None);
+    }
+
+    #[test]
+    fn a_machine_starts_only_if_it_fits() {
+        assert!(fits(1, 9, 10));
+        assert!(!fits(1, 10, 10));
+        assert!(!fits(4, 8, 10));
+        assert!(fits(4, 0, 2), "too big for the limit, but alone");
+        assert!(!fits(4, 1, 2));
+        assert!(fits(4, 1000, usize::MAX));
+    }
+
+    #[test]
+    fn jobs_must_be_a_positive_number() {
+        let parse_jobs = |v: &str| parse(&["--jobs".to_string(), v.to_string()]).map(|o| o.limit);
+        assert_eq!(parse_jobs("3"), Ok(Some(3)));
+        assert!(parse_jobs("0").is_err());
+        assert!(parse_jobs("many").is_err());
     }
 
     fn labels(args: &[&str]) -> Vec<String> {
