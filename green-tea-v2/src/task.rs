@@ -3,7 +3,9 @@
 
 use crate::arch::{Context, swap_context};
 use crate::stack::Stack;
+use std::any::Any;
 use std::cell::Cell;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::ptr::{self, NonNull};
 
 const STACK_SIZE: usize = 32 * 1024;
@@ -29,6 +31,7 @@ struct Inner {
     caller: Context,  // whoever resumed it; yield_now and finishing switch back here
     func: Option<Box<dyn FnOnce()>>,
     done: bool,
+    panic: Option<Box<dyn Any + Send>>, // a panic on its way to whoever resumed the task
     _stack: Stack,
 }
 
@@ -39,6 +42,7 @@ impl Task {
             caller: Context::default(),
             func: Some(Box::new(func)),
             done: false,
+            panic: None,
             _stack: Stack::new(STACK_SIZE),
         }));
         unsafe {
@@ -54,12 +58,18 @@ impl Task {
     /// Run the task until it yields or finishes.
     ///
     /// Tasks can resume other tasks: `CURRENT` is saved and restored around the switch.
+    ///
+    /// # Panics
+    /// If the task has already finished, and with the task's own panic if it panics.
     pub fn resume(&mut self) {
         let inner = self.inner.as_ptr();
         assert!(!self.is_done(), "resumed a task that has already finished");
         let previous = CURRENT.replace(inner);
         unsafe { swap_context(&raw mut (*inner).caller, &raw const (*inner).context) };
         CURRENT.set(previous);
+        if let Some(payload) = unsafe { (*inner).panic.take() } {
+            resume_unwind(payload);
+        }
     }
 }
 
@@ -86,13 +96,15 @@ pub fn yield_now() {
     unsafe { swap_context(&raw mut (*inner).context, &raw const (*inner).caller) };
 }
 
-/// Where every task starts, on its own stack: run the closure, mark the task done, and
-/// switch back for the last time.
+/// Where every task starts, on its own stack: run the closure, mark the task done (a panic
+/// finishes it too), and switch back for the last time.
 extern "C" fn task_entry(arg: *mut ()) -> ! {
     let inner: *mut Inner = arg.cast();
     unsafe {
         if let Some(func) = (*inner).func.take() {
-            func(); // a panic here can't unwind past this extern "C" frame, so it aborts
+            // There is no frame to unwind into below this one: the stack ends here. So stop a
+            // panic at this point, and let `resume` continue it on the resumer's stack.
+            (*inner).panic = catch_unwind(AssertUnwindSafe(func)).err();
         }
         (*inner).done = true;
         swap_context(&raw mut (*inner).context, &raw const (*inner).caller);
@@ -105,6 +117,7 @@ mod tests {
     use super::{Task, yield_now};
     use libc::{c_int, c_void};
     use std::cell::{Cell, RefCell};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::rc::Rc;
     use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
     use std::{mem, ptr};
@@ -230,6 +243,27 @@ mod tests {
         drop(task);
         assert!(is_mapped(addr), "the suspended task's stack was unmapped");
         assert_eq!(unsafe { (addr as *const u64).read_volatile() }, 7);
+    }
+
+    /// A panic in a task reaches whoever resumed it, after running the task's destructors.
+    #[test]
+    fn a_panic_in_a_task_unwinds_to_the_resumer() {
+        struct SetOnDrop(Rc<Cell<bool>>);
+        impl Drop for SetOnDrop {
+            fn drop(&mut self) {
+                self.0.set(true);
+            }
+        }
+        let dropped = Rc::new(Cell::new(false));
+        let flag = SetOnDrop(dropped.clone());
+        let mut task = Task::new(move || {
+            let _flag = flag;
+            panic!("boom");
+        });
+        let payload = catch_unwind(AssertUnwindSafe(|| task.resume())).unwrap_err();
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"boom"));
+        assert!(dropped.get(), "the task's destructors did not run");
+        assert!(task.is_done());
     }
 
     #[test]

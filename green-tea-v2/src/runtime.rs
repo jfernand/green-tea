@@ -28,7 +28,8 @@ impl Drop for Installed {
 /// Run `main` as the first task, and keep scheduling until every task has finished.
 ///
 /// # Panics
-/// If called from inside another `run` on the same thread.
+/// If called from inside another `run` on the same thread, and with a task's panic if one
+/// panics. That ends `run`: the tasks still suspended are dropped without being resumed.
 pub fn run(main: impl FnOnce() + 'static) {
     let runtime = Runtime { queue: RefCell::new(VecDeque::new()) };
     assert!(RUNTIME.get().is_null(), "run() called inside run()");
@@ -96,6 +97,12 @@ mod tests {
             l.borrow_mut().push("parent");
         });
         assert_eq!(*log.borrow(), ["parent", "child"]);
+    }
+
+    #[test]
+    #[should_panic(expected = "run() called inside run()")]
+    fn run_inside_run_panics() {
+        run(|| run(|| {}));
     }
 
     #[test]
