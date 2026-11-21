@@ -170,7 +170,9 @@ impl Transport for PciTransport {
     }
 
     fn notify(&self, queue: u16) {
-        unsafe { write_volatile(self.queue_notify[usize::from(queue)] as *mut u16, queue) };
+        let address = self.queue_notify.get(usize::from(queue)).copied().unwrap_or(0);
+        assert!(address != 0, "virtio queue {queue} was never set up");
+        unsafe { write_volatile(address as *mut u16, queue) };
     }
 
     fn config_generation(&self) -> u32 {
@@ -281,5 +283,17 @@ mod tests {
         let device = FakeDevice::new(false);
         assert!(probe(device.ecam(), F).is_none());
         assert_eq!(device.command(), 0, "memory decoding and bus mastering were left on");
+    }
+
+    #[test]
+    #[should_panic(expected = "never set up")]
+    fn notifying_a_queue_never_set_up_panics() {
+        FakeDevice::new(true).transport().notify(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "never set up")]
+    fn notifying_a_queue_past_the_table_panics() {
+        FakeDevice::new(true).transport().notify(MAX_QUEUES as u16);
     }
 }
