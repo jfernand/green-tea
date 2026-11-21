@@ -1,0 +1,37 @@
+green-tea-coop on x86_64
+fw_cfg files:
+  0x0020      0 bios-geometry
+  0x0021     21 bootorder
+  0x0022     20 etc/acpi/rsdp
+  0x0023 131072 etc/acpi/tables
+  0x0024      4 etc/boot-fail-wait
+  0x0025     40 etc/e820
+  0x0026     28 etc/ramfb
+  0x0027     24 etc/smbios/smbios-anchor
+  0x0028    315 etc/smbios/smbios-tables
+  0x0029      1 etc/smi/features-ok
+  0x002a      8 etc/smi/requested-features
+  0x002b      8 etc/smi/supported-features
+  0x002c      6 etc/system-states
+  0x002d   4096 etc/table-loader
+  0x002e      0 etc/tpm/log
+  0x002f   9216 genroms/kvmvapic.bin
+  0x0030   1536 genroms/pvh.bin
+  0x0031      3 opt/green-tea/test
+  0x0032  28672 vgaroms/vgabios-ramfb.bin
+ramfb: 640x480 XRGB8888
+4 CPUs are running: the one that booted, and 3 it started
+each CPU adds 1 to a counter 1000000 times:
+  with a lock: the counter is 4000000, and the lock was taken 4000000 times
+  this run: without a lock the counter is 1838200; with one, 2495212 acquisitions waited
+each CPU makes 20000 allocations and frees, of 1 to 512 bytes, holding up to 96:
+  the kernel's heap, behind its lock:  80128 operations, and the lock was taken 80128 times
+  this run: 59344 of those waited for another CPU; 250 ms
+  a cache for each CPU:                80128 operations, and the lock was taken 2680 times
+    1373 times to fill a cache with 8 blocks, and 1307 times to take 8 back
+    when the work ended the CPUs held no blocks, and their caches held 528, of 105984 bytes in all
+  this run: 798 of those waited for another CPU; 151 ms
+  the same, with a depot of 4 batches:  80128 operations, and the lock was taken 2680 times
+  this run: 158 of those waited; 137 ms; the depot served 1181 of the 1373 fills, and the heap made 2440 allocations and frees
+PASS: 4 CPUs made 80128 allocations and frees each way: the heap's lock was taken 80128 times, and the lock behind a cache per CPU 2680 times
+halting

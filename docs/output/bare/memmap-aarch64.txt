@@ -1,0 +1,39 @@
+green-tea-coop on aarch64
+fw_cfg files:
+  0x0020      0 bios-geometry
+  0x0021      0 bootorder
+  0x0022     36 etc/acpi/rsdp
+  0x0023 131072 etc/acpi/tables
+  0x0024      4 etc/boot-fail-wait
+  0x0025     28 etc/ramfb
+  0x0026     24 etc/smbios/smbios-anchor
+  0x0027    299 etc/smbios/smbios-tables
+  0x0028   3072 etc/table-loader
+  0x0029      0 etc/tpm/log
+  0x002a      6 opt/green-tea/test
+  0x002b  28672 vgaroms/vgabios-ramfb.bin
+ramfb: 640x480 XRGB8888
+kernel: 0x40200000..0x40c00000, 10240 KiB
+  section      start        end      bytes    align
+  .text    0x40200000 0x403304f0   1246448        4
+  (gap)                                 16
+  .rodata  0x40330500 0x403594cb    167883       16
+  (gap)                             220853
+  .data    0x4038f380 0x4038f480       256       16
+  (gap)                               2944
+  .bss     0x40390000 0x404bf000   1241088       16
+  .stack   0x404bf000 0x404cf000     65536     4096
+  .heap    0x404cf000 0x408cf000   4194304     4096
+  (gap)                            1249280
+  .stacks  0x40a00000 0x40c00000   2097152  2097152
+  address    in       what
+  0x402cdbec .text    a function
+  0x4034664b .rodata  a constant static
+  0x4038f3a8 .data    an initialised static
+  0x403919d0 .bss     a zeroed static
+  0x404cafef .stack   a local of kmain's
+  0x404cf010 .heap    a Box<u64>
+  0x404d0000 .heap    a Box<Page>
+  0x40a04f2e .stacks  a local of a task's
+PASS: 7 sections in order and aligned; 8 addresses where they should be
+halting
