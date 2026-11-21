@@ -256,7 +256,7 @@ fn describe(events: &[Event]) -> usize {
         "lifetimes: {} of the blocks are freed before 8 more are allocated, {} before {LONG_LIVED} more; {} are \
          never freed",
         percent(within(7), allocations),
-        percent(within(LONG_LIVED), allocations),
+        percent(within(LONG_LIVED - 1), allocations),
         lifetimes.iter().filter(|life| life.is_none()).count()
     );
     allocations

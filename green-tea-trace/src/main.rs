@@ -288,7 +288,7 @@ fn describe(events: &[Event], out: &mut String) -> usize {
         "lifetimes: {} of the blocks are freed before 8 more are allocated, {} before {LONG_LIVED} more; {} are \
          never freed",
         percent(within(7), allocations),
-        percent(within(LONG_LIVED), allocations),
+        percent(within(LONG_LIVED - 1), allocations),
         lifetimes.iter().filter(|life| life.is_none()).count()
     );
     allocations
@@ -401,7 +401,7 @@ fn measured(events: &[Event], heap: &mut impl Heap) -> Result<Report, &'static s
 
 #[cfg(test)]
 mod tests {
-    use super::{Failure, Form, mismatches, peak_live, percent, replay, run, stat};
+    use super::{Failure, Form, describe, mismatches, peak_live, percent, replay, run, stat};
     use green_tea_fit::trace::Event;
     use green_tea_fit::tracefile::{self, Record};
 
@@ -441,6 +441,26 @@ mod tests {
             "live bytes: 180 at the peak; 0 frees are of blocks the trace never allocated; 0 allocations are at an \
              address that is still allocated"
         );
+    }
+
+    /// A block with `later` allocations between its allocation and its free.
+    fn lived(later: usize) -> Vec<Event> {
+        let mut events = vec![Event::allocate(1, 8, 8)];
+        events.extend((0..later).map(|n| Event::allocate(16 * (n + 2), 8, 8)));
+        events.push(Event::free(1));
+        events
+    }
+
+    #[test]
+    fn before_n_more_means_fewer_than_n() {
+        let line = |later| {
+            let mut out = String::new();
+            describe(&lived(later), &mut out);
+            out.lines().find(|l| l.starts_with("lifetimes:")).unwrap().to_string()
+        };
+        // One block of 64 freed after 63 others: counted. After 64: it wasn't freed before 64 more.
+        assert!(line(63).contains(&format!("{} before 64 more", percent(1, 64))), "{}", line(63));
+        assert!(line(64).contains(&format!("{} before 64 more", percent(0, 65))), "{}", line(64));
     }
 
     #[test]
