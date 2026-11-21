@@ -1,5 +1,5 @@
 ; A queue: a pair whose car is the first pair of a list and whose cdr is the last. Five
-; hundred numbers go through it, with never more than eight waiting, and are added up as they
+; hundred numbers go through it, with never more than nine waiting, and are added up as they
 ; come out. The pair that is the queue lives for the whole run, and is written all the time.
 (define (enqueue q x)
   ((lambda (cell)

@@ -27,7 +27,8 @@ pub struct Counts {
     /// Root slots read by collections.
     pub roots: u64,
     /// Objects passed over by the phases that walk the heap from one end to the other,
-    /// reachable or not: one for each object at each sweep, three at each compaction.
+    /// reachable or not: one for each object at each sweep and at each search after the
+    /// mark stack overflowed, three at each compaction.
     pub walked: u64,
     /// Words moved to another place: copied, or slid down by a compaction.
     pub moved_words: u64,

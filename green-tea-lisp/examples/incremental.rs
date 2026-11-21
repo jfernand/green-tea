@@ -71,7 +71,7 @@ fn main() {
     std::panic::set_hook(Box::new(|_| {}));
 
     println!("seven programs in {WORDS} words: the longest stop, in units of work");
-    println!("                         Chapter 13     a cycle whole       a cycle in steps of 4 units an allocation");
+    println!("                         mark-sweep     a cycle whole       a cycle in steps of 4 units an allocation");
     println!("  program   allocated  collections  most  cycles  most     cycles  steps  most  stalls  most root slots");
     for program in programs() {
         let mut lisp = Lisp::new(MarkHeap::new(WORDS, Reclaim::Sweep, MARK_STACK));
