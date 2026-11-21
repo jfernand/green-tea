@@ -110,7 +110,7 @@ pub fn negotiate(transport: &mut impl Transport, supported: u64) -> Result<u64, 
 
     let offered = transport.device_features();
     if offered & F_VERSION_1 == 0 {
-        transport.set_status(STATUS_FAILED);
+        failed(transport);
         return Err("legacy-only virtio device (no VERSION_1 feature)");
     }
     let features = offered & (supported | F_VERSION_1);
@@ -118,10 +118,17 @@ pub fn negotiate(transport: &mut impl Transport, supported: u64) -> Result<u64, 
     transport.set_status(STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK);
     // The device clears FEATURES_OK if it can't work with that subset.
     if transport.status() & STATUS_FEATURES_OK == 0 {
-        transport.set_status(STATUS_FAILED);
+        failed(transport);
         return Err("the virtio device rejected our features");
     }
     Ok(features)
+}
+
+/// Tell the device we've given up on it. The spec forbids the driver to clear a status
+/// bit, so this adds to the ones already set.
+pub fn failed(transport: &mut impl Transport) {
+    let status = transport.status();
+    transport.set_status(status | STATUS_FAILED);
 }
 
 /// The last step of initialization: the device may now use its queues.
@@ -179,4 +186,66 @@ impl Transport for AnyTransport {
 pub struct Device {
     pub id: u32,
     pub transport: AnyTransport,
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+
+    /// A device whose status register behaves as the spec says: it can refuse features by
+    /// clearing FEATURES_OK.
+    struct FakeTransport {
+        offered: u64,
+        refuse_features: bool,
+        status: u8,
+    }
+
+    impl Transport for FakeTransport {
+        fn device_features(&mut self) -> u64 {
+            self.offered
+        }
+        fn set_driver_features(&mut self, _features: u64) {}
+        fn status(&self) -> u8 {
+            self.status
+        }
+        fn set_status(&mut self, status: u8) {
+            self.status = status;
+            if self.refuse_features {
+                self.status &= !STATUS_FEATURES_OK;
+            }
+        }
+        fn max_queue_size(&mut self, _queue: u16) -> u16 {
+            0
+        }
+        fn setup_queue(&mut self, _queue: u16, _size: u16, _descriptors: u64, _driver: u64, _device: u64) {}
+        fn notify(&self, _queue: u16) {}
+        fn config_generation(&self) -> u32 {
+            0
+        }
+        fn read_config_u32(&self, _offset: usize) -> u32 {
+            0
+        }
+    }
+
+    #[test]
+    fn negotiation_agrees_on_the_common_features() {
+        let mut device = FakeTransport { offered: F_VERSION_1 | 0b11, refuse_features: false, status: 0 };
+        assert_eq!(negotiate(&mut device, 0b10), Ok(F_VERSION_1 | 0b10));
+        assert_eq!(device.status, STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK);
+    }
+
+    #[test]
+    fn giving_up_on_a_legacy_device_keeps_the_status_bits() {
+        let mut device = FakeTransport { offered: 0, refuse_features: false, status: 0 };
+        assert!(negotiate(&mut device, 0).is_err());
+        assert_eq!(device.status, STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FAILED);
+    }
+
+    #[test]
+    fn giving_up_on_refused_features_keeps_the_status_bits() {
+        let mut device = FakeTransport { offered: F_VERSION_1, refuse_features: true, status: 0 };
+        assert!(negotiate(&mut device, 0).is_err());
+        assert_eq!(device.status, STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FAILED);
+    }
 }
