@@ -297,36 +297,60 @@ fn count(loaded: &Loaded, name: &str) -> Result<bool, String> {
     let mut subject = loaded.subject(name)?;
     let mut table = Table::new(&loaded.ops);
     if !green_tea_measure_counted(&loaded.ops, &mut table, &mut subject) {
-        return Err(format!("{name} refused an allocation"));
+        // On standard output, with exit status 1: what `callgrind` looks for.
+        println!("{name} refused an allocation");
+        return Ok(false);
     }
     println!("{name}: {} events replayed", loaded.ops.len());
     Ok(true)
 }
 
+/// Why callgrind gave no count.
+enum Uncounted {
+    /// The program ran and said it had no room: an allocator refused, or a heap was full.
+    NoRoom,
+    /// Anything else: valgrind failed, or the program did.
+    Failed(String),
+}
+
+impl From<Uncounted> for String {
+    fn from(why: Uncounted) -> String {
+        match why {
+            Uncounted::NoRoom => "the program ran out of room under valgrind".into(),
+            Uncounted::Failed(why) => why,
+        }
+    }
+}
+
 /// Run this program again under callgrind with `args`, and return the instructions it
 /// counted inside `function`.
-fn callgrind(function: &str, args: &[&str]) -> Result<u64, String> {
+fn callgrind(function: &str, args: &[&str]) -> Result<u64, Uncounted> {
     callgrind_with_output(function, args).map(|(counted, _)| counted)
 }
 
 /// [`callgrind`], and what the program printed.
-fn callgrind_with_output(function: &str, args: &[&str]) -> Result<(u64, String), String> {
-    let exe = env::current_exe().map_err(|e| e.to_string())?;
+fn callgrind_with_output(function: &str, args: &[&str]) -> Result<(u64, String), Uncounted> {
+    let exe = env::current_exe().map_err(|e| Uncounted::Failed(e.to_string()))?;
     let output = Command::new("valgrind")
         .args(["--tool=callgrind", "--callgrind-out-file=/dev/null"])
         .arg(format!("--toggle-collect={function}"))
         .arg(exe)
         .args(args)
         .output()
-        .map_err(|e| format!("valgrind: {e}"))?;
+        .map_err(|e| Uncounted::Failed(format!("valgrind: {e}")))?;
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
     if !output.status.success() {
-        return Err(format!("under valgrind, `{}` failed: {stderr}", args.join(" ")));
+        if output.status.code() == Some(1) && (stdout.contains("refused an allocation") || stdout.contains("HeapFull")) {
+            return Err(Uncounted::NoRoom);
+        }
+        return Err(Uncounted::Failed(format!("under valgrind, `{}` failed: {stdout}{stderr}", args.join(" "))));
     }
     let collected = stderr.lines().find_map(|line| line.split("Collected :").nth(1));
-    let counted =
-        collected.and_then(|n| n.trim().parse().ok()).ok_or(format!("valgrind printed no count: {stderr}"))?;
-    Ok((counted, String::from_utf8_lossy(&output.stdout).into_owned()))
+    let counted = collected
+        .and_then(|n| n.trim().parse().ok())
+        .ok_or_else(|| Uncounted::Failed(format!("valgrind printed no count: {stderr}")))?;
+    Ok((counted, stdout.into_owned()))
 }
 
 fn instructions(file: &str, loaded: &Loaded, options: &Options) -> Result<bool, String> {
@@ -349,9 +373,13 @@ fn instructions(file: &str, loaded: &Loaded, options: &Options) -> Result<bool, 
     );
     println!("  allocator    instructions  less the loop's  per event");
     for name in chosen(options) {
-        let Ok(all) = counted(&name) else {
-            println!("  {name:10}   refused an allocation: the trace doesn't fit in its region");
-            continue;
+        let all = match counted(&name) {
+            Ok(all) => all,
+            Err(Uncounted::NoRoom) => {
+                println!("  {name:10}   refused an allocation: the trace doesn't fit in its region");
+                continue;
+            }
+            Err(why) => return Err(why.into()),
         };
         println!("  {name:10} {all:14} {:16} {:>10}", all - null, hundredths(all - null, events));
     }
@@ -781,7 +809,8 @@ fn lisp_instructions(options: &Options) -> Result<bool, String> {
                             per_object(over)
                         );
                     }
-                    Err(_) => println!("  {heap:13} {times:>8} {words:7}   the program doesn't fit"),
+                    Err(Uncounted::NoRoom) => println!("  {heap:13} {times:>8} {words:7}   the program doesn't fit"),
+                    Err(why) => return Err(why.into()),
                 }
             }
         }
