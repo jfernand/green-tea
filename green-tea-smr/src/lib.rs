@@ -46,7 +46,9 @@ pub struct Counts {
     pub retired: usize,
     /// Of those, the nodes freed.
     pub freed: usize,
-    /// The most nodes that were retired and not yet freed, at any one time.
+    /// The most nodes that were retired and not yet freed, at any one time. In counts
+    /// added together with `+=`, the sum of the threads' peaks, which they may have
+    /// reached at different times: an upper bound on how many waited at once.
     pub peak: usize,
     /// Operations begun (`enter`).
     pub operations: usize,
