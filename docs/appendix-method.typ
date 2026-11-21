@@ -1,0 +1,20 @@
+#import "lib.typ": *
+
+= How this report was produced <app-method>
+
+The report describes one commit, #raw(pinned), read from a clean export so that uncommitted work can't leak into it. Four scripts in `docs/` keep it honest, and each can be run again.
+
+#dtable(columns: (auto, 1fr), ("Script", "What it does"),
+  [`record.sh`], [Exports the pinned commit, and runs the commands in `record.d/` to produce the outputs in `output/`],
+  [`tools/check-snippets.py`], [Compares every listing with the pinned commit, line by line, ignoring whitespace],
+  [`tools/check-quotes.py`], [Finds every line of every quoted output in that section's recordings],
+  [`tools/check-coverage.py`], [Lists any module, public item or kernel of the pinned commit that the report doesn't name],
+)
+
+`tools/expand.py` writes the listings in the first place, from a marker naming a file and line ranges, so that no listing is typed by hand.
+
+Every recording script was run a second time from a fresh export, and the report quotes the first run. Of the files recorded, 36 came out different. The differences are times and what follows from them (load averages, timer ticks counted, how often one allocator beat another in `runs`, and the intermittent page check of @crate-measure), addresses that the operating system randomizes, which hart OpenSBI booted on, log timestamps, process ids and build paths, and callgrind's totals, by at most 39 instructions in 665 million. Every kernel passed again. The tables of times in this report are examples of one run, and the other counts repeat.
+
+The coverage check is a floor. It proves each public item is named in its crate's section, and can't prove that what the section says about it is right. Claims were checked against the code and the recordings as they were written.
+
+The crates were written up in parallel by AI agents working from one brief, with `green-tea-pool` and `green-tea-fit` as models, and then read through as a whole.

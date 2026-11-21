@@ -1,0 +1,73 @@
+=== summary
+ok    coop-riscv64    57 switches, as expected
+ok    coop-aarch64    57 switches, as expected
+ok    coop-x86_64     57 switches, as expected
+ok    preempt-riscv64 40 preemptions; every busy worker ran in several slices, and the sleeper used 2 ms of CPU in 70 wakeups
+ok    preempt-aarch64 41 preemptions; every busy worker ran in several slices, and the sleeper used 3 ms of CPU in 70 wakeups
+ok    preempt-x86_64  38 preemptions; every busy worker ran in several slices, and the sleeper used 3 ms of CPU in 70 wakeups
+ok    overflow-riscv64 overflowed after 56 frames, into the task's guard page at 0x80805f88
+ok    overflow-x86_64 overflowed after 56 frames, into the task's guard page at 0x805f68
+ok    disk-riscv64    read 64 sectors over virtio-MMIO, and wrote one back
+ok    disk-aarch64    read 64 sectors over virtio-MMIO, and wrote one back
+ok    disk-x86_64     read 64 sectors over virtio-PCI, and wrote one back
+ok    memmap-riscv64  7 sections in order and aligned; 8 addresses where they should be
+ok    memmap-aarch64  7 sections in order and aligned; 8 addresses where they should be
+ok    memmap-x86_64   7 sections in order and aligned; 8 addresses where they should be
+ok    pool-riscv64    1000 tasks ran on one stack; the bitmap caught a double give, the free list didn't
+ok    pool-aarch64    1000 tasks ran on one stack; the bitmap caught a double give, the free list didn't
+ok    pool-x86_64     1000 tasks ran on one stack; the bitmap caught a double give, the free list didn't
+ok    fit-riscv64     freed blocks merged and were reused; 1000 tasks and six workloads left their heaps as they found them
+ok    fit-aarch64     freed blocks merged and were reused; 1000 tasks and six workloads left their heaps as they found them
+ok    fit-x86_64      freed blocks merged and were reused; 1000 tasks and six workloads left their heaps as they found them
+ok    frag-riscv64    an adversary holding 65536 bytes made every policy need 388384 bytes, 5.93 times as much; a random workload made them need 23.0% to 864.9% over its peak
+ok    frag-aarch64    an adversary holding 65536 bytes made every policy need 388384 bytes, 5.93 times as much; a random workload made them need 23.0% to 864.9% over its peak
+ok    frag-x86_64     an adversary holding 65536 bytes made every policy need 388384 bytes, 5.93 times as much; a random workload made them need 23.0% to 864.9% over its peak
+ok    tlsf-riscv64    with 8000 holes first fit looked at 8001 blocks for one allocation, and TLSF at 1; the kernel's heap never looked at more than 1 in 6622 allocations
+ok    tlsf-aarch64    with 8000 holes first fit looked at 8001 blocks for one allocation, and TLSF at 1; the kernel's heap never looked at more than 1 in 6622 allocations
+ok    tlsf-x86_64     with 8000 holes first fit looked at 8001 blocks for one allocation, and TLSF at 1; the kernel's heap never looked at more than 1 in 6622 allocations
+ok    slab-riscv64    4084 pages freed one by one merged 4074 times into the blocks they came from; 40 objects allocated twice were constructed 57 times; 1000 tasks took 8 stacks from the pool, and 96 ran at once
+ok    slab-aarch64    4084 pages freed one by one merged 4074 times into the blocks they came from; 40 objects allocated twice were constructed 57 times; 1000 tasks took 10 stacks from the pool, and 100 ran at once
+ok    slab-x86_64     4084 pages freed one by one merged 4074 times into the blocks they came from; 40 objects allocated twice were constructed 57 times; 1000 tasks took 23 stacks from the pool, and 92 ran at once
+ok    pages-riscv64   of 1024 pages reserved, 290 were the most mapped at once; 813 page faults, 779 pages released
+ok    pages-x86_64    of 1024 pages reserved, 290 were the most mapped at once; 813 page faults, 779 pages released
+ok    smp-riscv64     4 CPUs made 80128 allocations and frees each way: the heap's lock was taken 80128 times, and the lock behind a cache per CPU 2680 times
+ok    smp-aarch64     4 CPUs made 80128 allocations and frees each way: the heap's lock was taken 80128 times, and the lock behind a cache per CPU 2680 times
+ok    smp-x86_64      4 CPUs made 80128 allocations and frees each way: the heap's lock was taken 80128 times, and the lock behind a cache per CPU 2680 times
+ok    lisp-riscv64    five programs allocated 36508 objects and freed 35387, with 536057 increments and 571246 decrements
+ok    lisp-aarch64    five programs allocated 36508 objects and freed 35387, with 536057 increments and 571246 decrements
+ok    lisp-x86_64     five programs allocated 36508 objects and freed 35387, with 536057 increments and 571246 decrements
+ok    shard-riscv64   4 CPUs allocated through a heap of pages each and took no lock, where their caches took one 4672 times; 38400 blocks were freed by a CPU that didn't allocate them, and every one went back to its page
+ok    shard-aarch64   4 CPUs allocated through a heap of pages each and took no lock, where their caches took one 4672 times; 38400 blocks were freed by a CPU that didn't allocate them, and every one went back to its page
+ok    shard-x86_64    4 CPUs allocated through a heap of pages each and took no lock, where their caches took one 4672 times; 38400 blocks were freed by a CPU that didn't allocate them, and every one went back to its page
+ok    gc-riscv64      five programs on three heaps that trace: 160 collections traced 25698 objects, and nothing was left
+ok    gc-aarch64      five programs on three heaps that trace: 160 collections traced 25698 objects, and nothing was left
+ok    gc-x86_64       five programs on three heaps that trace: 160 collections traced 25698 objects, and nothing was left
+ok    smr-riscv64     an interrupted pop corrupted its stack when nodes were freed at once, and not with epochs or hazard pointers; 4 CPUs lost no value on a stack or a queue, and found 3512 primes
+ok    smr-aarch64     an interrupted pop corrupted its stack when nodes were freed at once, and not with epochs or hazard pointers; 4 CPUs lost no value on a stack or a queue, and found 3512 primes
+ok    smr-x86_64      an interrupted pop corrupted its stack when nodes were freed at once, and not with epochs or hazard pointers; 4 CPUs lost no value on a stack or a queue, and found 3512 primes
+ok    gen-riscv64     seven programs on two generations: 7632 of 47009 objects left the nursery alive, and nothing was left
+ok    gen-aarch64     seven programs on two generations: 7632 of 47009 objects left the nursery alive, and nothing was left
+ok    gen-x86_64      seven programs on two generations: 7632 of 47009 objects left the nursery alive, and nothing was left
+ok    incremental-riscv64 212 cycles in 61497 steps of at most 28 units lost nothing; then 1011 ticks of the timer
+ok    incremental-aarch64 212 cycles in 61497 steps of at most 28 units lost nothing; then 1161 ticks of the timer
+ok    incremental-x86_64 212 cycles in 61497 steps of at most 28 units lost nothing; then 963 ticks of the timer
+ok    shell-riscv64   1000 commands made 8000 heap allocations and freed them all, or none from an arena that peaked at 368
+ok    shell-aarch64   1000 commands made 8000 heap allocations and freed them all, or none from an arena that peaked at 368
+ok    shell-x86_64    1000 commands made 8000 heap allocations and freed them all, or none from an arena that peaked at 368
+ok    trace-riscv64   20483 events replayed six ways: a peak of 14902 live bytes needed 21456 (first fit by address) to 156608 (next fit, LIFO); 25216 to 52688 when shuffled
+ok    trace-aarch64   20483 events replayed six ways: a peak of 14902 live bytes needed 21456 (first fit by address) to 156608 (next fit, LIFO); 25216 to 52688 when shuffled
+ok    trace-x86_64    20483 events replayed six ways: a peak of 14902 live bytes needed 21456 (first fit by address) to 156608 (next fit, LIFO); 25216 to 52688 when shuffled
+ok    safety-riscv64  a write to a freed block went unseen by the plain allocator and was caught by encoded links and by the quarantine; a freed block was reused after 17 allocations, or 3 to 5595 at random; the workload's footprint went from 201200 to 238992 bytes
+ok    safety-aarch64  a write to a freed block went unseen by the plain allocator and was caught by encoded links and by the quarantine; a freed block was reused after 17 allocations, or 3 to 5595 at random; the workload's footprint went from 201200 to 238992 bytes
+ok    safety-x86_64   a write to a freed block went unseen by the plain allocator and was caught by encoded links and by the quarantine; a freed block was reused after 17 allocations, or 3 to 5595 at random; the workload's footprint went from 201200 to 238992 bytes
+ok    harden-riscv64  a peak of 14902 live bytes needed 83968 with no defence, 95760 with a canary, 99984 with a quarantine of 16 blocks and 30160 with random choices
+ok    harden-aarch64  a peak of 14902 live bytes needed 83968 with no defence, 95760 with a canary, 99984 with a quarantine of 16 blocks and 30160 with random choices
+ok    harden-x86_64   a peak of 14902 live bytes needed 83968 with no defence, 95760 with a canary, 99984 with a quarantine of 16 blocks and 30160 with random choices
+ok    region-riscv64  1970 commands asked the heap for 10316 blocks, 2996 with an arena, and 16 with two regions, which held 61440 bytes at the end for 6609 of variables
+ok    region-aarch64  1970 commands asked the heap for 10316 blocks, 2996 with an arena, and 16 with two regions, which held 61440 bytes at the end for 6609 of variables
+ok    region-x86_64   1970 commands asked the heap for 10316 blocks, 2996 with an arena, and 16 with two regions, which held 61440 bytes at the end for 6609 of variables
+ok    gtt-riscv64     20483 events written as 278076 bytes of text and as 74087 bytes of binary, 2048 at a time, and read back the same
+ok    gtt-aarch64     20483 events written as 278076 bytes of text and as 74087 bytes of binary, 2048 at a time, and read back the same
+ok    gtt-x86_64      20483 events written as 237110 bytes of text and as 74076 bytes of binary, 2048 at a time, and read back the same
+ok    resident-riscv64 the recorded trace touched 7 pages under the allocator that needed fewest, and 40 under the one that needed most
+ok    resident-x86_64 the recorded trace touched 7 pages under the allocator that needed fewest, and 40 under the one that needed most
