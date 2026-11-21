@@ -60,12 +60,14 @@ impl Framebuffer {
         }
     }
 
-    /// A `thickness`-pixel outline just inside the rectangle.
+    /// A `thickness`-pixel outline just inside the rectangle. Thicker than the rectangle,
+    /// it fills it.
     pub fn outline(&mut self, x: usize, y: usize, w: usize, h: usize, thickness: usize, color: u32) {
-        self.fill_rect(x, y, w, thickness, color);
-        self.fill_rect(x, y + h - thickness, w, thickness, color);
-        self.fill_rect(x, y, thickness, h, color);
-        self.fill_rect(x + w - thickness, y, thickness, h, color);
+        let (across, down) = (thickness.min(w), thickness.min(h));
+        self.fill_rect(x, y, w, down, color);
+        self.fill_rect(x, y + h - down, w, down, color);
+        self.fill_rect(x, y, across, h, color);
+        self.fill_rect(x + w - across, y, across, h, color);
     }
 
     /// Draw `n` in decimal with a 3×5 pixel font, each font pixel `scale`×`scale`.
@@ -111,3 +113,44 @@ const FONT: [[u8; 5]; 10] = [
     [0b111, 0b101, 0b111, 0b101, 0b111], // 8
     [0b111, 0b101, 0b111, 0b001, 0b111], // 9
 ];
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+    use std::vec;
+    use std::vec::Vec;
+
+    const COLOR: u32 = 0x00ff_ffff;
+
+    /// The `(column, row)` of each pixel `draw` paints, in reading order.
+    fn painted(draw: impl FnOnce(&mut Framebuffer)) -> Vec<(usize, usize)> {
+        let mut pixels = vec![0u32; WIDTH * HEIGHT];
+        let mut fb = Framebuffer { pixels: pixels.as_mut_ptr() };
+        draw(&mut fb);
+        let lit = pixels.iter().enumerate().filter(|&(_, &pixel)| pixel == COLOR);
+        lit.map(|(i, _)| (i % WIDTH, i / WIDTH)).collect()
+    }
+
+    /// Every pixel of a rectangle, in reading order.
+    fn solid(x: usize, y: usize, w: usize, h: usize) -> Vec<(usize, usize)> {
+        (y..y + h).flat_map(|row| (x..x + w).map(move |col| (col, row))).collect()
+    }
+
+    #[test]
+    fn an_outline_leaves_the_middle_alone() {
+        let lit = painted(|fb| fb.outline(10, 10, 3, 3, 1, COLOR));
+        let ring = solid(10, 10, 3, 3).into_iter().filter(|&p| p != (11, 11)).collect::<Vec<_>>();
+        assert_eq!(lit, ring);
+    }
+
+    #[test]
+    fn an_outline_thicker_than_a_rectangle_at_the_origin_fills_it() {
+        assert_eq!(painted(|fb| fb.outline(0, 0, 4, 2, 5, COLOR)), solid(0, 0, 4, 2));
+    }
+
+    #[test]
+    fn an_outline_thicker_than_its_rectangle_stays_inside_it() {
+        assert_eq!(painted(|fb| fb.outline(20, 20, 4, 2, 5, COLOR)), solid(20, 20, 4, 2));
+    }
+}
