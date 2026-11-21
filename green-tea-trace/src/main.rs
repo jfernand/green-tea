@@ -12,7 +12,7 @@
 //! the standard input. The tables are the ones the kernel prints, column for column, so
 //! that a trace dumped by the kernel can be replayed here and the two outputs compared.
 
-use green_tea_fit::buddy::Buddy;
+use green_tea_fit::buddy::{self, Buddy};
 use green_tea_fit::tlsf::Tlsf;
 use green_tea_fit::trace::{self, Event, Report};
 use green_tea_fit::tracefile::{self, Events, MAGIC, Record};
@@ -47,6 +47,8 @@ const SEED: u64 = 0x2545_f491_4f6c_dd1d;
 const LONG_LIVED: u32 = 64;
 /// The region the shell's `replay` uses, and the least this one does.
 const LEAST_REGION: usize = 512 * 1024;
+/// The largest region every allocator here can take: the buddy system's table of lists ends there.
+const MOST_REGION: usize = buddy::MIN_BLOCK << buddy::ORDERS;
 
 const WAYS: [(Policy, &str, Order, &str); 6] = [
     (Policy::FirstFit, "first fit", Order::Lifo, "LIFO"),
@@ -99,8 +101,9 @@ fn run(args: &[String]) -> Result<String, Failure> {
     while let Some(arg) = rest.next() {
         match arg.as_str() {
             "--region-kib" => {
-                let kib = rest.next().and_then(|n| n.parse::<usize>().ok()).filter(|n| *n >= 1);
-                region = Some(kib.ok_or_else(|| usage("--region-kib needs a number of KiB"))? * 1024);
+                let kib = rest.next().and_then(|n| n.parse::<usize>().ok()).filter(|n| (1..=MOST_REGION / 1024).contains(n));
+                let why = format!("--region-kib needs a number of KiB from 1 to {}", MOST_REGION / 1024);
+                region = Some(kib.ok_or_else(|| usage(&why))? * 1024);
             }
             "--shuffle" => {
                 // Before the file, the next word is the file, whatever it looks like.
@@ -536,6 +539,18 @@ mod tests {
         assert!(matches!(run(&args(&["replay", "a", "--frobnicate"])), Err(Failure::Usage(_))));
         assert!(run(&args(&["--help"])).unwrap().starts_with("usage:"));
         assert!(matches!(run(&args(&["stat", "/nonexistent/trace.gtt"])), Err(Failure::Refused { .. })));
+    }
+
+    #[test]
+    fn a_region_too_large_is_a_usage_error() {
+        let path = std::env::temp_dir().join(format!("green-tea-trace-region-{}.gtt", std::process::id()));
+        std::fs::write(&path, Form::Text.write(&SMALL)).unwrap();
+        let path = path.to_str().unwrap();
+        let outcome = std::panic::catch_unwind(|| run(&args(&["replay", path, "--region-kib", "5000000"])));
+        let huge = run(&args(&["replay", path, "--region-kib", "18446744073709551615"]));
+        std::fs::remove_file(path).unwrap();
+        assert!(matches!(outcome, Ok(Err(Failure::Usage(_)))), "{outcome:?}");
+        assert!(matches!(huge, Err(Failure::Usage(_))), "{huge:?}");
     }
 
     #[test]
