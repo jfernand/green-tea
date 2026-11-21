@@ -22,3 +22,4 @@ bench = false
 green-tea-bare = { path = "../green-tea-bare" }
 green-tea-lisp = { path = "../green-tea-lisp" }
 green-tea-shard = { path = "../green-tea-shard" }
+green-tea-smr = { path = "../green-tea-smr" }

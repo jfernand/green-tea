@@ -125,6 +125,7 @@ dependencies = [
  "green-tea-bare",
  "green-tea-lisp",
  "green-tea-shard",
+ "green-tea-smr",
 ]
 
 [[package]]
@@ -212,6 +213,10 @@ version = "0.1.0"
 dependencies = [
  "green-tea-fit",
 ]
+
+[[package]]
+name = "green-tea-smr"
+version = "0.1.0"
 
 [[package]]
 name = "green-tea-trace"

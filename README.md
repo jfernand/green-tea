@@ -29,6 +29,7 @@ kernels built on the same context switch:
 | [`green-tea-smp`](green-tea-smp) | Allocating from several CPUs: a spin lock, and a cache of free blocks for each CPU in front of a heap behind the lock. `no_std`; its tests run on the host with real threads. |
 | [`green-tea-lisp`](green-tea-lisp) | A small Lisp: a reader, an evaluator and a printer, over a heap it reaches only through the ten operations of a trait. The first heap counts references. `no_std`; `--kernel lisp` runs it. |
 | [`green-tea-shard`](green-tea-shard) | Allocating from several CPUs with no lock, after mimalloc: pages of one size class each, a free list in every page, and a second list in every page that other CPUs push to with a compare-and-swap. `no_std`; its tests run on the host with real threads. |
+| [`green-tea-smr`](green-tea-smr) | Safe memory reclamation: a lock-free stack and queue with their nodes on the heap, and when a node they have unlinked may be freed, by epochs and by hazard pointers. `no_std`; its tests run on the host with real threads. |
 | [`drivers/`](drivers) | The device drivers, one crate each, which know their device but not the machine: serial ports (16550, PL011), QEMU's fw_cfg and ramfb, PCI through ECAM, virtio (MMIO and PCI transports, split virtqueues) and virtio-blk. |
 | [`green-tea-bare`](green-tea-bare) | What the kernels share: boot code per board behind the `Platform` and `TimerInterrupt` traits (timers, interrupts, paging, and where each device is), a port of v2's `Task` and scheduler, and a heap. |
 | [`green-tea-coop`](green-tea-coop) | A bare-metal kernel for QEMU on riscv64, aarch64 and x86_64 whose tasks yield to each other, so you can watch the context switches on screen. |
@@ -80,6 +81,7 @@ cargo xtask kernel --kernel smp       # four CPUs: the heap behind a lock, then 
 cargo xtask kernel --kernel shard     # four CPUs and no lock: a heap of pages for each, against the caches
 cargo xtask kernel --kernel lisp      # a small Lisp on a heap that counts references
 cargo xtask kernel --kernel gc        # the same Lisp on heaps that mark and sweep, mark and compact, and copy
+cargo xtask kernel --kernel smr       # four CPUs on a lock-free stack and queue: when to free a node
 cargo xtask kernel --kernel shell     # the shell's test, typed at its serial console
 cargo xtask kernel --kernel trace     # the shell records its heap, and replays the trace against each policy
 cargo xtask kernel --kernel safety    # a task corrupts the free list; the allocator hardened, a defence at a time
@@ -319,8 +321,8 @@ after trimming.
 
 ### Several CPUs
 
-Every kernel boots on one CPU, and all but one test stay there. `--kernel smp` is run on a
-machine with four (`-smp 4`), and starts the other three
+Every kernel boots on one CPU, and all but two tests stay there. `--kernel smp` and
+`--kernel smr` are run on a machine with four (`-smp 4`), and start the other three
 ([`green-tea-bare/src/cpus.rs`](green-tea-bare/src/cpus.rs)). How is the board's business:
 
 | | riscv64 (`virt`) | aarch64 (`virt`) | x86_64 (`q35`) |
@@ -394,6 +396,23 @@ each heap and counts the collections and the objects traced, walked and moved, a
 where objects are after a collection, what the mark stack holds, and what a reference
 that the heap wasn't told about refers to afterwards. The smallest heap each program runs
 in is found on the host: `cargo run --release -p green-tea-lisp --example heaps`.
+
+[`green-tea-smr`](green-tea-smr) has a stack and a queue that take no lock: they change
+their lists with compare-and-swap, and keep their nodes on the heap. A thread may be
+reading a node at the moment another unlinks it, so the thread that unlinks a node doesn't
+free it but *retires* it, to a `Reclaim` that frees it when nobody can still hold its
+address. There are four: `AtOnce`, which is wrong; `Leak`, which never frees; `epoch`,
+which frees a node once every thread has begun a new operation twice over (the form of
+epoch-based reclamation that Trevor Brown calls DEBRA); and `hazard`, Maged Michael's
+hazard pointers, which frees a node when no thread has announced that it is using it.
+`--kernel smr` first interrupts a pop, on one CPU, with what another thread could do at
+its worst moment: with `AtOnce` the stack ends up sharing a node with another stack, and
+with the other two it doesn't. Then four CPUs share a stack and a queue; one of them
+stops in the middle of an operation, which with epochs keeps every node retired
+afterwards from being freed and with hazard pointers keeps one; one replaces a value by
+copying it while the others read it (`rcu::Rcu`, the shape of read-copy update); and a
+queue of jobs that split themselves in two is run by all four. The crate's own tests run on the host, with
+threads: `cargo test -p green-tea-smr`.
 
 ### A shell, and an arena
 
