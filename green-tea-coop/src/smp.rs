@@ -69,6 +69,20 @@ pub fn test(fb: Framebuffer) {
     cpus::park();
 }
 
+/// Once the started CPUs are parked, `run` runs on the one CPU that is left.
+fn parked() -> Result<(), &'static str> {
+    static RAN: AtomicUsize = AtomicUsize::new(0);
+    cpus::park();
+    cpus::run(|_| _ = RAN.fetch_add(1, Ordering::Relaxed));
+    if cpus::count() != 1 || RAN.load(Ordering::Relaxed) != 1 {
+        return Err("after park, run should run on the boot CPU alone");
+    }
+    if cpus::start_all() != 1 {
+        return Err("start_all started CPUs that were parked for good");
+    }
+    Ok(())
+}
+
 fn run() -> Result<(usize, usize), &'static str> {
     let running = cpus::start_all();
     println!("{running} CPUs are running: the one that booted, and {} it started", running - 1);
@@ -81,6 +95,7 @@ fn run() -> Result<(usize, usize), &'static str> {
     let heap_locks = kernel_heap()?;
     let cache_locks = caches(0)?;
     caches(4)?;
+    parked()?;
     Ok((heap_locks, cache_locks))
 }
 
