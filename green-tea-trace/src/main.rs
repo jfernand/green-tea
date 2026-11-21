@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! green-tea-trace stat <file>                      what the trace holds
-//! green-tea-trace replay <file> [--region-kib <n>] [--shuffle [<seed>]]
+//! green-tea-trace replay <file> [--region-kib <n>] [--shuffle [<hex seed>]]
 //!                                                  what each allocator needed for it
 //! green-tea-trace convert <file> <out> [--text|--binary]
 //!                                                  the same records in the other form
@@ -25,7 +25,7 @@ use std::{env, fs, io};
 
 const USAGE: &str = "\
 usage: green-tea-trace stat <file>
-       green-tea-trace replay <file> [--region-kib <n>] [--shuffle [<seed>]]
+       green-tea-trace replay <file> [--region-kib <n>] [--shuffle [<hex seed>]]
        green-tea-trace convert <file> <out> [--text|--binary]
 
 stat:     prints what a trace file holds: its records, the sizes asked for, how long the
@@ -35,7 +35,7 @@ replay:   replays the trace against first fit, next fit and best fit, each with 
           prints what each needed. --region-kib is the region each replay gets (default:
           the power of two at or above four times the trace's peak of live bytes, and at
           least 512). --shuffle also replays the trace with its sizes and lifetimes dealt
-          out at random.
+          out at random; a seed, in hexadecimal, goes after the file.
 convert:  writes the trace in the other form, or in the one asked for.
 
 A file is in the text form or the binary form; the first bytes say which. `-` is the
@@ -103,7 +103,8 @@ fn run(args: &[String]) -> Result<String, Failure> {
                 region = Some(kib.ok_or_else(|| usage("--region-kib needs a number of KiB"))? * 1024);
             }
             "--shuffle" => {
-                let seed = rest.next_if(|next| u64::from_str_radix(next, 16).is_ok());
+                // Before the file, the next word is the file, whatever it looks like.
+                let seed = rest.next_if(|next| !files.is_empty() && u64::from_str_radix(next, 16).is_ok());
                 shuffle = Some(seed.map_or(SEED, |seed| u64::from_str_radix(seed, 16).unwrap_or(SEED)));
             }
             "--text" => form = Some(Form::Text),
@@ -535,6 +536,21 @@ mod tests {
         assert!(matches!(run(&args(&["replay", "a", "--frobnicate"])), Err(Failure::Usage(_))));
         assert!(run(&args(&["--help"])).unwrap().starts_with("usage:"));
         assert!(matches!(run(&args(&["stat", "/nonexistent/trace.gtt"])), Err(Failure::Refused { .. })));
+    }
+
+    #[test]
+    fn a_file_named_in_hex_can_follow_shuffle() {
+        // The word after --shuffle is the file when no file has been given: here, one that isn't there.
+        let Err(Failure::Refused { why, .. }) = run(&args(&["replay", "--shuffle", "cafe"])) else {
+            panic!("`cafe` was not taken for the file");
+        };
+        assert!(why.starts_with("cafe:"), "{why}");
+        // After the file, it is the seed.
+        let Err(Failure::Refused { why, .. }) = run(&args(&["replay", "/nonexistent/x", "--shuffle", "cafe"])) else {
+            panic!("`cafe` was not taken for the seed");
+        };
+        assert!(why.starts_with("/nonexistent/x:"), "{why}");
+        assert!(super::USAGE.contains("<hex seed>"));
     }
 
     #[test]
