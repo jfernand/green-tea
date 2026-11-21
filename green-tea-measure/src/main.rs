@@ -445,6 +445,8 @@ fn time(loaded: &Loaded, options: &Options) -> Result<bool, String> {
     let mut table = Table::new(ops);
     let mut samples: Vec<u32> = Vec::with_capacity(ops.len() * passes);
     let mut whole: Vec<u64> = Vec::with_capacity(passes);
+    // Written now, because the first write to it is inside a timed pass, and can be to a new page.
+    whole.resize(passes, 1);
     let mut mapped = 0;
     let _ = faults(); // the first read of the file maps what reading it needs
     for name in chosen(options) {
@@ -473,7 +475,7 @@ fn time(loaded: &Loaded, options: &Options) -> Result<bool, String> {
         }
         for _ in 0..passes {
             let ns = replay::pass(ops, &mut table, &mut *subject, options.touch);
-            whole.push(ns.ok_or(format!("{name} refused an allocation"))?);
+            whole.push(ns.ok_or_else(|| format!("{name} refused an allocation"))?);
             subject.reset();
         }
         let during = faults() - before;
