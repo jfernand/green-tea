@@ -14,7 +14,7 @@ impl Stack {
     /// # Panics
     /// If the kernel refuses the mapping.
     pub(crate) fn new(size: usize) -> Stack {
-        let guard = page_size(); // 16 KiB on Apple Silicon
+        let guard = page_size();
         info!("guard: {}k", guard / 1024);
         let len = guard + size;
 
