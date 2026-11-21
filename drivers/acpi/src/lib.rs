@@ -53,12 +53,16 @@ impl<M: Memory> Acpi<M> {
         if rsdp.get(..8)? != b"RSD PTR " || sum(rsdp.get(..20)?) != 0 {
             return None;
         }
-        let (root, entry) = if rsdp[15] >= 2 && rsdp.len() >= 36 && sum(&rsdp[..36]) == 0 {
-            (u64_at(rsdp, 24)?, 8) // the XSDT
-        } else {
-            (u64::from(u32_at(rsdp, 16)?), 4) // the RSDT
-        };
-        Some(Acpi { memory, root, entry })
+        let mut acpi = Acpi { memory, root: u64::from(u32_at(rsdp, 16)?), entry: 4 }; // the RSDT
+        if rsdp[15] >= 2 && rsdp.len() >= 36 && sum(&rsdp[..36]) == 0 {
+            // The XSDT, as long as we can read it: it may be above the memory we map.
+            let xsdt = u64_at(rsdp, 24)?;
+            let mut buf = [0u8; MAX_TABLE];
+            if acpi.table(xsdt, &mut buf).is_some() {
+                (acpi.root, acpi.entry) = (xsdt, 8);
+            }
+        }
+        Some(acpi)
     }
 
     /// Read the table at `addr` into `buf`, and return it if its checksum is right.
@@ -89,7 +93,6 @@ impl<M: Memory> Acpi<M> {
     /// CPU's first, and return how many there are. Ids need not be consecutive.
     pub fn apic_ids(&self, boot: u32, ids: &mut [u32]) -> usize {
         const ENABLED: u32 = 1;
-        const ONLINE_CAPABLE: u32 = 2;
         let mut buf = [0u8; MAX_TABLE];
         let Some(madt) = self.find(b"APIC").and_then(|a| self.table(a, &mut buf)) else { return 0 };
         let Some(first) = ids.first_mut() else { return 0 };
@@ -106,7 +109,8 @@ impl<M: Memory> Acpi<M> {
                 _ => None,
             };
             if let Some((id, flags)) = found {
-                let usable = flags & (ENABLED | ONLINE_CAPABLE) != 0;
+                // "Online capable" without "enabled" is a CPU that could be added later.
+                let usable = flags & ENABLED != 0;
                 if usable && id != boot && count < ids.len() && !ids[..count].contains(&id) {
                     ids[count] = id;
                     count += 1;
@@ -158,7 +162,14 @@ impl<M: Memory> Acpi<M> {
     pub fn pm_timer_port(&self) -> Option<u16> {
         let mut buf = [0u8; MAX_TABLE];
         let fadt = self.table(self.find(b"FACP")?, &mut buf)?;
-        u32_at(fadt, 76).filter(|&p| p != 0 && p <= 0xffff).map(|p| p as u16)
+        // X_PM_TMR_BLK, a generic address at 208, replaces the old field if it is a port.
+        const SYSTEM_IO: u8 = 1;
+        let extended = (fadt.get(208) == Some(&SYSTEM_IO)).then(|| u64_at(fadt, 212)).flatten();
+        extended
+            .filter(|&p| p != 0)
+            .or_else(|| u32_at(fadt, 76).map(u64::from))
+            .filter(|&p| p != 0 && p <= 0xffff)
+            .map(|p| p as u16)
     }
 }
 
@@ -331,6 +342,58 @@ mod tests {
         let fake = with(&[(0x2000, m)]);
         let mut ids = [0; 8];
         assert_eq!(Acpi::new(&fake, &rsdp_v2(0x1000)).unwrap().apic_ids(0, &mut ids), 0);
+    }
+
+    #[test]
+    fn an_online_capable_cpu_that_is_not_enabled_is_left_out() {
+        let fake = with(&[(0x2000, madt(&[lapic(0, 1), lapic(2, 2), lapic(4, 1)]))]);
+        let acpi = Acpi::new(&fake, &rsdp_v2(0x1000)).unwrap();
+        let mut ids = [0; 8];
+        assert_eq!(acpi.apic_ids(0, &mut ids), 2);
+        assert_eq!(ids[..2], [0, 4]);
+    }
+
+    #[test]
+    fn an_unreachable_xsdt_falls_back_to_the_rsdt() {
+        let mut fake = Fake::default();
+        fake.0.insert(0x2000, madt(&[lapic(0, 1), lapic(1, 1)]));
+        fake.0.insert(0x3000, table(b"RSDT", &0x2000u32.to_le_bytes()));
+        let mut r = rsdp_v2(0x1_0000_0000);
+        r[16..20].copy_from_slice(&0x3000u32.to_le_bytes());
+        r[8] = 0;
+        r[8] = 0u8.wrapping_sub(sum(&r[..20]));
+        r[32] = 0;
+        r[32] = 0u8.wrapping_sub(sum(&r));
+        let mut ids = [0; 8];
+        assert_eq!(Acpi::new(&fake, &r).unwrap().apic_ids(0, &mut ids), 2);
+    }
+
+    #[test]
+    fn the_64_bit_pm_timer_field_wins_when_it_is_an_io_port() {
+        let mut fadt = std::vec![0u8; 184];
+        fadt[40..44].copy_from_slice(&0x608u32.to_le_bytes());
+        fadt[172] = 1; // system I/O
+        fadt[176..184].copy_from_slice(&0x1808u64.to_le_bytes());
+        let fake = with(&[(0x3000, table(b"FACP", &fadt))]);
+        assert_eq!(Acpi::new(&fake, &rsdp_v2(0x1000)).unwrap().pm_timer_port(), Some(0x1808));
+    }
+
+    #[test]
+    fn the_pm_timer_is_found_when_only_the_64_bit_field_is_set() {
+        let mut fadt = std::vec![0u8; 184];
+        fadt[172] = 1;
+        fadt[176..184].copy_from_slice(&0x1808u64.to_le_bytes());
+        let fake = with(&[(0x3000, table(b"FACP", &fadt))]);
+        assert_eq!(Acpi::new(&fake, &rsdp_v2(0x1000)).unwrap().pm_timer_port(), Some(0x1808));
+    }
+
+    #[test]
+    fn a_pm_timer_in_memory_space_falls_back_to_the_legacy_port() {
+        let mut fadt = std::vec![0u8; 184];
+        fadt[40..44].copy_from_slice(&0x608u32.to_le_bytes());
+        fadt[176..184].copy_from_slice(&0xfed0_0000u64.to_le_bytes());
+        let fake = with(&[(0x3000, table(b"FACP", &fadt))]);
+        assert_eq!(Acpi::new(&fake, &rsdp_v2(0x1000)).unwrap().pm_timer_port(), Some(0x608));
     }
 
     #[test]

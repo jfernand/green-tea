@@ -830,6 +830,43 @@ mod paging {
     /// `_start` maps: identity-mapped, with 2 MiB pages. Call at boot, on the boot CPU.
     #[cfg_attr(not(feature = "board-pc"), allow(dead_code))]
     pub fn map_high(addr: usize, len: usize) -> Result<(), &'static str> {
+        map_above_4g(addr, len, 0)
+    }
+
+    /// Make a device's registers reachable and uncached, whatever the firmware's MTRRs say.
+    /// With the PAT at its reset value, PCD and PWT together select uncacheable. The 2 MiB
+    /// pages it touches must hold no part of the kernel. Call at boot, on the boot CPU.
+    #[cfg_attr(not(feature = "board-pc"), allow(dead_code))]
+    pub fn map_device(addr: usize, len: usize) -> Result<(), &'static str> {
+        const UNCACHED: u64 = 1 << 3 | 1 << 4;
+        const PAGE_SIZE: u64 = 1 << 7;
+        unsafe extern "C" {
+            fn _start();
+            static __kernel_end: u8;
+        }
+        map_above_4g(addr, len, UNCACHED)?;
+        if addr >= 1 << 32 {
+            return Ok(());
+        }
+        let kernel = (_start as *const () as usize & !(MIB2 - 1))..(&raw const __kernel_end as usize);
+        let (first, last) = (addr & !(MIB2 - 1), (addr + len - 1).min((1 << 32) - 1) & !(MIB2 - 1));
+        // SAFETY: at boot, on the boot CPU; each index is within the 2048 entries.
+        unsafe {
+            let pds = (&raw mut boot_pds).cast::<u64>();
+            for page in (first..=last).step_by(MIB2) {
+                let entry = pds.add(page / MIB2);
+                if kernel.start < page + MIB2 && page < kernel.end || entry.read() & PAGE_SIZE == 0 {
+                    return Err("a device shares a 2 MiB page with the kernel");
+                }
+                entry.write(entry.read() | UNCACHED);
+            }
+            asm!("mov {0}, cr3", "mov cr3, {0}", out(reg) _, options(nostack));
+        }
+        Ok(())
+    }
+
+    #[cfg_attr(not(feature = "board-pc"), allow(dead_code))]
+    fn map_above_4g(addr: usize, len: usize, cache: u64) -> Result<(), &'static str> {
         const PAGE_SIZE: u64 = 1 << 7;
         const ADDRESS: u64 = 0x000f_ffff_ffff_f000;
         const TABLES: usize = 8;
@@ -864,7 +901,7 @@ mod paging {
             for page in (first..=last).step_by(MIB2) {
                 let pdpt = next_level((&raw mut boot_pml4).cast::<u64>().add(page >> 39 & 511))?;
                 let pd = next_level(pdpt.add(page >> 30 & 511))?;
-                pd.add(page >> 21 & 511).write(page as u64 | PRESENT | WRITABLE | PAGE_SIZE);
+                pd.add(page >> 21 & 511).write(page as u64 | PRESENT | WRITABLE | PAGE_SIZE | cache);
             }
             asm!("mov {0}, cr3", "mov cr3, {0}", out(reg) _, options(nostack));
         }

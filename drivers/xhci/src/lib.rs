@@ -70,15 +70,24 @@ const TRANSFER_TRBS: usize = 32;
 const PAGE: usize = 4096;
 const WAIT_MS: u64 = 1000;
 
+const CLEAR_FEATURE: u8 = 1;
 const GET_DESCRIPTOR: u8 = 6;
 const SET_CONFIGURATION: u8 = 9;
 const SET_IDLE: u8 = 0x0a;
 const SET_PROTOCOL: u8 = 0x0b;
 const DEVICE_TO_HOST: u8 = 0x80;
 const CLASS_TO_INTERFACE: u8 = 0x21;
+const TO_ENDPOINT: u8 = 0x02;
+const ENDPOINT_HALT: u16 = 0;
 const DESCRIPTOR_DEVICE: u16 = 1 << 8;
 const DESCRIPTOR_CONFIGURATION: u16 = 2 << 8;
 const REPORT: usize = 8;
+/// Errors in a row before we stop trying to restart the keyboard's endpoint.
+const MAX_RECOVERIES: u8 = 3;
+
+/// Enough for the most scratchpad pages a controller can ask for (1023, or 4 MiB), with
+/// room for its rings and for the devices on its ports.
+pub const ARENA_SIZE: usize = 6 << 20;
 
 /// Zeroed memory for the controller, handed out in order and never returned.
 pub struct Arena {
@@ -107,6 +116,36 @@ impl Arena {
         unsafe { write_bytes(at as *mut u8, 0, size) };
         Ok(at)
     }
+
+    /// A point to come back to with [`Arena::rewind`].
+    pub fn mark(&self) -> usize {
+        self.next
+    }
+
+    /// Reuse everything handed out since `mark`.
+    ///
+    /// # Safety
+    /// No controller may still be using that memory.
+    pub unsafe fn rewind(&mut self, mark: usize) {
+        self.next = mark;
+    }
+}
+
+/// How many scratchpad pages the controller asks for: HCSPARAMS2 has the count's high five
+/// bits at 21 and its low five at 27.
+fn scratchpad_count(params2: u32) -> usize {
+    ((params2 >> 21 & 0x1f) << 5 | params2 >> 27) as usize
+}
+
+/// The array of `count` zeroed pages the controller keeps its own state in.
+fn alloc_scratchpads(arena: &mut Arena, count: usize) -> Result<usize, &'static str> {
+    let array = arena.alloc(count * 8, 64)?;
+    for i in 0..count {
+        let page = arena.alloc(PAGE, PAGE)?;
+        // SAFETY: the array has `count` entries, in the arena.
+        unsafe { write_volatile((array as *mut u64).add(i), page as u64) };
+    }
+    Ok(array)
 }
 
 fn read32(address: usize) -> u32 {
@@ -129,6 +168,10 @@ fn write64(address: usize, value: u64) {
 struct Keyboard {
     slot: u8,
     endpoint: u8,
+    /// The endpoint's USB address, which a request to the device names it by.
+    address: u8,
+    ep0: Ring,
+    failures: u8,
     ring: Ring,
     report: usize,
     decoder: hid::Decoder,
@@ -180,14 +223,9 @@ impl Xhci {
         let slots = (params1 & 0xff).min(MAX_SLOTS);
         write32(operational + CONFIG, slots);
         let dcbaa = arena.alloc((slots as usize + 1) * 8, 64)?;
-        let scratchpads = ((params2 >> 21 & 0x1f) << 5 | params2 >> 27) as usize;
+        let scratchpads = scratchpad_count(params2);
         if scratchpads > 0 {
-            let array = arena.alloc(scratchpads * 8, 64)?;
-            for i in 0..scratchpads {
-                let page = arena.alloc(PAGE, PAGE)?;
-                // SAFETY: the array has `scratchpads` entries, in the arena.
-                unsafe { write_volatile((array as *mut u64).add(i), page as u64) };
-            }
+            let array = alloc_scratchpads(arena, scratchpads)?;
             // SAFETY: entry 0 of the DCBAA, in the arena, is the scratchpad array.
             unsafe { write_volatile(dcbaa as *mut u64, array as u64) };
         }
@@ -251,6 +289,12 @@ impl Xhci {
         None
     }
 
+    /// Halt the controller, so that it no longer touches its memory. `false` if it won't.
+    pub fn stop(&self) -> bool {
+        write32(self.operational + USBCMD, read32(self.operational + USBCMD) & !CMD_RUN);
+        wait(self.delay_ms, || read32(self.operational + USBSTS) & STS_HALTED != 0).is_some()
+    }
+
     /// The next character typed on the keyboard, if one has arrived.
     pub fn poll(&mut self) -> Option<u8> {
         self.keyboard.as_ref()?;
@@ -273,8 +317,17 @@ impl Xhci {
         if event.kind() != trb::TRANSFER_EVENT || event.slot() != k.slot || event.endpoint() != k.endpoint {
             return;
         }
-        if !matches!(event.code(), trb::SUCCESS | trb::SHORT_PACKET) {
-            return; // the endpoint has stopped: the keyboard is gone, or broken
+        match event.code() {
+            trb::SUCCESS | trb::SHORT_PACKET => k.failures = 0,
+            trb::BABBLE | trb::TRANSACTION_ERROR | trb::STALL | trb::SPLIT_TRANSACTION_ERROR => {
+                return self.recover_keyboard(); // these halt the endpoint
+            }
+            _ => {
+                // No report, and the endpoint is still running: ask for the next one.
+                k.ring.push(Trb::normal(k.report as u64, REPORT as u32));
+                let (slot, endpoint) = (k.slot, k.endpoint);
+                return self.ring_doorbell(slot, endpoint);
+            }
         }
         // SAFETY: the report buffer, which the controller has finished writing.
         let report = unsafe { read_volatile(k.report as *const [u8; REPORT]) };
@@ -288,6 +341,28 @@ impl Xhci {
         k.ring.push(Trb::normal(k.report as u64, REPORT as u32));
         let (slot, endpoint) = (k.slot, k.endpoint);
         self.ring_doorbell(slot, endpoint);
+    }
+
+    /// Restart the keyboard's halted endpoint. After `MAX_RECOVERIES` errors in a row, or
+    /// if the restart fails, the keyboard is gone, and we stop reading it.
+    fn recover_keyboard(&mut self) {
+        let Some(mut k) = self.keyboard.take() else { return };
+        k.failures += 1;
+        if k.failures <= MAX_RECOVERIES && self.restart_endpoint(&mut k).is_ok() {
+            self.keyboard = Some(k);
+        }
+    }
+
+    /// What the specification asks for after a halt: reset the endpoint, move it past the
+    /// failed transfer, clear the halt on the device's side too, and queue a new transfer.
+    fn restart_endpoint(&mut self, k: &mut Keyboard) -> Result<(), &'static str> {
+        self.command(Trb::reset_endpoint(k.slot, k.endpoint))?;
+        self.command(Trb::set_tr_dequeue(k.ring.enqueue_pointer(), k.slot, k.endpoint))?;
+        let clear = Trb::setup(TO_ENDPOINT, CLEAR_FEATURE, ENDPOINT_HALT, u16::from(k.address), 0);
+        self.control(k.slot, &mut k.ep0, clear, None)?;
+        k.ring.push(Trb::normal(k.report as u64, REPORT as u32));
+        self.ring_doorbell(k.slot, k.endpoint);
+        Ok(())
     }
 
     fn port(&self, port: u8) -> usize {
@@ -423,7 +498,7 @@ impl Xhci {
             Trb::setup(CLASS_TO_INTERFACE, SET_IDLE, 0, u16::from(found.interface), 0),
             None,
         );
-        self.start_keyboard(slot, speed, output, input, found, arena)?;
+        self.start_keyboard(slot, speed, (output, input), found, ep0, arena)?;
         Ok(true)
     }
 
@@ -438,9 +513,9 @@ impl Xhci {
         &mut self,
         slot: u8,
         speed: u8,
-        output: usize,
-        input: usize,
+        (output, input): (usize, usize),
         found: BootKeyboard,
+        ep0: Ring,
         arena: &mut Arena,
     ) -> Result<(), &'static str> {
         const INTERRUPT_IN: u32 = 7;
@@ -474,6 +549,9 @@ impl Xhci {
         self.keyboard = Some(Keyboard {
             slot,
             endpoint,
+            address: found.endpoint | 0x80,
+            ep0,
+            failures: 0,
             ring,
             report,
             decoder: hid::Decoder::new(),
@@ -494,7 +572,10 @@ fn take_from_firmware(base: usize, mut offset: usize, delay_ms: fn(u64)) {
         let capability = read32(at);
         if capability & 0xff == LEGACY_CAPABILITY {
             write32(at, capability | LEGACY_OS_OWNED);
-            let _ = wait(delay_ms, || read32(at) & LEGACY_BIOS_OWNED == 0);
+            if wait(delay_ms, || read32(at) & LEGACY_BIOS_OWNED == 0).is_none() {
+                // The firmware didn't answer. Take the controller regardless, as Linux does.
+                write32(at, read32(at) & !LEGACY_BIOS_OWNED | LEGACY_OS_OWNED);
+            }
             let control = read32(at + 4);
             write32(at + 4, control & !LEGACY_SMI_ENABLES | LEGACY_SMI_EVENTS);
             return;
@@ -522,7 +603,9 @@ fn wait(delay_ms: fn(u64), mut done: impl FnMut() -> bool) -> Option<()> {
 mod tests {
     extern crate std;
     use super::*;
+    use core::sync::atomic::AtomicUsize;
     use std::vec;
+    use std::vec::Vec;
 
     #[test]
     fn the_arena_aligns_and_zeroes() {
@@ -556,6 +639,219 @@ mod tests {
         assert_eq!(a / 0x10000, (a + 63) / 0x10000);
         assert!(a.is_multiple_of(0x10000), "moved to the next 64 KiB, and no further");
         assert!(a - start <= near + 0x10000);
+    }
+
+    #[test]
+    fn the_arena_holds_the_most_scratchpads_a_controller_can_ask_for() {
+        assert_eq!(scratchpad_count(0x1f << 21 | 0x1f << 27), 1023);
+        let mut memory = vec![0u8; ARENA_SIZE];
+        // SAFETY: the vector outlives the arena.
+        let mut arena = unsafe { Arena::new(memory.as_mut_ptr(), memory.len()) };
+        let array = alloc_scratchpads(&mut arena, 1023).unwrap();
+        // SAFETY: the array has 1023 entries.
+        let pages = unsafe { core::slice::from_raw_parts(array as *const u64, 1023) };
+        assert!(pages.iter().all(|p| p.is_multiple_of(PAGE as u64)));
+        assert!(arena.alloc(0x10000, 64).is_ok(), "room is left for the rings");
+    }
+
+    #[test]
+    fn a_rewound_arena_hands_the_memory_out_again() {
+        let mut memory = vec![0xffu8; 8192];
+        // SAFETY: the vector outlives the arena.
+        let mut arena = unsafe { Arena::new(memory.as_mut_ptr(), memory.len()) };
+        let mark = arena.mark();
+        let a = arena.alloc(4096, 64).unwrap();
+        // SAFETY: nothing uses it.
+        unsafe { (a as *mut u8).write(7) };
+        unsafe { arena.rewind(mark) };
+        let b = arena.alloc(4096, 64).unwrap();
+        assert_eq!(a, b);
+        // SAFETY: inside the vector.
+        assert_eq!(unsafe { *(b as *const u8) }, 0, "zeroed again");
+    }
+
+    #[test]
+    fn firmware_that_never_lets_go_loses_the_controller() {
+        let mut registers = vec![0u32; 8];
+        registers[4] = LEGACY_CAPABILITY | LEGACY_BIOS_OWNED;
+        registers[5] = LEGACY_SMI_ENABLES;
+        take_from_firmware(registers.as_mut_ptr() as usize, 4, |_| {});
+        assert_eq!(registers[4] & LEGACY_BIOS_OWNED, 0);
+        assert_ne!(registers[4] & LEGACY_OS_OWNED, 0);
+        assert_eq!(registers[5] & LEGACY_SMI_ENABLES, 0);
+    }
+
+    #[test]
+    fn firmware_that_lets_go_is_waited_for() {
+        static CAPABILITY: AtomicUsize = AtomicUsize::new(0);
+        let mut registers = vec![0u32; 8];
+        registers[4] = LEGACY_CAPABILITY | LEGACY_BIOS_OWNED;
+        CAPABILITY.store(registers[4..].as_mut_ptr() as usize, Ordering::SeqCst);
+        take_from_firmware(registers.as_mut_ptr() as usize, 4, |_| {
+            let at = CAPABILITY.load(Ordering::SeqCst);
+            assert_ne!(read32(at) & LEGACY_OS_OWNED, 0, "we asked before waiting");
+            write32(at, read32(at) & !LEGACY_BIOS_OWNED);
+        });
+        assert_eq!(registers[4] & LEGACY_BIOS_OWNED, 0);
+    }
+
+    /// A controller that completes every command and control transfer it finds, run from
+    /// the driver's delay callback, and that records the commands in order.
+    mod fake {
+        use super::*;
+        use std::sync::Mutex;
+        use std::vec::Vec;
+
+        pub struct State {
+            pub commands: usize,
+            pub command_at: usize,
+            pub ep0: usize,
+            pub ep0_at: usize,
+            pub events: usize,
+            pub event_at: usize,
+            pub seen: Vec<Trb>,
+            pub fail_commands: bool,
+        }
+
+        pub static STATE: Mutex<Option<State>> = Mutex::new(None);
+
+        fn emit(s: &mut State, trb: Trb) {
+            // SAFETY: the test's event ring, which is long enough for the test.
+            unsafe { write_volatile((s.events as *mut Trb).add(s.event_at), Trb { control: trb.control | 1, ..trb }) };
+            s.event_at += 1;
+        }
+
+        pub fn run(_ms: u64) {
+            let mut guard = STATE.lock().unwrap();
+            let s = guard.as_mut().unwrap();
+            loop {
+                let at = s.commands + s.command_at * size_of::<Trb>();
+                // SAFETY: the test's command ring.
+                let trb = unsafe { read_volatile(at as *const Trb) };
+                if trb.control & 1 == 0 {
+                    break;
+                }
+                s.command_at += 1;
+                s.seen.push(trb);
+                let code = if s.fail_commands { 5 } else { trb::SUCCESS };
+                let control = trb::COMMAND_COMPLETION << 10 | trb.control & 0xff00_0000;
+                emit(s, Trb { param: at as u64, status: code << 24, control });
+            }
+            loop {
+                // SAFETY: the test's endpoint 0 ring.
+                let trb = unsafe { read_volatile((s.ep0 as *const Trb).add(s.ep0_at)) };
+                if trb.control & 1 == 0 {
+                    break;
+                }
+                s.ep0_at += 1;
+                s.seen.push(trb);
+                if trb.kind() == trb::STATUS {
+                    let control = trb::TRANSFER_EVENT << 10 | 1 << 16 | 1 << 24;
+                    emit(s, Trb { param: 0, status: trb::SUCCESS << 24, control });
+                }
+            }
+        }
+    }
+
+    struct Rig {
+        xhci: Xhci,
+        interrupt: Vec<Trb>,
+        _registers: Vec<u64>,
+        _rings: [Vec<Trb>; 3],
+        _report: Vec<u8>,
+    }
+
+    fn rig(fail_commands: bool) -> Rig {
+        let mut registers = vec![0u64; 1024];
+        let mut commands = vec![Trb::default(); 32];
+        let mut events = vec![Trb::default(); 64];
+        let mut ep0 = vec![Trb::default(); 32];
+        let mut interrupt = vec![Trb::default(); 8];
+        let report = vec![0u8; REPORT];
+        let base = registers.as_mut_ptr() as usize;
+        *fake::STATE.lock().unwrap() = Some(fake::State {
+            commands: commands.as_mut_ptr() as usize,
+            command_at: 0,
+            ep0: ep0.as_mut_ptr() as usize,
+            ep0_at: 0,
+            events: events.as_mut_ptr() as usize,
+            event_at: 0,
+            seen: Vec::new(),
+            fail_commands,
+        });
+        // SAFETY: each ring is zeroed and kept alive in the rig.
+        let xhci = unsafe {
+            let mut ring = Ring::new(interrupt.as_mut_ptr(), interrupt.len());
+            ring.push(Trb::normal(report.as_ptr() as u64, REPORT as u32));
+            Xhci {
+                operational: base,
+                runtime: base,
+                doorbells: base + 0x1000,
+                ports: 1,
+                context_size: 32,
+                dcbaa: base,
+                commands: Ring::new(commands.as_mut_ptr(), commands.len()),
+                events: EventRing::new(events.as_ptr(), events.len()),
+                delay_ms: fake::run,
+                keyboard: Some(Keyboard {
+                    slot: 1,
+                    endpoint: 3,
+                    address: 0x81,
+                    ep0: Ring::new(ep0.as_mut_ptr(), ep0.len()),
+                    failures: 0,
+                    ring,
+                    report: report.as_ptr() as usize,
+                    decoder: hid::Decoder::new(),
+                    typed: [0; 6],
+                    head: 0,
+                    count: 0,
+                }),
+            }
+        };
+        Rig { xhci, interrupt, _registers: registers, _rings: [commands, events, ep0], _report: report }
+    }
+
+    fn failed_transfer() -> Trb {
+        Trb { param: 0, status: trb::STALL << 24, control: trb::TRANSFER_EVENT << 10 | 3 << 16 | 1 << 24 | 1 }
+    }
+
+    /// `fake::STATE` is one controller, so the tests that use it take turns.
+    static RIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn a_halted_keyboard_endpoint_is_restarted() {
+        let _turn = RIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut rig = rig(false);
+        let after_failed = rig.interrupt.as_ptr() as u64 + size_of::<Trb>() as u64;
+        rig.xhci.on_keyboard_event(failed_transfer());
+        let seen = fake::STATE.lock().unwrap().as_ref().unwrap().seen.clone();
+        let kinds: Vec<u32> = seen.iter().map(Trb::kind).collect();
+        assert_eq!(kinds, [trb::RESET_ENDPOINT, trb::SET_TR_DEQUEUE, trb::SETUP, trb::STATUS]);
+        assert_eq!(seen[0].endpoint(), 3);
+        assert_eq!(seen[1].param, after_failed | 1, "past the failed transfer");
+        assert_eq!(seen[2].param, Trb::setup(0x02, 1, 0, 0x81, 0).param, "CLEAR_FEATURE(ENDPOINT_HALT)");
+        assert_eq!(rig.interrupt[1].kind(), trb::NORMAL, "a new transfer is queued");
+        assert!(rig.xhci.keyboard.is_some());
+    }
+
+    #[test]
+    fn a_keyboard_that_keeps_failing_is_given_up_on() {
+        let _turn = RIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut rig = rig(false);
+        for _ in 0..MAX_RECOVERIES {
+            rig.xhci.on_keyboard_event(failed_transfer());
+            assert!(rig.xhci.keyboard.is_some());
+        }
+        rig.xhci.on_keyboard_event(failed_transfer());
+        assert!(rig.xhci.keyboard.is_none());
+    }
+
+    #[test]
+    fn a_failed_restart_gives_the_keyboard_up() {
+        let _turn = RIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut rig = rig(true);
+        rig.xhci.on_keyboard_event(failed_transfer());
+        assert!(rig.xhci.keyboard.is_none());
     }
 
     #[test]

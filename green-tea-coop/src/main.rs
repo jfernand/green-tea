@@ -21,7 +21,8 @@ use green_tea_bare::task::{current_guard, yield_now};
 #[cfg(not(feature = "board-pc"))]
 use green_tea_bare::virtio::{self, Transport};
 #[cfg(not(feature = "board-pc"))]
-use green_tea_bare::virtio_blk::{self as blk, Blk, SECTOR_SIZE};
+use green_tea_bare::virtio_blk::{self as blk, Blk};
+use green_tea_bare::virtio_blk::SECTOR_SIZE;
 use green_tea_bare::pool::{Bitmap, FreeList, GiveError, Pool};
 #[cfg(not(feature = "board-pc"))]
 use green_tea_bare::VirtioBus;
@@ -44,7 +45,6 @@ mod incremental;
 mod tlsf;
 use alloc::boxed::Box;
 use alloc::string::String;
-#[cfg(not(feature = "board-pc"))]
 use alloc::vec;
 use core::sync::atomic::AtomicUsize;
 
@@ -57,7 +57,6 @@ extern "C" fn kmain() -> ! {
     match &test[..len] {
         b"" => demo(fb),
         b"overflow" => overflow_test(fb),
-        #[cfg(not(feature = "board-pc"))]
         b"disk" => disk_test(fb),
         b"memmap" => memmap_test(fb),
         b"pool" => pool_test(fb),
@@ -205,19 +204,15 @@ fn recurse(depth: u64) -> u64 {
 // Read it all back, a few sectors per request; then overwrite one sector, flush, and
 // check that it reads back changed and its neighbours didn't.
 
-#[cfg(not(feature = "board-pc"))]
 /// Must match xtask's `disk_pattern`.
 fn pattern(sector: u64, offset: usize) -> u8 {
     (sector as u8).wrapping_mul(31) ^ (offset as u8) ^ (offset >> 8) as u8
 }
 
-#[cfg(not(feature = "board-pc"))]
 /// The serial number xtask gives the disk.
 const DISK_ID: &[u8] = b"green-tea-disk";
-#[cfg(not(feature = "board-pc"))]
 /// Sectors per read request.
 const CHUNK: usize = 4;
-#[cfg(not(feature = "board-pc"))]
 /// The sector the test overwrites.
 const SCRATCH: u64 = 3;
 
@@ -261,8 +256,81 @@ fn disk_test(fb: Framebuffer) {
     println!("PASS: read {sectors} sectors over virtio-{kind}, and wrote one back");
 }
 
+/// What the test needs of a disk, whichever driver it is behind.
+trait Disk {
+    type Error: core::fmt::Display + PartialEq;
+    const OUT_OF_RANGE: Self::Error;
+    const UNALIGNED: Self::Error;
+    fn capacity(&self) -> u64;
+    fn read(&mut self, sector: u64, buf: &mut [u8]) -> Result<(), Self::Error>;
+    fn write(&mut self, sector: u64, buf: &[u8]) -> Result<(), Self::Error>;
+    fn flush(&mut self) -> Result<(), Self::Error>;
+}
+
 #[cfg(not(feature = "board-pc"))]
-fn check_disk(disk: &mut Blk<impl Transport>) -> Result<(), String> {
+impl<T: Transport> Disk for Blk<T> {
+    type Error = blk::Error;
+    const OUT_OF_RANGE: blk::Error = blk::Error::OutOfRange;
+    const UNALIGNED: blk::Error = blk::Error::Unaligned;
+    fn capacity(&self) -> u64 {
+        Blk::capacity(self)
+    }
+    fn read(&mut self, sector: u64, buf: &mut [u8]) -> Result<(), blk::Error> {
+        Blk::read(self, sector, buf)
+    }
+    fn write(&mut self, sector: u64, buf: &[u8]) -> Result<(), blk::Error> {
+        Blk::write(self, sector, buf)
+    }
+    fn flush(&mut self) -> Result<(), blk::Error> {
+        Blk::flush(self)
+    }
+}
+
+#[cfg(feature = "board-pc")]
+impl Disk for green_tea_bare::nvme::Nvme {
+    type Error = green_tea_bare::nvme::Error;
+    const OUT_OF_RANGE: Self::Error = green_tea_bare::nvme::Error::OutOfRange;
+    const UNALIGNED: Self::Error = green_tea_bare::nvme::Error::Unaligned;
+    fn capacity(&self) -> u64 {
+        Self::capacity(self)
+    }
+    fn read(&mut self, sector: u64, buf: &mut [u8]) -> Result<(), Self::Error> {
+        Self::read(self, sector, buf)
+    }
+    fn write(&mut self, sector: u64, buf: &[u8]) -> Result<(), Self::Error> {
+        Self::write(self, sector, buf)
+    }
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        Self::flush(self)
+    }
+}
+
+/// The same test on a PC's NVMe disk. It overwrites a sector, so it refuses any disk but
+/// the one xtask makes for it, by serial number, before it reads or writes anything.
+#[cfg(feature = "board-pc")]
+fn disk_test(fb: Framebuffer) {
+    let mut disk = match Board::find_nvme() {
+        Ok(Some(disk)) => disk,
+        Ok(None) => return println!("FAIL: no NVMe disk"),
+        Err(e) => return println!("FAIL: {e}"),
+    };
+    let sectors = disk.capacity();
+    let serial = core::str::from_utf8(disk.serial()).unwrap_or("?");
+    println!("nvme: {sectors} blocks of {} bytes, serial {serial:?}", disk.block_size());
+    if disk.serial() != DISK_ID {
+        return println!("FAIL: not the test disk, so it was left alone");
+    }
+    if disk.block_size() != SECTOR_SIZE {
+        return println!("FAIL: the test expects {SECTOR_SIZE}-byte blocks");
+    }
+    if let Err(e) = check_disk(&mut disk) {
+        return println!("FAIL: {e}");
+    }
+    Screen::new(fb).finish(sectors as usize); // green, with the sector count
+    println!("PASS: read {sectors} sectors over NVMe, and wrote one back");
+}
+
+fn check_disk<D: Disk>(disk: &mut D) -> Result<(), String> {
     use alloc::format;
     let sectors = disk.capacity();
     if sectors < SCRATCH + 2 || !sectors.is_multiple_of(CHUNK as u64) {
@@ -282,10 +350,10 @@ fn check_disk(disk: &mut Blk<impl Transport>) -> Result<(), String> {
     }
 
     // The driver refuses what the device would.
-    if disk.read(sectors - 1, &mut buf) != Err(blk::Error::OutOfRange) {
+    if disk.read(sectors - 1, &mut buf) != Err(D::OUT_OF_RANGE) {
         return Err("a read past the end didn't fail".into());
     }
-    if disk.read(0, &mut buf[..100]) != Err(blk::Error::Unaligned) {
+    if disk.read(0, &mut buf[..100]) != Err(D::UNALIGNED) {
         return Err("a read of part of a sector didn't fail".into());
     }
 
