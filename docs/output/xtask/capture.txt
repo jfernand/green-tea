@@ -1,0 +1,2 @@
+20483 records from green-tea-shell on riscv64 written to shell.gtt
+the serial log is in shell.gtt.log

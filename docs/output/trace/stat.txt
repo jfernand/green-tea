@@ -1,0 +1,6 @@
+shell.gtt: the text form, 277801 bytes; 20483 records: 10316 allocated, 10167 freed, 0 reallocated
+the trace: 20483 events, 10316 allocations of 656120 bytes in all, 10167 frees
+sizes: 167 different ones, from 4 to 6144 bytes; the most common: 64 (22.6%) 128 (12.1%) 8 (6.3%) 16 (5.5%) 32 (4.9%) 5 (3.5%)
+lifetimes: 85.1% of the blocks are freed before 8 more are allocated, 88.0% before 64 more; 149 are never freed
+reallocations: 0, of which 0 left the block where it was; 0 allocations of no bytes; 0 of 4 GiB or more
+live bytes: 14902 at the peak; 0 frees are of blocks the trace never allocated; 0 allocations are at an address that is still allocated

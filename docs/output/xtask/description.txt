@@ -1,0 +1,1 @@
+description = "Project automation: cargo xtask test runs green-tea-v2 across targets."

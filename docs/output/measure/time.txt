@@ -1,0 +1,22 @@
+shell: 20483 events, 10316 allocations of 656120 bytes in all, 14902 bytes live at the peak; checksum f137558e1fe4dcb2
+20 passes with the clock read around every event, and 20 with it read around the pass; one pass made first and thrown away
+the machine's load average when this began: 2.90 2.93 4.21
+reading the clock twice with nothing between: median 19 ns, 99% 24 ns, 99.9% 28 ns, most 2933 ns
+nanoseconds for each event:
+  allocator       mean  median     90%     99%   99.9%        most    whole pass: least  median    most  pages mapped
+  bump            21.1      21      25      33      41       14311                 3.66    3.68    4.02             0
+  first-lifo      30.2      28      42      63     127        3449                12.26   12.74   14.46             0
+  first-addr      43.4      39      69     108     146        7767                26.07   26.51   27.38             0
+  next-lifo       30.0      30      40      52      75        4516                 9.47   10.05   11.53             0
+  next-addr       67.1      38     148     209     238       70186                46.50   48.07   51.80             0
+  best-lifo       42.8      32      79     129     179       60816                25.82   26.83   28.00             0
+  best-addr       45.8      39      77     127     210        4607                32.79   34.33   35.44             0
+  buddy           28.2      24      40      55      73        6298                10.78   11.06   12.90             0
+  tlsf            34.6      32      49      62      72        4406                16.20   16.79   18.75             0
+  hardened       234.1     147     476     613     742        6829               223.46  235.66  246.50             0
+  pools           24.2      22      32      39      47        3060                 7.83    7.93    9.09             0
+  slabs           59.5      38     132     182     220        4185                41.21   41.45   43.87             0
+  caches          24.3      21      31      43     222        3824                 7.92    8.06    9.11             0
+  shards          32.0      30      41      52      65        5749                10.81   11.03   12.04             0
+the machine's load average when this ended: 2.90 2.93 4.21
+PASS: no page was mapped during a timed pass

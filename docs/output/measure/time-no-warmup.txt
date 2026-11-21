@@ -1,0 +1,9 @@
+shell: 20483 events, 10316 allocations of 656120 bytes in all, 14902 bytes live at the peak; checksum f137558e1fe4dcb2
+20 passes with the clock read around every event, and 20 with it read around the pass; no pass thrown away first
+the machine's load average when this began: 2.90 2.93 4.21
+reading the clock twice with nothing between: median 24 ns, 99% 26 ns, 99.9% 27 ns, most 11133 ns
+nanoseconds for each event:
+  allocator       mean  median     90%     99%   99.9%        most    whole pass: least  median    most  pages mapped
+  shards          26.0      24      33      43      61       86872                 8.58    8.87   10.42           414
+the machine's load average when this ended: 2.90 2.93 4.21
+FAIL: 414 pages were mapped during timed passes: those passes timed the operating system too

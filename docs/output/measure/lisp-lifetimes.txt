@@ -1,0 +1,16 @@
+five programs, each run once on a heap that frees nothing and finds, before every allocation,
+what the root stack no longer reaches:
+  program  allocated     died  reachable at the end  peak words  peak bytes
+  list          8190     8093                    97         614        4912
+  fib           2002     1970                    32         134        1072
+  alist        14309    14126                   183         766        6128
+  ring          9130     9016                   114         396        3168
+  closure       2877     2807                    70         237        1896
+the same programs with each object in a block from an allocator, freed when it died:
+  program  footprint in bytes: first-addr  best-addr       tlsf      buddy      pools     shards
+  list                               9600       9600       9600       6848       6400      16384
+  fib                                1872       1872       1872       1856       1248      16384
+  alist                             11328      11328      11328       9856       7552      16384
+  ring                               6048       6048       6048       4608       4032      16384
+  closure                            3600       3600       3600       2816       2400      16384
+PASS: every program computed its value on every allocator, with the footprint its lifetimes replay to

@@ -1,0 +1,29 @@
+=== build green-tea-coop riscv64 debug
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.01s
+[pool-riscv64   ] green-tea-coop on riscv64
+[pool-riscv64   ] fw_cfg files:
+[pool-riscv64   ]   0x0020      0 bios-geometry
+[pool-riscv64   ]   0x0021      0 bootorder
+[pool-riscv64   ]   0x0022     36 etc/acpi/rsdp
+[pool-riscv64   ]   0x0023 131072 etc/acpi/tables
+[pool-riscv64   ]   0x0024      4 etc/boot-fail-wait
+[pool-riscv64   ]   0x0025     28 etc/ramfb
+[pool-riscv64   ]   0x0026   1792 etc/table-loader
+[pool-riscv64   ]   0x0027      4 opt/green-tea/test
+[pool-riscv64   ]   0x0028  28672 vgaroms/vgabios-ramfb.bin
+[pool-riscv64   ] ramfb: 640x480 XRGB8888
+[pool-riscv64   ] a pool of 8 slots:        bitmap                     free list
+[pool-riscv64   ]   taken from new:          [0, 1, 2, 3, 4, 5, 6, 7]   [0, 1, 2, 3, 4, 5, 6, 7]
+[pool-riscv64   ]   a ninth take refused:    true                       true
+[pool-riscv64   ]   after giving 2, 5, 0:    [0, 2, 5]                  [0, 5, 2]
+[pool-riscv64   ]   7 given back twice:      Err(NotTaken)              Ok(())
+[pool-riscv64   ]   the next two takes:      [Some(7), None]            [Some(7), Some(7)]
+[pool-riscv64   ]   after a write to a free slot, hands out a block outside the pool:
+[pool-riscv64   ]                            false                      true
+[pool-riscv64   ] 1000 tasks, one after another: their locals were at 0x80a09eef..=0x80a09eef; the pool has 102 of 102 stacks free, as before; each task cost 0 bytes of heap
+[pool-riscv64   ] PASS: 1000 tasks ran on one stack; the bitmap caught a double give, the free list didn't
+[pool-riscv64   ] halting
+
+=== summary
+ok    pool-riscv64    1000 tasks ran on one stack; the bitmap caught a double give, the free list didn't
+serial logs: <work>/target/kernel

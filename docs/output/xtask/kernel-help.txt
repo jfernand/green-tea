@@ -1,0 +1,93 @@
+usage: cargo xtask kernel [--kernel <name>]... [--target riscv64|aarch64|x86_64]...
+                          [--release] [--headless] [--screenshot] [--jobs <n>]
+
+Builds the bare-metal kernels and boots each in QEMU on every architecture it supports,
+one window apiece, all at once. Close the windows to finish. The kernels' serial output
+is echoed here, and the run passes when every kernel reports PASS.
+
+--headless runs them without windows, using at most half of this machine's CPUs. --jobs
+sets how many virtual CPUs may run at once, with or without windows; a kernel with four
+counts as four.
+
+  coop      green-tea-coop: tasks yield to each other (riscv64, aarch64, x86_64)
+  preempt   green-tea-preempt: a timer interrupt preempts tasks that never yield, and one
+            that sleeps between steps (riscv64, aarch64, x86_64)
+  overflow  green-tea-coop's test that a task overflowing its stack hits its guard page
+            (riscv64, x86_64: the boards that page)
+  disk      green-tea-coop's test of the virtio-blk driver: reads back a disk image made
+            for it, and writes a sector (virtio-mmio on riscv64 and aarch64, virtio-pci
+            on x86_64)
+  memmap    green-tea-coop's test of its own memory map: prints where the linker put each
+            section, and checks their order, alignment and size (riscv64, aarch64, x86_64)
+  pool      green-tea-coop's test of pools: a bitmap and a free list given the same takes
+            and gives, and a thousand tasks run on one reused stack (riscv64, aarch64,
+            x86_64)
+  fit       green-tea-coop's test of green-tea-fit, the allocator behind the kernel's heap:
+            freed blocks merge, first fit, next fit and best fit choose differently, and a
+            thousand tasks leave the heap as they found it (riscv64, aarch64, x86_64)
+  frag      green-tea-coop's fragmentation test: a program written to fragment its
+            allocator makes every policy need several times what it holds, and a random
+            workload is replayed against each (riscv64, aarch64, x86_64)
+  tlsf      green-tea-coop's test of the allocators that don't search: a buddy system and
+            TLSF, which is the kernel's heap, against first fit and best fit on the same
+            requests, and on a heap built to make a search long (riscv64, aarch64, x86_64)
+  slab      green-tea-coop's test of the kernel's own allocators: page frames from a buddy
+            system, a slab cache of constructed objects on top, and the cache its tasks'
+            records come from (riscv64, aarch64, x86_64)
+  pages     green-tea-coop's test of demand paging: the heap's pages are mapped as they are
+            touched, a megabyte is reserved, written, freed and given back, and small
+            blocks pin the pages they are on (riscv64, x86_64: the boards that page)
+  smp       green-tea-coop's test of allocation from several CPUs: starts the machine's
+            other three, and has all four use the kernel's heap at once, behind its lock,
+            and then a heap with a cache for each CPU in front of it (riscv64, aarch64,
+            x86_64)
+  lisp      green-tea-coop's test of green-tea-lisp: a small Lisp on a heap that counts
+            references, with every allocation, free and count operation counted, a list
+            freed three ways, and cycles leaked and collected (riscv64, aarch64, x86_64)
+  shard     green-tea-coop's test of allocation without a lock: four CPUs allocate through
+            a heap of pages each, where every page has its own free list and a second
+            list that other CPUs push to, against the caches of the smp test on the same
+            work (riscv64, aarch64, x86_64)
+  gc        green-tea-coop's test of the heaps that trace: the same Lisp on a heap that
+            marks and sweeps, one that marks and compacts and one that copies, with every
+            collection counted, and the smallest heap each program runs in (riscv64,
+            aarch64, x86_64)
+  smr       green-tea-coop's test of safe memory reclamation: a lock-free stack and queue
+            with their nodes on the heap, a pop interrupted where freeing a node at once
+            corrupts the stack, and four CPUs sharing both with epochs and with hazard
+            pointers (riscv64, aarch64, x86_64)
+  gen       green-tea-coop's test of a heap with two generations: the same Lisp with a
+            nursery in front of an old space, a write barrier and a remembered set, with
+            what dies in the nursery and what the barrier records counted (riscv64,
+            aarch64, x86_64)
+  incremental  green-tea-coop's test of a heap that marks and sweeps in steps between the
+            steps of the same Lisp: an object freed in use without a write barrier and
+            kept by either of two, the longest step against a whole cycle, and steps
+            paced by a timer interrupt (riscv64, aarch64, x86_64)
+  shell     green-tea-shell: types two commands at the shell on the serial console; the
+            second is its `test`, which checks that commands free what they allocate,
+            from the heap or from an arena
+            (riscv64, aarch64, x86_64). To type at it yourself: cargo xtask shell
+  trace     green-tea-shell again: records the heap while the shell runs a script of
+            commands, and replays the recording against each policy (riscv64, aarch64,
+            x86_64)
+  safety    green-tea-coop's heap-safety test: a task writes to a freed block and another
+            is handed memory that isn't free; then the allocator hardened one defence at a
+            time, and what each catches and costs (riscv64, aarch64, x86_64)
+  harden    green-tea-shell once more: the recorded trace replayed against the hardened
+            allocator, one defence more each time (riscv64, aarch64, x86_64)
+  region    green-tea-shell again: runs the same script with its commands' memory in a
+            region and its variables in another, and compares what each way asks of the
+            heap (riscv64, aarch64, x86_64)
+  gtt       green-tea-shell again: records the same script, writes the recording as a
+            trace file in both forms, and reads it back (riscv64, aarch64, x86_64). To get
+            the file out of QEMU: cargo xtask trace
+  resident  green-tea-shell again: records the same script, and replays the recording in a
+            region with no page mapped, counting the pages each allocator touches
+            (riscv64, x86_64: the boards that page)
+
+  --kernel      only these kernels (default: all)
+  --target      only these architectures (default: all three)
+  --release     build with optimizations
+  --headless    no windows: quit each QEMU as soon as its kernel finishes
+  --screenshot  save the final screen to target/kernel/<kernel>-<arch>.png

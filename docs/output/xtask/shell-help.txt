@@ -1,0 +1,4 @@
+usage: cargo xtask shell [--target riscv64|aarch64|x86_64] [--release]
+
+Builds green-tea-shell and boots it in QEMU with its serial console on this terminal, so
+you can type at it. `halt` stops the kernel; ctrl-a x leaves QEMU.

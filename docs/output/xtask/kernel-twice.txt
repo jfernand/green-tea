@@ -1,0 +1,2 @@
+ok    pool-riscv64    1000 tasks ran on one stack; the bitmap caught a double give, the free list didn't
+ok    pool-riscv64    1000 tasks ran on one stack; the bitmap caught a double give, the free list didn't

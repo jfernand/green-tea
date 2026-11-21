@@ -1,0 +1,4 @@
+
+thread 'main' (750002) panicked at green-tea-fit/src/buddy.rs:52:9:
+a region too large for the table
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

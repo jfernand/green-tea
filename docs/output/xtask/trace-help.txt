@@ -1,0 +1,10 @@
+usage: cargo xtask trace [--target riscv64|aarch64|x86_64] [--release] [--out <file>] [--type <command>]...
+
+Boots green-tea-shell in QEMU without a window and types at it: `trace on`, the commands
+to record, `trace off`, `replay`, `trace dump`, `halt`. Saves the trace the shell dumps on
+its serial console to <file>, in the text form, and the whole serial log to <file>.log.
+
+  --target   the architecture (default: riscv64)
+  --release  build with optimizations
+  --out      where to write the trace (default: target/kernel/shell-<arch>.gtt)
+  --type     a command to record, in place of `session`; may be given several times

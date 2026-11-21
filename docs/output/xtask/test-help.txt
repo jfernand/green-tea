@@ -1,0 +1,2 @@
+error: --help needs a value
+exit status 1

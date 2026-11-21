@@ -1,0 +1,23 @@
+the trace: 20483 events, 10316 allocations of 656120 bytes in all, 10167 frees
+sizes: 167 different ones, from 4 to 6144 bytes; the most common: 64 (22.6%) 128 (12.1%) 8 (6.3%) 16 (5.5%) 32 (4.9%) 5 (3.5%)
+lifetimes: 85.1% of the blocks are freed before 8 more are allocated, 88.0% before 64 more; 149 are never freed
+replayed as recorded, each in a region of 512 KiB:
+  policy     order     peak live  peak used  footprint  over live then  over peak live  over peak used
+  first fit  LIFO          14902      20624      83968          468.8%          463.5%          307.1%
+  first fit  address       14902      21008      21456           44.6%           44.0%            2.1%
+  next fit   LIFO          14902      20400     156608          962.1%          950.9%          667.7%
+  next fit   address       14902      20384     131664          812.1%          783.5%          545.9%
+  best fit   LIFO          14902      20992      21408           44.6%           43.7%            2.0%
+  best fit   address       14902      20992      21408           44.6%           43.7%            2.0%
+as recorded, against the allocators that don't search:
+  allocator            peak live  peak used  footprint  over live then  over peak live  over peak used
+  buddy system             14902      27744      28160           91.2%           89.0%            1.5%
+  TLSF                     14902      20992      21280           44.5%           42.8%            1.4%
+the same sizes and the same lifetimes, dealt out at random:
+  policy     order     peak live  peak used  footprint  over live then  over peak live  over peak used
+  first fit  LIFO          18528      23040      45984          148.9%          148.2%           99.6%
+  first fit  address       18528      23520      25216           36.5%           36.1%            7.2%
+  next fit   LIFO          18528      23088      52688          324.4%          184.4%          128.2%
+  next fit   address       18528      23248      41520          234.4%          124.1%           78.6%
+  best fit   LIFO          18528      23456      24800           34.2%           33.9%            5.7%
+  best fit   address       18528      23344      24784           34.1%           33.8%            6.2%

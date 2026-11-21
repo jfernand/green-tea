@@ -1,0 +1,9 @@
+shell: 20483 events, 10316 allocations of 656120 bytes in all, 14902 bytes live at the peak; checksum f137558e1fe4dcb2
+30 runs of each of two allocators, in turn; a run is one pass, after one thrown away
+the machine's load average when this began: 3.08 2.97 4.21
+nanoseconds for each event, over a whole pass:
+  allocator     least  median    most   most over least
+  tlsf         15.71   16.12   20.49               1.30
+  first-addr   20.55   21.32   24.08               1.17
+of the 900 pairs of one run of each, tlsf was the faster in 900, 100.0%
+the machine's load average when this ended: 3.08 2.97 4.21

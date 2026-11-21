@@ -1,0 +1,17 @@
+shell: 20483 events, 10316 allocations of 656120 bytes in all, 14902 bytes live at the peak; checksum f137558e1fe4dcb2
+each allocator in regions of 512 KiB:
+  allocator    peak used  footprint  over peak live  over peak used  blocks searched  per event  most
+  bump                 -     663752         4354.1%               -
+  first-lifo       20624      83968          463.5%          307.1%            16542       0.81    52
+  first-addr       21008      21456           44.0%            2.1%            66965       3.27    49
+  next-lifo        20400     156608          950.9%          667.7%            10883       0.53     8
+  next-addr        20384     131664          783.5%          545.9%           484878      23.67   143
+  best-lifo        20992      21408           43.7%            2.0%            51785       2.53    34
+  best-addr        20992      21408           43.7%            2.0%            90446       4.42    43
+  buddy            27744      28160           89.0%            1.5%            13288       0.65    13
+  tlsf             20992      21280           42.8%            1.4%            10316       0.50     1
+  hardened         22320      30160          102.4%           35.1%           474570      23.17    79
+  pools                -      24176           62.2%               -
+  slabs                -      57344          284.8%               -
+  caches           36032      36032          141.8%            0.0%
+  shards               -     174640         1071.9%               -

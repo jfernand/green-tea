@@ -1,0 +1,18 @@
+one: 1 events, 1 allocations of 16 bytes in all, 16 bytes live at the peak; checksum 658740d06042d0bc
+instructions in the replay loop, counted by callgrind; with no allocator the loop is 87, 87.00 for each event
+  allocator    instructions  less the loop's  per event
+  bump                  107               20      20.00
+  first-lifo            275              188     188.00
+  first-addr            275              188     188.00
+  next-lifo             283              196     196.00
+  next-addr             283              196     196.00
+  best-lifo             296              209     209.00
+  best-addr             296              209     209.00
+  buddy                 712              625     625.00
+  tlsf                 4319             4232    4232.00
+  hardened              512              425     425.00
+  pools                5149             5062    5062.00
+  slabs               28162            28075   28075.00
+  caches               6414             6327    6327.00
+  shards              18130            18043   18043.00
+PASS: the loop with no allocator was counted twice, and was 87 instructions both times

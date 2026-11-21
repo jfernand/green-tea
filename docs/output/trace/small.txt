@@ -1,0 +1,7 @@
+the trace: 20483 events, 10316 allocations of 656120 bytes in all, 10167 frees
+sizes: 167 different ones, from 4 to 6144 bytes; the most common: 64 (22.6%) 128 (12.1%) 8 (6.3%) 16 (5.5%) 32 (4.9%) 5 (3.5%)
+lifetimes: 85.1% of the blocks are freed before 8 more are allocated, 88.0% before 64 more; 149 are never freed
+replayed as recorded, each in a region of 1 KiB:
+  policy     order     peak live  peak used  footprint  over live then  over peak live  over peak used
+  first fit  LIFO            609       1008       1008          159.8%           65.5%            0.0%
+error: a trace didn't fit in the region it was replayed in: give it a larger one with --region-kib

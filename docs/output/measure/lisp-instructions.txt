@@ -1,0 +1,235 @@
+instructions from a program's text to its value, counted by callgrind
+explicit: each object in a block from the allocator named, freed when an earlier run found it dead;
+  its floor is the same blocks from a pointer that moves, with nothing freed;
+  bump is that pointer again with the oracle asked, and frees that do nothing: what asking costs
+garbage-collected: a heap of green-tea-lisp, in a multiple of the bytes the pools needed;
+  its floor is the same heap in 4194304 words, where it never collects
+  (the counting heap has no floor of its own, and is set against the mark-sweep heap's)
+list: 8190 objects; freed explicitly, the pools need 6400 bytes, 800 words
+  explicit        footprint, words  instructions  over the floor  for each object
+  nothing freed                  -      14152095
+  bump                       30660      14407933          255838            31.24
+  pools                        800      14986537          834442           101.89
+  shards                      2048      15494690         1342595           163.93
+  first-addr                  1200      15801025         1648930           201.33
+  tlsf                        1200      16374147         2222052           271.31
+  heap          multiple   words  collections  instructions  over its floor  for each object
+  mark-sweep       never 4194304            0      31985637
+  mark-sweep         1.0     800   the program doesn't fit
+  mark-sweep         1.2     960   the program doesn't fit
+  mark-sweep         1.5    1200   the program doesn't fit
+  mark-sweep         2.0    1600           46      33562097         1576460           192.49
+  mark-sweep         3.0    2400           16      32705243          719606            87.86
+  mark-sweep         4.0    3200           12      32624953          639316            78.06
+  mark-sweep         5.0    4000            9      32577798          592161            72.30
+  mark-sweep         8.0    6400            5      32468410          482773            58.95
+  mark-compact     never 4194304            0      31985636
+  mark-compact       1.0     800          118      36855964         4870328           594.67
+  mark-compact       1.2     960           70      35033014         3047378           372.09
+  mark-compact       1.5    1200           44      34080141         2094505           255.74
+  mark-compact       2.0    1600           27      33457737         1472101           179.74
+  mark-compact       3.0    2400           16      33075529         1089893           133.08
+  mark-compact       4.0    3200           11      32868630          882994           107.81
+  mark-compact       5.0    4000            8      32775208          789572            96.41
+  mark-compact       8.0    6400            4      32530627          544991            66.54
+  copying          never 4194304            0      32310745
+  copying            1.0     800   the program doesn't fit
+  copying            1.2     960   the program doesn't fit
+  copying            1.5    1200   the program doesn't fit
+  copying            2.0    1600          118      34822396         2511651           306.67
+  copying            3.0    2400           44      33228663          917918           112.08
+  copying            4.0    3200           27      32883059          572314            69.88
+  copying            5.0    4000           19      32699473          388728            47.46
+  copying            8.0    6400           11      32560304          249559            30.47
+  counting           1.0     800   the program doesn't fit
+  counting           1.2     960   the program doesn't fit
+  counting           1.5    1200   the program doesn't fit
+  counting           2.0    1600            -      51799612        19813975          2419.29
+  counting           3.0    2400            -      50869413        18883776          2305.71
+  counting           4.0    3200            -      50430521        18444884          2252.12
+  counting           5.0    4000            -      50313156        18327519          2237.79
+  counting           8.0    6400            -      50001900        18016263          2199.79
+fib: 2002 objects; freed explicitly, the pools need 1248 bytes, 156 words
+  explicit        footprint, words  instructions  over the floor  for each object
+  nothing freed                  -       6528674
+  bump                        7981       6592671           63997            31.97
+  pools                        156       6733771          205097           102.45
+  shards                      2048       6860853          332179           165.92
+  first-addr                   234       6938445          409771           204.68
+  tlsf                         234       7220164          691490           345.40
+  heap          multiple   words  collections  instructions  over its floor  for each object
+  mark-sweep       never 4194304            0      13329484
+  mark-sweep         1.0     156          301      15099035         1769551           883.89
+  mark-sweep         1.2     187          136      14181772          852288           425.72
+  mark-sweep         1.5     234           74      13834543          505059           252.28
+  mark-sweep         2.0     312           43      13658974          329490           164.58
+  mark-sweep         3.0     468           23      13549408          219924           109.85
+  mark-sweep         4.0     624           15      13502294          172810            86.32
+  mark-sweep         5.0     780           12      13490813          161329            80.58
+  mark-sweep         8.0    1248            7      13466299          136815            68.34
+  mark-compact     never 4194304            0      13329483
+  mark-compact       1.0     156          193      15133727         1804244           901.22
+  mark-compact       1.2     187          107      14382438         1052955           525.95
+  mark-compact       1.5     234           63      13987596          658113           328.73
+  mark-compact       2.0     312           39      13788346          458863           229.20
+  mark-compact       3.0     468           22      13640940          311457           155.57
+  mark-compact       4.0     624           15      13580042          250559           125.15
+  mark-compact       5.0     780           11      13542265          212782           106.28
+  mark-compact       8.0    1248            6      13495939          166456            83.14
+  copying          never 4194304            0      13481003
+  copying            1.0     156   the program doesn't fit
+  copying            1.2     187   the program doesn't fit
+  copying            1.5     234   the program doesn't fit
+  copying            2.0     312          193      14400017          919014           459.05
+  copying            3.0     468           63      13777617          296614           148.16
+  copying            4.0     624           39      13668770          187767            93.79
+  copying            5.0     780           28      13620489          139486            69.67
+  copying            8.0    1248           15      13559994           78991            39.46
+  counting           1.0     156            -      22740949         9411465          4701.03
+  counting           1.2     187            -      22049255         8719771          4355.53
+  counting           1.5     234            -      21729129         8399645          4195.63
+  counting           2.0     312            -      21471371         8141887          4066.88
+  counting           3.0     468            -      21310015         7980531          3986.28
+  counting           4.0     624            -      21251076         7921592          3956.84
+  counting           5.0     780            -      21214081         7884597          3938.36
+  counting           8.0    1248            -      21168629         7839145          3915.66
+alist: 14309 objects; freed explicitly, the pools need 7552 bytes, 944 words
+  explicit        footprint, words  instructions  over the floor  for each object
+  nothing freed                  -      31146040
+  bump                       54735      31591130          445090            31.11
+  pools                        944      32601056         1455016           101.69
+  shards                      2048      33485541         2339501           163.50
+  first-addr                  1416      34123655         2977615           208.09
+  tlsf                        1416      34923823         3777783           264.01
+  heap          multiple   words  collections  instructions  over its floor  for each object
+  mark-sweep       never 4194304            0      72731911
+  mark-sweep         1.0     944   the program doesn't fit
+  mark-sweep         1.2    1132   the program doesn't fit
+  mark-sweep         1.5    1416   the program doesn't fit
+  mark-sweep         2.0    1888           77      75863151         3131240           218.83
+  mark-sweep         3.0    2832           30      74298220         1566309           109.46
+  mark-sweep         4.0    3776           21      74058554         1326643            92.71
+  mark-sweep         5.0    4720           14      73806359         1074448            75.09
+  mark-sweep         8.0    7552            8      73655845          923934            64.57
+  mark-compact     never 4194304            0      72731910
+  mark-compact       1.0     944          157      79978181         7246271           506.41
+  mark-compact       1.2    1132          109      78346340         5614430           392.37
+  mark-compact       1.5    1416           68      76493822         3761912           262.91
+  mark-compact       2.0    1888           42      75353348         2621438           183.20
+  mark-compact       3.0    2832           24      74630751         1898841           132.70
+  mark-compact       4.0    3776           17      74369841         1637931           114.47
+  mark-compact       5.0    4720           13      74165265         1433355           100.17
+  mark-compact       8.0    7552            7      73871633         1139723            79.65
+  copying          never 4194304            0      73421005
+  copying            1.0     944   the program doesn't fit
+  copying            1.2    1132   the program doesn't fit
+  copying            1.5    1416   the program doesn't fit
+  copying            2.0    1888          157      77084080         3663075           256.00
+  copying            3.0    2832           68      75084236         1663231           116.24
+  copying            4.0    3776           42      74442362         1021357            71.38
+  copying            5.0    4720           31      74213666          792661            55.40
+  copying            8.0    7552           17      73902589          481584            33.66
+  counting           1.0     944   the program doesn't fit
+  counting           1.2    1132   the program doesn't fit
+  counting           1.5    1416   the program doesn't fit
+  counting           2.0    1888            -     115596580        42864669          2995.64
+  counting           3.0    2832            -     112408972        39677061          2772.87
+  counting           4.0    3776            -     111942717        39210806          2740.29
+  counting           5.0    4720            -     111622220        38890309          2717.89
+  counting           8.0    7552            -     111295223        38563312          2695.04
+ring: 9130 objects; freed explicitly, the pools need 4032 bytes, 504 words
+  explicit        footprint, words  instructions  over the floor  for each object
+  nothing freed                  -      17934271
+  bump                       35602      18219341          285070            31.22
+  pools                        504      18863593          929322           101.79
+  shards                      2048      19429769         1495498           163.80
+  first-addr                   756      19773698         1839427           201.47
+  tlsf                         756      20446154         2511883           275.12
+  heap          multiple   words  collections  instructions  over its floor  for each object
+  mark-sweep       never 4194304            0      41884407
+  mark-sweep         1.0     504          549      51275699         9391292          1028.62
+  mark-sweep         1.2     604          199      45457152         3572745           391.32
+  mark-sweep         1.5     756           99      43774772         1890365           207.05
+  mark-sweep         2.0    1008           59      43228709         1344302           147.24
+  mark-sweep         3.0    1512           32      42812984          928577           101.71
+  mark-sweep         4.0    2016           22      42655961          771554            84.51
+  mark-sweep         5.0    2520           16      42536933          652526            71.47
+  mark-sweep         8.0    4032            9      42435755          551348            60.39
+  mark-compact     never 4194304            0      41884406
+  mark-compact       1.0     504          300      50157390         8272984           906.13
+  mark-compact       1.2     604          160      46539318         4654912           509.85
+  mark-compact       1.5     756           95      44897056         3012650           329.97
+  mark-compact       2.0    1008           56      43865233         1980827           216.96
+  mark-compact       3.0    1512           31      43239059         1354653           148.37
+  mark-compact       4.0    2016           21      42974092         1089686           119.35
+  mark-compact       5.0    2520           16      42851869          967463           105.97
+  mark-compact       8.0    4032            9      42667482          783076            85.77
+  copying          never 4194304            0      42293075
+  copying            1.0     504   the program doesn't fit
+  copying            1.2     604   the program doesn't fit
+  copying            1.5     756   the program doesn't fit
+  copying            2.0    1008          300      46792322         4499247           492.80
+  copying            3.0    1512           95      43727311         1434236           157.09
+  copying            4.0    2016           56      43131946          838871            91.88
+  copying            5.0    2520           40      42902160          609085            66.71
+  copying            8.0    4032           21      42632622          339547            37.19
+  counting           1.0     504            -      69015518        27131111          2971.64
+  counting           1.2     604            -      67965676        26081269          2856.66
+  counting           1.5     756            -      66173402        24288995          2660.35
+  counting           2.0    1008            -      65273080        23388673          2561.74
+  counting           3.0    1512            -      64330274        22445867          2458.47
+  counting           4.0    2016            -      64122267        22237860          2435.69
+  counting           5.0    2520            -      63941951        22057544          2415.94
+  counting           8.0    4032            -      63742409        21858002          2394.09
+closure: 2877 objects; freed explicitly, the pools need 2400 bytes, 300 words
+  explicit        footprint, words  instructions  over the floor  for each object
+  nothing freed                  -       6197174
+  bump                       11337       6287186           90012            31.29
+  pools                        300       6489100          291926           101.47
+  shards                      2048       6668792          471618           163.93
+  first-addr                   450       6779357          582183           202.36
+  tlsf                         450       7074655          877481           305.00
+  heap          multiple   words  collections  instructions  over its floor  for each object
+  mark-sweep       never 4194304            0      13536261
+  mark-sweep         1.0     300          233      15935841         2399580           834.06
+  mark-sweep         1.2     360           99      14619343         1083082           376.46
+  mark-sweep         1.5     450           57      14225336          689075           239.51
+  mark-sweep         2.0     600           32      13980226          443965           154.32
+  mark-sweep         3.0     900           17      13834023          297762           103.50
+  mark-sweep         4.0    1200           11      13773091          236830            82.32
+  mark-sweep         5.0    1500            8      13740095          203834            70.85
+  mark-sweep         8.0    2400            5      13726041          189780            65.96
+  mark-compact     never 4194304            0      13536260
+  mark-compact       1.0     300          150      16014227         2477967           861.30
+  mark-compact       1.2     360           84      15016502         1480242           514.51
+  mark-compact       1.5     450           50      14484853          948593           329.72
+  mark-compact       2.0     600           30      14183080          646820           224.82
+  mark-compact       3.0     900           16      13961475          425215           147.80
+  mark-compact       4.0    1200           11      13882511          346251           120.35
+  mark-compact       5.0    1500            8      13830649          294389           102.32
+  mark-compact       8.0    2400            5      13801831          265571            92.31
+  copying          never 4194304            0      13680704
+  copying            1.0     300   the program doesn't fit
+  copying            1.2     360   the program doesn't fit
+  copying            1.5     450   the program doesn't fit
+  copying            2.0     600          150      15019236         1338532           465.25
+  copying            3.0     900           50      14134880          454176           157.86
+  copying            4.0    1200           30      13961100          280396            97.46
+  copying            5.0    1500           21      13883197          202493            70.38
+  copying            8.0    2400           11      13798183          117479            40.83
+  counting           1.0     300            -      23064730         9528469          3311.95
+  counting           1.2     360            -      22377896         8841635          3073.21
+  counting           1.5     450            -      21853726         8317465          2891.02
+  counting           2.0     600            -      21485474         7949213          2763.02
+  counting           3.0     900            -      21287102         7750841          2694.07
+  counting           4.0    1200            -      21211845         7675584          2667.91
+  counting           5.0    1500            -      21157413         7621152          2648.99
+  counting           8.0    2400            -      21112618         7576357          2633.42
+the five programs together, 36508 objects: instructions over the floor for each object allocated
+  explicit:  bump 31.23  pools 101.78  shards 163.84  first-addr 204.28  tlsf 276.12
+  heap, in a multiple of the pools' bytes:       1.0       1.2       1.5       2.0       3.0       4.0       5.0       8.0
+  mark-sweep                               3 of 5 fit 3 of 5 fit 3 of 5 fit    186.96    102.23     86.20     73.53     62.58
+  mark-compact                                675.79    434.15    286.94    196.67    139.15    115.25    101.28     79.43
+  copying                                  0 of 5 fit 0 of 5 fit 0 of 5 fit    354.21    130.55     79.45     58.41     34.71
+  counting                                 3 of 5 fit 3 of 5 fit 3 of 5 fit   2798.25   2649.78   2615.61   2596.17   2570.75
+PASS: every program's explicit floor was counted twice, and was the same both times

@@ -1,0 +1,4 @@
+fib: 610; 2002 allocated, 0 freed, footprint 63848 bytes
+fib: 610; 2002 allocated, 1970 freed, footprint 1872 bytes
+fib on mark-sweep in 2000 words: 610; 4 collections traced 142 objects, walked 2024 and moved 0 words
+fib on counting in 2000 words: 610; 80888 count operations
