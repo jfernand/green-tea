@@ -118,7 +118,12 @@ impl<T: Transport> Blk<T> {
     /// Read sectors from `sector` on into `buf`, a whole number of sectors long.
     pub fn read(&mut self, sector: u64, buf: &mut [u8]) -> Result<(), Error> {
         self.check(sector, buf.len())?;
-        self.request(T_IN, sector, Some(Buffer::writes(buf)))
+        let written = self.request(T_IN, sector, Some(Buffer::writes(buf)))?;
+        // The device counts what it wrote: the data, then the status byte.
+        if (written as usize) < buf.len() + 1 {
+            return Err(Error::Device);
+        }
+        Ok(())
     }
 
     /// Write `buf`, a whole number of sectors long, from `sector` on.
@@ -127,7 +132,7 @@ impl<T: Transport> Blk<T> {
             return Err(Error::ReadOnly);
         }
         self.check(sector, buf.len())?;
-        self.request(T_OUT, sector, Some(Buffer::reads(buf)))
+        self.request(T_OUT, sector, Some(Buffer::reads(buf))).map(|_| ())
     }
 
     /// Wait until every write so far is on the disk, not just in its cache.
@@ -135,7 +140,7 @@ impl<T: Transport> Blk<T> {
         if !self.write_cache() {
             return Ok(()); // writes go straight through
         }
-        self.request(T_FLUSH, 0, None)
+        self.request(T_FLUSH, 0, None).map(|_| ())
     }
 
     /// The device's serial number: up to 20 bytes, NUL-padded.
@@ -156,8 +161,9 @@ impl<T: Transport> Blk<T> {
         }
     }
 
-    /// Make one request and spin until the device answers.
-    fn request(&mut self, kind: u32, sector: u64, data: Option<Buffer>) -> Result<(), Error> {
+    /// Make one request and spin until the device answers. Returns how many bytes it says
+    /// it wrote, the status byte included.
+    fn request(&mut self, kind: u32, sector: u64, data: Option<Buffer>) -> Result<u32, Error> {
         let request = self.request;
         unsafe {
             write_volatile(&raw mut (*request).header, Header { kind, reserved: 0, sector });
@@ -171,9 +177,9 @@ impl<T: Transport> Blk<T> {
         }
         .map_err(|_| Error::Device)?;
 
-        let done = loop {
-            if let Some((done, _written)) = self.queue.pop_used() {
-                break done;
+        let (done, written) = loop {
+            if let Some(used) = self.queue.pop_used() {
+                break used;
             }
             core::hint::spin_loop();
         };
@@ -182,7 +188,7 @@ impl<T: Transport> Blk<T> {
             return Err(Error::Device);
         }
         match unsafe { read_volatile(&raw const (*request).status) } {
-            S_OK => Ok(()),
+            S_OK => Ok(written),
             S_IOERR => Err(Error::Io),
             S_UNSUPP => Err(Error::Unsupported),
             _ => Err(Error::Device),
@@ -295,5 +301,20 @@ mod tests {
         assert!(Blk::new(&disk).is_err());
         let expected = STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK | STATUS_FAILED;
         assert_eq!(disk.status.get(), expected);
+    }
+
+    #[test]
+    fn a_short_read_reported_ok_is_an_error() {
+        let disk = FakeDisk { short_by: 1, ..FakeDisk::new() };
+        let mut blk = Blk::new(&disk).unwrap();
+        let mut buf = [0u8; SECTOR_SIZE];
+        assert_eq!(blk.read(0, &mut buf), Err(Error::Device));
+    }
+
+    #[test]
+    fn a_write_needs_only_the_status_byte_back() {
+        let disk = FakeDisk::new();
+        let mut blk = Blk::new(&disk).unwrap();
+        assert_eq!(blk.write(0, &[1; SECTOR_SIZE]), Ok(()));
     }
 }
