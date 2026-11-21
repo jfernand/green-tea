@@ -23,6 +23,7 @@ kernels built on the same context switch:
 | [`green-tea-arch`](green-tea-arch) | The `arch` layer on its own: `Context` and `swap_context` for each architecture. `no_std`, so v2 and the kernels share it. |
 | [`green-tea-pool`](green-tea-pool) | Pools of fixed-size blocks, two ways: a bitmap and an intrusive free list. `no_std`; the kernels' task stacks come from one. |
 | [`green-tea-fit`](green-tea-fit) | An allocator for blocks of any size: a free list searched first-fit, next-fit or best-fit, with boundary tags to merge freed neighbours. `no_std`; the kernels' heap is one. Also replays recorded traces of allocations against each policy, and measures the fragmentation. |
+| [`green-tea-lisp`](green-tea-lisp) | A small Lisp: a reader, an evaluator and a printer, over a heap it reaches only through the ten operations of a trait. The first heap counts references. `no_std`; `--kernel lisp` runs it. |
 | [`drivers/`](drivers) | The device drivers, one crate each, which know their device but not the machine: serial ports (16550, PL011), QEMU's fw_cfg and ramfb, PCI through ECAM, virtio (MMIO and PCI transports, split virtqueues) and virtio-blk. |
 | [`green-tea-bare`](green-tea-bare) | What the kernels share: boot code per board behind the `Platform` and `TimerInterrupt` traits (timers, interrupts, paging, and where each device is), a port of v2's `Task` and scheduler, and a heap. |
 | [`green-tea-coop`](green-tea-coop) | A bare-metal kernel for QEMU on riscv64, aarch64 and x86_64 whose tasks yield to each other, so you can watch the context switches on screen. |
@@ -68,6 +69,7 @@ cargo xtask kernel --kernel memmap    # where the linker put each section
 cargo xtask kernel --kernel pool      # two pools compared, and a thousand tasks on one stack
 cargo xtask kernel --kernel fit       # the heap's allocator: merging, three ways to search, a thousand tasks
 cargo xtask kernel --kernel frag      # fragmentation: an adversary, and a random workload
+cargo xtask kernel --kernel lisp      # a small Lisp on a heap that counts references
 cargo xtask kernel --kernel shell     # the shell's test, typed at its serial console
 cargo xtask kernel --kernel trace     # the shell records its heap, and replays the trace against each policy
 cargo xtask shell                     # the shell, on this terminal (--target to pick a board)
@@ -214,6 +216,30 @@ free. `--kernel trace` has the shell record itself running a script of 1,970 com
 that set, read and unset variables, and then replay the trace against all six
 combinations of policy and list order. It replays it twice more: with the same sizes and
 lifetimes dealt out at random, and with the long-lived blocks in a region of their own.
+
+### A Lisp, and a heap that counts references
+
+[`green-tea-lisp`](green-tea-lisp) is an interpreter for a small Lisp: integers, symbols,
+pairs, `quote`, `if`, `define`, `lambda` with lexical closures and tail calls, and thirteen
+primitives. Its objects live in a heap that the interpreter reaches only through the
+`Heap` trait: a root stack (`push`, `pop`, `root`, `set_root`), `alloc`, which takes an
+object's fields from the root stack, and `field` and `set_field`. The interpreter holds
+indices, never addresses, and keeps everything it needs across an allocation on the root
+stack, so a heap that traces or moves objects can replace the first one, `RcHeap`, which
+counts references. The top of [`green-tea-lisp/src/lib.rs`](green-tea-lisp/src/lib.rs) has
+the interface and its one rule.
+
+`RcHeap` keeps a count in each object's header and frees an object when its count reaches
+zero: by recursion, from a queue threaded through the dead objects, or lazily, a few at
+each later allocation. It can't free a cycle, unless it is built with the cycle collector
+(trial deletion). The programs it is measured with are in
+[`green-tea-lisp/programs`](green-tea-lisp/programs).
+
+`--kernel lisp` runs the five programs and prints what each allocated and freed and how
+many times a count was raised or lowered, frees a list each of the three ways, and runs
+the two programs that make cycles in a heap too small for what they leak. Every number is
+a count, the same on each architecture, but for the bytes of stack the recursion used. The
+crate's own tests run on the host: `cargo test -p green-tea-lisp`.
 
 ### A shell, and an arena
 

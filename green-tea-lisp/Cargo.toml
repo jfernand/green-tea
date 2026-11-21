@@ -1,0 +1,13 @@
+[package]
+name = "green-tea-lisp"
+description = "A small Lisp whose objects live in a heap behind a narrow interface, so that the heap can be reference-counted, traced or copied without the evaluator knowing."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+# no_std (it needs `alloc`) and dependency-free, so the bare-metal kernels can use it, and
+# its tests run on the host: cargo test -p green-tea-lisp
