@@ -305,21 +305,18 @@ impl Disk for green_tea_bare::nvme::Nvme {
     }
 }
 
-/// The same test on a PC's NVMe disk. It overwrites a sector, so it refuses any disk but
-/// the one xtask makes for it, by serial number, before it reads or writes anything.
+/// The same test on a PC's NVMe disk. It overwrites a sector, so it uses only the disk
+/// xtask makes for it, found by serial number before anything is read or written.
 #[cfg(feature = "board-pc")]
 fn disk_test(fb: Framebuffer) {
-    let mut disk = match Board::find_nvme() {
+    let mut disk = match Board::find_nvme(DISK_ID) {
         Ok(Some(disk)) => disk,
-        Ok(None) => return println!("FAIL: no NVMe disk"),
+        Ok(None) => return println!("FAIL: no NVMe disk is the test disk, so none was touched"),
         Err(e) => return println!("FAIL: {e}"),
     };
     let sectors = disk.capacity();
     let serial = core::str::from_utf8(disk.serial()).unwrap_or("?");
     println!("nvme: {sectors} blocks of {} bytes, serial {serial:?}", disk.block_size());
-    if disk.serial() != DISK_ID {
-        return println!("FAIL: not the test disk, so it was left alone");
-    }
     if disk.block_size() != SECTOR_SIZE {
         return println!("FAIL: the test expects {SECTOR_SIZE}-byte blocks");
     }

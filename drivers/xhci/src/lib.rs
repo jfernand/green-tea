@@ -492,14 +492,21 @@ impl Xhci {
             None,
         )?;
         // Report only on a change. A keyboard may refuse, and that's harmless here.
-        let _ = self.control(
-            slot,
-            &mut ep0,
-            Trb::setup(CLASS_TO_INTERFACE, SET_IDLE, 0, u16::from(found.interface), 0),
-            None,
-        );
+        self.request_idle(slot, &mut ep0, u16::from(found.interface));
         self.start_keyboard(slot, speed, (output, input), found, ep0, arena)?;
         Ok(true)
+    }
+
+    /// Ask the keyboard to report only on a change. One that refuses stalls the request,
+    /// which is harmless but halts endpoint 0, so we restart it for the requests to come.
+    fn request_idle(&mut self, slot: u8, ep0: &mut Ring, interface: u16) {
+        const EP0: u8 = 1; // its device context index
+        if self.control(slot, ep0, Trb::setup(CLASS_TO_INTERFACE, SET_IDLE, 0, interface, 0), None).is_err() {
+            let dequeue = ep0.enqueue_pointer();
+            let _ = self
+                .command(Trb::reset_endpoint(slot, EP0))
+                .and_then(|_| self.command(Trb::set_tr_dequeue(dequeue, slot, EP0)));
+        }
     }
 
     fn write_ep0(&self, input: usize, max_packet: u16, dequeue: u64) {
@@ -711,6 +718,9 @@ mod tests {
             pub event_at: usize,
             pub seen: Vec<Trb>,
             pub fail_commands: bool,
+            /// Stall a SET_IDLE request, as a keyboard that doesn't support it may.
+            pub stall_idle: bool,
+            pub last_request: u8,
         }
 
         pub static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -745,9 +755,13 @@ mod tests {
                 }
                 s.ep0_at += 1;
                 s.seen.push(trb);
+                if trb.kind() == trb::SETUP {
+                    s.last_request = (trb.param >> 8) as u8;
+                }
                 if trb.kind() == trb::STATUS {
                     let control = trb::TRANSFER_EVENT << 10 | 1 << 16 | 1 << 24;
-                    emit(s, Trb { param: 0, status: trb::SUCCESS << 24, control });
+                    let code = if s.stall_idle && s.last_request == SET_IDLE { trb::STALL } else { trb::SUCCESS };
+                    emit(s, Trb { param: 0, status: code << 24, control });
                 }
             }
         }
@@ -778,6 +792,8 @@ mod tests {
             event_at: 0,
             seen: Vec::new(),
             fail_commands,
+            stall_idle: false,
+            last_request: 0,
         });
         // SAFETY: each ring is zeroed and kept alive in the rig.
         let xhci = unsafe {
@@ -832,6 +848,20 @@ mod tests {
         assert_eq!(seen[2].param, Trb::setup(0x02, 1, 0, 0x81, 0).param, "CLEAR_FEATURE(ENDPOINT_HALT)");
         assert_eq!(rig.interrupt[1].kind(), trb::NORMAL, "a new transfer is queued");
         assert!(rig.xhci.keyboard.is_some());
+    }
+
+    #[test]
+    fn a_refused_set_idle_leaves_endpoint_0_usable() {
+        let _turn = RIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut rig = rig(false);
+        fake::STATE.lock().unwrap().as_mut().unwrap().stall_idle = true;
+        let mut k = rig.xhci.keyboard.take().unwrap();
+        rig.xhci.request_idle(1, &mut k.ep0, 0);
+        let seen = fake::STATE.lock().unwrap().as_ref().unwrap().seen.clone();
+        let kinds: Vec<u32> = seen.iter().map(Trb::kind).collect();
+        assert_eq!(kinds, [trb::SETUP, trb::STATUS, trb::RESET_ENDPOINT, trb::SET_TR_DEQUEUE]);
+        assert_eq!((seen[2].endpoint(), seen[3].endpoint()), (1, 1), "endpoint 0's context index");
+        assert_eq!(seen[3].param, k.ep0.enqueue_pointer(), "past the refused request");
     }
 
     #[test]
