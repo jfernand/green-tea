@@ -7,8 +7,8 @@
 //! it prints) and is done with all of it when it returns.
 //!
 //! Where that memory comes from is switchable, with `use`:
-//! - `use heap`: the global heap, green-tea-bare's first-fit allocator. Each of a command's
-//!   blocks is found by a search, and freed on its own when the command returns.
+//! - `use heap`: the global heap, green-tea-bare's TLSF allocator. Each of a command's
+//!   blocks is allocated, and freed, on its own when the command returns.
 //! - `use arena`: an [`Arena`], reset after every command.
 //!
 //! Either way the shell runs indefinitely. `heap` prints the heap block by block.
