@@ -88,11 +88,31 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         }
-        Err(why) => {
+        Err(Failure::Usage(why)) => {
             eprintln!("error: {why}\n\n{USAGE}");
             ExitCode::from(2)
         }
+        Err(Failure::Other(why)) => {
+            eprintln!("error: {why}");
+            ExitCode::from(2)
+        }
     }
+}
+
+/// Why a command didn't finish. Only a mistake on the command line is answered with the usage.
+enum Failure {
+    Usage(String),
+    Other(String),
+}
+
+impl From<String> for Failure {
+    fn from(why: String) -> Failure {
+        Failure::Other(why)
+    }
+}
+
+fn usage(why: impl Into<String>) -> Failure {
+    Failure::Usage(why.into())
 }
 
 #[derive(Default)]
@@ -108,12 +128,12 @@ struct Options {
     multiples: Option<Vec<usize>>,
 }
 
-fn run(args: &[String]) -> Result<bool, String> {
+fn run(args: &[String]) -> Result<bool, Failure> {
     let mut words = Vec::new();
     let mut options = Options::default();
     let mut rest = args.iter();
     let number = |value: Option<&String>, what: &str| {
-        value.and_then(|n| n.parse::<usize>().ok()).filter(|n| *n >= 1).ok_or(format!("{what} needs a number"))
+        value.and_then(|n| n.parse::<usize>().ok()).filter(|n| *n >= 1).ok_or_else(|| usage(format!("{what} needs a number")))
     };
     while let Some(arg) = rest.next() {
         match arg.as_str() {
@@ -124,39 +144,39 @@ fn run(args: &[String]) -> Result<bool, String> {
             "--no-warmup" => options.no_warmup = true,
             "--touch" => options.touch = true,
             "--only" => {
-                let names = rest.next().ok_or("--only needs a list of allocators")?;
+                let names = rest.next().ok_or_else(|| usage("--only needs a list of allocators"))?;
                 options.only = Some(names.split(',').map(String::from).collect());
             }
             "--multiples" => {
-                let list = rest.next().ok_or("--multiples needs a list")?;
+                let list = rest.next().ok_or_else(|| usage("--multiples needs a list"))?;
                 let tenths = |m: &str| m.parse::<f64>().ok().map(|m| (m * 10.0).round() as usize).filter(|m| *m >= 1);
                 let parsed: Option<Vec<usize>> = list.split(',').map(tenths).collect();
-                options.multiples = Some(parsed.ok_or("--multiples needs numbers, such as 1,1.5,2")?);
+                options.multiples = Some(parsed.ok_or_else(|| usage("--multiples needs numbers, such as 1,1.5,2"))?);
             }
-            "--pins" => options.pins = Some(rest.next().ok_or("--pins needs a file")?.clone()),
+            "--pins" => options.pins = Some(rest.next().ok_or_else(|| usage("--pins needs a file"))?.clone()),
             "-h" | "--help" => {
                 println!("{USAGE}");
                 return Ok(true);
             }
-            option if option.starts_with("--") => return Err(format!("unknown option {option}")),
+            option if option.starts_with("--") => return Err(usage(format!("unknown option {option}"))),
             word => words.push(word),
         }
     }
-    match words.as_slice() {
-        ["space", file] => space(&Loaded::new(file, &options)?, &options),
-        ["instructions", file] => instructions(file, &Loaded::new(file, &options)?, &options),
-        ["time", file] => time(&Loaded::new(file, &options)?, &options),
-        ["runs", file, a, b] => runs(&Loaded::new(file, &options)?, a, b, &options),
-        ["count", file, name] => count(&Loaded::new(file, &options)?, name),
-        ["lisp", "lifetimes"] => lisp_lifetimes(),
-        ["lisp", "instructions"] => lisp_instructions(&options),
-        ["lisp", "run", program, heap] => lisp_run(program, heap, 0),
+    Ok(match words.as_slice() {
+        ["space", file] => space(&Loaded::new(file, &options)?, &options)?,
+        ["instructions", file] => instructions(file, &Loaded::new(file, &options)?, &options)?,
+        ["time", file] => time(&Loaded::new(file, &options)?, &options)?,
+        ["runs", file, a, b] => runs(&Loaded::new(file, &options)?, a, b, &options)?,
+        ["count", file, name] => count(&Loaded::new(file, &options)?, name)?,
+        ["lisp", "lifetimes"] => lisp_lifetimes()?,
+        ["lisp", "instructions"] => lisp_instructions(&options)?,
+        ["lisp", "run", program, heap] => lisp_run(program, heap, 0)?,
         ["lisp", "run", program, heap, words] => {
-            lisp_run(program, heap, words.parse().map_err(|_| "the heap's size is a number of words")?)
+            lisp_run(program, heap, words.parse().map_err(|_| usage("the heap's size is a number of words"))?)?
         }
-        [] => Err("no command".into()),
-        _ => Err("that isn't a command, or it has the wrong number of arguments".into()),
-    }
+        [] => return Err(usage("no command")),
+        _ => return Err(usage("that isn't a command, or it has the wrong number of arguments")),
+    })
 }
 
 /// A trace, read from a file and made ready.
