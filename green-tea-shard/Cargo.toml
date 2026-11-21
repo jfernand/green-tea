@@ -1,0 +1,17 @@
+[package]
+name = "green-tea-shard"
+description = "Allocating from several CPUs without a lock: pages of one size class each, a free list in every page, and a second list in every page that other CPUs push to with a compare-and-swap."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+# no_std, so the bare-metal kernels can use it, and its tests run on the host with real
+# threads: cargo test -p green-tea-shard
+
+[dependencies]
+green-tea-fit = { path = "../green-tea-fit" }
+green-tea-smp = { path = "../green-tea-smp" }

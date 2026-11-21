@@ -57,6 +57,10 @@ is echoed here, and the run passes when every kernel reports PASS.
             other three, and has all four use the kernel's heap at once, behind its lock,
             and then a heap with a cache for each CPU in front of it (riscv64, aarch64,
             x86_64)
+  shard     green-tea-coop's test of allocation without a lock: four CPUs allocate through
+            a heap of pages each, where every page has its own free list and a second
+            list that other CPUs push to, against the caches of the smp test on the same
+            work (riscv64, aarch64, x86_64)
   shell     green-tea-shell: types two commands at the shell on the serial console; the
             second is its `test`, which checks that commands free what they allocate,
             from the heap or from an arena
@@ -112,6 +116,7 @@ const KERNELS: &[Kernel] = &[
     Kernel { name: "slab", package: "green-tea-coop", arches: ALL, test: Some("slab"), disk: false, input: None },
     Kernel { name: "pages", package: "green-tea-coop", arches: &["riscv64", "x86_64"], test: Some("pages"), disk: false, input: None },
     Kernel { name: "smp", package: "green-tea-coop", arches: ALL, test: Some("smp"), disk: false, input: None },
+    Kernel { name: "shard", package: "green-tea-coop", arches: ALL, test: Some("shard"), disk: false, input: None },
     Kernel {
         name: "shell",
         package: "green-tea-shell",
@@ -155,7 +160,7 @@ const ALL: &[&str] = &["riscv64", "aarch64", "x86_64"];
 
 /// The kernels that are given more than one CPU (`-smp`). Every other kernel runs on a
 /// machine with one.
-const SMP_KERNELS: &[(&str, &str)] = &[("smp", "4")];
+const SMP_KERNELS: &[(&str, &str)] = &[("smp", "4"), ("shard", "4")];
 
 struct Arch {
     name: &'static str,

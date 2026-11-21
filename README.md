@@ -27,6 +27,7 @@ kernels built on the same context switch:
 | [`green-tea-region`](green-tea-region) | Regions: a bump allocator over chunks taken from the heap, freed all at once. `alloc` returns a reference that lives as long as the borrow of the region, so the borrow checker refuses a use after the region is dropped or reset, and a pointer from a long-lived region into a short-lived one. `no_std`. |
 | [`green-tea-trace`](green-tea-trace) | A command for the host that reads a trace file (`green-tea-fit`'s `tracefile` module: a text form and a binary form) and replays it against each allocator, as the shell's `replay` does in the kernel. `cargo xtask trace` gets such a file out of the kernel, over its serial console. |
 | [`green-tea-smp`](green-tea-smp) | Allocating from several CPUs: a spin lock, and a cache of free blocks for each CPU in front of a heap behind the lock. `no_std`; its tests run on the host with real threads. |
+| [`green-tea-shard`](green-tea-shard) | Allocating from several CPUs with no lock, after mimalloc: pages of one size class each, a free list in every page, and a second list in every page that other CPUs push to with a compare-and-swap. `no_std`; its tests run on the host with real threads. |
 | [`drivers/`](drivers) | The device drivers, one crate each, which know their device but not the machine: serial ports (16550, PL011), QEMU's fw_cfg and ramfb, PCI through ECAM, virtio (MMIO and PCI transports, split virtqueues) and virtio-blk. |
 | [`green-tea-bare`](green-tea-bare) | What the kernels share: boot code per board behind the `Platform` and `TimerInterrupt` traits (timers, interrupts, paging, and where each device is), a port of v2's `Task` and scheduler, and a heap. |
 | [`green-tea-coop`](green-tea-coop) | A bare-metal kernel for QEMU on riscv64, aarch64 and x86_64 whose tasks yield to each other, so you can watch the context switches on screen. |
@@ -75,6 +76,7 @@ cargo xtask kernel --kernel frag      # fragmentation: an adversary, and a rando
 cargo xtask kernel --kernel tlsf      # allocators that don't search: a buddy system and TLSF, against the ones that do
 cargo xtask kernel --kernel slab      # page frames from a buddy system, and a slab cache for task records
 cargo xtask kernel --kernel smp       # four CPUs: the heap behind a lock, then a cache for each CPU
+cargo xtask kernel --kernel shard     # four CPUs and no lock: a heap of pages for each, against the caches
 cargo xtask kernel --kernel shell     # the shell's test, typed at its serial console
 cargo xtask kernel --kernel trace     # the shell records its heap, and replays the trace against each policy
 cargo xtask kernel --kernel safety    # a task corrupts the free list; the allocator hardened, a defence at a time
@@ -337,6 +339,16 @@ has four CPUs add to a counter with and without a lock, then make 80,128 allocat
 frees from the kernel's heap, which takes its lock 80,128 times, and then the same
 through a cache each, which takes the lock behind them 2,680 times. The crate's own tests
 run on the host, with threads: `cargo test -p green-tea-smp`.
+
+[`green-tea-shard`](green-tea-shard) does without the lock. An `Arena` is a region cut
+into pages of 16 KiB, and each CPU has a `Heap` that owns some of them. A page holds
+blocks of one size class and has three free lists in its header: one the owner allocates
+from, one for the blocks the owner frees, and one that other CPUs push to with a
+compare-and-swap, which the owner takes whole, with one swap, when its own list runs out.
+`free` takes an address and nothing else. `--kernel shard` runs the smp test's work
+through both: the caches take their lock 2,680 times and the heaps of pages take none,
+and then every block is freed by a CPU that didn't allocate it, 38,400 of them, and each
+goes back to its page. `cargo test -p green-tea-shard`.
 
 ### A shell, and an arena
 

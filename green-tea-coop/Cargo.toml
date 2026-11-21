@@ -20,3 +20,4 @@ bench = false
 
 [dependencies]
 green-tea-bare = { path = "../green-tea-bare" }
+green-tea-shard = { path = "../green-tea-shard" }

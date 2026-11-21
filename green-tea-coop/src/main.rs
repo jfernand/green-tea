@@ -27,6 +27,7 @@ extern crate alloc;
 mod fit;
 mod frag;
 mod safety;
+mod shard;
 mod slab;
 mod pages;
 mod smp;
@@ -55,6 +56,7 @@ extern "C" fn kmain() -> ! {
         b"slab" => slab::test(fb),
         b"safety" => safety::test(fb),
         b"smp" => smp::test(fb),
+        b"shard" => shard::test(fb),
         other => panic!("unknown test {:?}", core::str::from_utf8(other)),
     }
     println!("halting");
