@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use std::{env, thread};
 
 pub const USAGE: &str = "\
-usage: cargo xtask kernel [--kernel coop|preempt|overflow|disk|memmap|pool|fit|frag|tlsf|shell|trace]...
+usage: cargo xtask kernel [--kernel coop|preempt|overflow|disk|memmap|pool|fit|frag|tlsf|shell|trace|safety|harden]...
                           [--target riscv64|aarch64|x86_64]...
                           [--release] [--headless] [--screenshot]
 
@@ -53,6 +53,11 @@ is echoed here, and the run passes when every kernel reports PASS.
   trace     green-tea-shell again: records the heap while the shell runs a script of
             commands, and replays the recording against each policy (riscv64, aarch64,
             x86_64)
+  safety    green-tea-coop's heap-safety test: a task writes to a freed block and another
+            is handed memory that isn't free; then the allocator hardened one defence at a
+            time, and what each catches and costs (riscv64, aarch64, x86_64)
+  harden    green-tea-shell once more: the recorded trace replayed against the hardened
+            allocator, one defence more each time (riscv64, aarch64, x86_64)
 
   --kernel      only these kernels (default: all)
   --target      only these architectures (default: all three)
@@ -101,6 +106,15 @@ const KERNELS: &[Kernel] = &[
         test: None,
         disk: false,
         input: Some("\ntrace on\nsession\ntrace off\nreplay\n"),
+    },
+    Kernel { name: "safety", package: "green-tea-coop", arches: ALL, test: Some("safety"), disk: false, input: None },
+    Kernel {
+        name: "harden",
+        package: "green-tea-shell",
+        arches: ALL,
+        test: None,
+        disk: false,
+        input: Some("\ntrace on\nsession\ntrace off\nharden\n"),
     },
 ];
 
@@ -266,7 +280,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 let kernel = KERNELS
                     .iter()
                     .find(|k| k.name == value)
-                    .ok_or_else(|| format!("unknown kernel {value}; known: coop, preempt, overflow, disk, memmap, pool, fit, frag, tlsf, shell, trace"))?;
+                    .ok_or_else(|| format!("unknown kernel {value}; known: coop, preempt, overflow, disk, memmap, pool, fit, frag, tlsf, shell, trace, safety, harden"))?;
                 kernels.push(kernel);
             }
             "-h" | "--help" => return Err(String::new()),
@@ -626,14 +640,20 @@ mod tests {
                 "shell-x86_64",
                 "trace-riscv64",
                 "trace-aarch64",
-                "trace-x86_64"
+                "trace-x86_64",
+                "safety-riscv64",
+                "safety-aarch64",
+                "safety-x86_64",
+                "harden-riscv64",
+                "harden-aarch64",
+                "harden-x86_64"
             ]
         );
     }
 
     #[test]
     fn unsupported_combinations_are_skipped() {
-        assert_eq!(labels(&["--target", "aarch64"]), ["coop-aarch64", "preempt-aarch64", "disk-aarch64", "memmap-aarch64", "pool-aarch64", "fit-aarch64", "frag-aarch64", "tlsf-aarch64", "shell-aarch64", "trace-aarch64"]);
+        assert_eq!(labels(&["--target", "aarch64"]), ["coop-aarch64", "preempt-aarch64", "disk-aarch64", "memmap-aarch64", "pool-aarch64", "fit-aarch64", "frag-aarch64", "tlsf-aarch64", "shell-aarch64", "trace-aarch64", "safety-aarch64", "harden-aarch64"]);
         let args = ["--kernel".to_string(), "overflow".into(), "--target".into(), "aarch64".into()];
         assert!(parse(&args).is_err());
     }

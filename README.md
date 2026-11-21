@@ -70,6 +70,8 @@ cargo xtask kernel --kernel fit       # the heap's allocator: merging, three way
 cargo xtask kernel --kernel frag      # fragmentation: an adversary, and a random workload
 cargo xtask kernel --kernel shell     # the shell's test, typed at its serial console
 cargo xtask kernel --kernel trace     # the shell records its heap, and replays the trace against each policy
+cargo xtask kernel --kernel safety    # a task corrupts the free list; the allocator hardened, a defence at a time
+cargo xtask kernel --kernel harden    # the recorded trace against the hardened allocator
 cargo xtask shell                     # the shell, on this terminal (--target to pick a board)
 cargo xtask kernel --target aarch64   # just one architecture
 cargo xtask kernel --headless --screenshot   # no windows; saves target/kernel/<kernel>-<arch>.png
@@ -214,6 +216,25 @@ free. `--kernel trace` has the shell record itself running a script of 1,970 com
 that set, read and unset variables, and then replay the trace against all six
 combinations of policy and list order. It replays it twice more: with the same sizes and
 lifetimes dealt out at random, and with the long-lived blocks in a region of their own.
+
+### A hardened heap
+
+[`green-tea-fit/src/hardened.rs`](green-tea-fit/src/hardened.rs) is the first-fit allocator
+again, with five defences that can each be switched on: safe unlinking (a block's
+neighbours on the free list must point back at it before it is taken off), links stored
+XORed with a secret, a canary word after the caller's bytes, a quarantine that holds freed
+blocks filled with 0xdd and checks the fill as they leave, and random choices of free block
+and quarantine slot from a seeded generator. `Hardened<D>` takes the defences as a const
+parameter, so each combination is compiled on its own and its cost shows in the
+disassembly. With `D` 0 it places blocks exactly where `Fit` does. The plain allocators
+are unchanged.
+
+`--kernel safety` first runs two tasks over a plain `Fit`: one writes to a block after
+freeing it, and the other is handed memory inside a block that is still allocated. Then it
+makes six mistakes against the allocator with one defence more each time and prints which
+call caught each, counts how long a freed block waits before it is reused and where the
+next blocks go, and replays the `fit` test's workload for the cost. `--kernel harden` has
+the shell record itself as `trace` does, and replays that recording the same way.
 
 ### A shell, and an arena
 

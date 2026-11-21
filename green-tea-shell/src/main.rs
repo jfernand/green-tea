@@ -27,6 +27,7 @@
 
 extern crate alloc;
 
+mod harden;
 mod replay;
 
 use alloc::alloc::Global;
@@ -156,6 +157,9 @@ impl Shell {
             Next::Prompt
         } else if text == "replay" {
             self.replay();
+            Next::Prompt
+        } else if text == "harden" {
+            self.harden();
             Next::Prompt
         } else {
             self.command(text)
@@ -437,6 +441,7 @@ vars               the variables
 trace on|off       record the heap's allocations and frees
 session            run a script of a few thousand commands, from the heap
 replay             replay what was recorded against each policy
+harden             replay it against the hardened allocator, a defence at a time
 repeat <n> <cmd>   run a command n times, without its output
 test               check that commands free what they allocate, either way
 halt               stop

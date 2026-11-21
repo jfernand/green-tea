@@ -30,6 +30,9 @@
 //! list for each of a few hundred ranges of size, found through two bitmaps. All three
 //! are a [`Heap`].
 //!
+//! [`hardened::Hardened`] is `Fit`'s first fit again with defences against a corrupted
+//! free list, each of which can be switched on or off.
+//!
 //! [`trace`] replays a recorded sequence of allocations and frees against an allocator and
 //! measures its fragmentation, and [`adversary`] is a program written to fragment one.
 //! Those two allocate (a `Vec`, a `BTreeMap`), so they need a global allocator; the
@@ -41,6 +44,7 @@ extern crate alloc;
 
 pub mod adversary;
 pub mod buddy;
+pub mod hardened;
 pub mod tlsf;
 pub mod trace;
 

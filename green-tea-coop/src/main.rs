@@ -16,6 +16,8 @@
 //! (`--kernel fit`, in fit.rs). Set to "frag", it measures how much memory that allocator
 //! can be made to need (`--kernel frag`, in frag.rs). Set to "tlsf", it compares that allocator
 //! with two that don't search, a buddy system and TLSF (`--kernel tlsf`, in tlsf.rs).
+//! Set to "safety", it corrupts that allocator's free list from a task, and hardens it
+//! (`--kernel safety`, in safety.rs).
 
 #![no_std]
 #![no_main]
@@ -33,6 +35,7 @@ extern crate alloc;
 
 mod fit;
 mod frag;
+mod safety;
 mod tlsf;
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -54,6 +57,7 @@ extern "C" fn kmain() -> ! {
         b"fit" => fit::test(fb),
         b"frag" => frag::test(fb),
         b"tlsf" => tlsf::test(fb),
+        b"safety" => safety::test(fb),
         other => panic!("unknown test {:?}", core::str::from_utf8(other)),
     }
     println!("halting");
