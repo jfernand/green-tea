@@ -102,7 +102,8 @@ pub trait Reclaim {
     ///
     /// # Safety
     /// `node` came from `Box::into_raw`, has been unlinked so that no thread starting an
-    /// operation now can reach it, and is retired once.
+    /// operation now can reach it, and is retired once. It may be dropped on another
+    /// thread, so that must be sound for a `T`.
     unsafe fn retire<T>(&mut self, node: *mut T);
 
     fn counts(&self) -> Counts;
