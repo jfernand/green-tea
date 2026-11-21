@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use std::{env, thread};
 
 pub const USAGE: &str = "\
-usage: cargo xtask kernel [--kernel coop|preempt|overflow|disk|memmap|pool|fit|frag|tlsf|shell|trace]...
+usage: cargo xtask kernel [--kernel coop|preempt|overflow|disk|memmap|pool|fit|frag|tlsf|slab|shell|trace]...
                           [--target riscv64|aarch64|x86_64]...
                           [--release] [--headless] [--screenshot]
 
@@ -46,6 +46,9 @@ is echoed here, and the run passes when every kernel reports PASS.
   tlsf      green-tea-coop's test of the allocators that don't search: a buddy system and
             TLSF, which is the kernel's heap, against first fit and best fit on the same
             requests, and on a heap built to make a search long (riscv64, aarch64, x86_64)
+  slab      green-tea-coop's test of the kernel's own allocators: page frames from a buddy
+            system, a slab cache of constructed objects on top, and the cache its tasks'
+            records come from (riscv64, aarch64, x86_64)
   shell     green-tea-shell: types two commands at the shell on the serial console; the
             second is its `test`, which checks that commands free what they allocate,
             from the heap or from an arena
@@ -84,6 +87,7 @@ const KERNELS: &[Kernel] = &[
     Kernel { name: "fit", package: "green-tea-coop", arches: ALL, test: Some("fit"), disk: false, input: None },
     Kernel { name: "frag", package: "green-tea-coop", arches: ALL, test: Some("frag"), disk: false, input: None },
     Kernel { name: "tlsf", package: "green-tea-coop", arches: ALL, test: Some("tlsf"), disk: false, input: None },
+    Kernel { name: "slab", package: "green-tea-coop", arches: ALL, test: Some("slab"), disk: false, input: None },
     Kernel {
         name: "shell",
         package: "green-tea-shell",
@@ -266,7 +270,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 let kernel = KERNELS
                     .iter()
                     .find(|k| k.name == value)
-                    .ok_or_else(|| format!("unknown kernel {value}; known: coop, preempt, overflow, disk, memmap, pool, fit, frag, tlsf, shell, trace"))?;
+                    .ok_or_else(|| format!("unknown kernel {value}; known: coop, preempt, overflow, disk, memmap, pool, fit, frag, tlsf, slab, shell, trace"))?;
                 kernels.push(kernel);
             }
             "-h" | "--help" => return Err(String::new()),
@@ -621,6 +625,9 @@ mod tests {
                 "tlsf-riscv64",
                 "tlsf-aarch64",
                 "tlsf-x86_64",
+                "slab-riscv64",
+                "slab-aarch64",
+                "slab-x86_64",
                 "shell-riscv64",
                 "shell-aarch64",
                 "shell-x86_64",
@@ -633,7 +640,7 @@ mod tests {
 
     #[test]
     fn unsupported_combinations_are_skipped() {
-        assert_eq!(labels(&["--target", "aarch64"]), ["coop-aarch64", "preempt-aarch64", "disk-aarch64", "memmap-aarch64", "pool-aarch64", "fit-aarch64", "frag-aarch64", "tlsf-aarch64", "shell-aarch64", "trace-aarch64"]);
+        assert_eq!(labels(&["--target", "aarch64"]), ["coop-aarch64", "preempt-aarch64", "disk-aarch64", "memmap-aarch64", "pool-aarch64", "fit-aarch64", "frag-aarch64", "tlsf-aarch64", "slab-aarch64", "shell-aarch64", "trace-aarch64"]);
         let args = ["--kernel".to_string(), "overflow".into(), "--target".into(), "aarch64".into()];
         assert!(parse(&args).is_err());
     }

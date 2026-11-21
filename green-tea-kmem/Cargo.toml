@@ -1,0 +1,13 @@
+[package]
+name = "green-tea-kmem"
+description = "A kernel's own allocators: page frames from a buddy system whose records are kept apart from the pages, and slab caches of constructed objects on top of it."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+# no_std and dependency-free, so the bare-metal kernels can use it, and its tests run on
+# the host: cargo test -p green-tea-kmem

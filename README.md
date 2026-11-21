@@ -23,6 +23,7 @@ kernels built on the same context switch:
 | [`green-tea-arch`](green-tea-arch) | The `arch` layer on its own: `Context` and `swap_context` for each architecture. `no_std`, so v2 and the kernels share it. |
 | [`green-tea-pool`](green-tea-pool) | Pools of fixed-size blocks, two ways: a bitmap and an intrusive free list. `no_std`; the kernels' task stacks come from one. |
 | [`green-tea-fit`](green-tea-fit) | An allocator for blocks of any size: a free list searched first-fit, next-fit or best-fit, with boundary tags to merge freed neighbours. `no_std`; the kernels' heap is one. Also replays recorded traces of allocations against each policy, and measures the fragmentation. |
+| [`green-tea-kmem`](green-tea-kmem) | What a kernel allocates for itself with: page frames from a buddy system that keeps its records in a table, apart from the pages, and slab caches of constructed objects on top. `no_std`; the kernels' task records come from one. |
 | [`drivers/`](drivers) | The device drivers, one crate each, which know their device but not the machine: serial ports (16550, PL011), QEMU's fw_cfg and ramfb, PCI through ECAM, virtio (MMIO and PCI transports, split virtqueues) and virtio-blk. |
 | [`green-tea-bare`](green-tea-bare) | What the kernels share: boot code per board behind the `Platform` and `TimerInterrupt` traits (timers, interrupts, paging, and where each device is), a port of v2's `Task` and scheduler, and a heap. |
 | [`green-tea-coop`](green-tea-coop) | A bare-metal kernel for QEMU on riscv64, aarch64 and x86_64 whose tasks yield to each other, so you can watch the context switches on screen. |
@@ -68,6 +69,7 @@ cargo xtask kernel --kernel memmap    # where the linker put each section
 cargo xtask kernel --kernel pool      # two pools compared, and a thousand tasks on one stack
 cargo xtask kernel --kernel fit       # the heap's allocator: merging, three ways to search, a thousand tasks
 cargo xtask kernel --kernel frag      # fragmentation: an adversary, and a random workload
+cargo xtask kernel --kernel slab      # page frames from a buddy system, and a slab cache for task records
 cargo xtask kernel --kernel shell     # the shell's test, typed at its serial console
 cargo xtask kernel --kernel trace     # the shell records its heap, and replays the trace against each policy
 cargo xtask shell                     # the shell, on this terminal (--target to pick a board)
@@ -214,6 +216,32 @@ free. `--kernel trace` has the shell record itself running a script of 1,970 com
 that set, read and unset variables, and then replay the trace against all six
 combinations of policy and list order. It replays it twice more: with the same sizes and
 lifetimes dealt out at random, and with the long-lived blocks in a region of their own.
+
+### Page frames, and a slab cache
+
+Under the heap the kernel has two allocators of its own, from
+[`green-tea-kmem`](green-tea-kmem). The first hands out page frames: the 16 MiB of RAM
+after the kernel's last section, in blocks of 1 to 1,024 pages, by a binary buddy system.
+It keeps a 12-byte record per frame in a table (in the region's first 12 pages) and
+nothing in the pages, so it never touches a free page, knows the order of every allocated
+block, and refuses a block freed twice. The kernel doesn't ask the board how much RAM
+there is: `cargo xtask kernel` gives QEMU 128 MiB, and the region ends well inside it.
+
+The second is a slab cache, after Bonwick's. A slab is one page cut into objects of one
+type, with the slab's record in its last 40 bytes. Objects are constructed when the slab
+is made and stay constructed while they are free, with the free list's link in a word
+after each object. A task's record now comes from such a cache, and what its constructor
+does is take a stack from the pool: a thousand tasks run one after another take 8 stacks
+on riscv64 (one slab's worth of records) where they used to take a thousand. The cost is
+that a slab of records holds a stack for each, used or not, so the most tasks alive at
+once falls from 102 to 96 on riscv64, 100 on aarch64 and 92 on x86_64. When the scheduler
+has nothing left to run it reaps the cache, and the stacks and the pages go back.
+
+`--kernel slab` prints the free blocks by order as blocks are split and merged, frees
+every other page to leave half the memory free with no two pages together, runs a random
+workload, and then shows a cache of 200-byte objects: when objects are constructed, what
+a freed slab keeps, and that ten objects can hold ten pages or one. The crate's own tests
+run on the host: `cargo test -p green-tea-kmem`.
 
 ### A shell, and an arena
 

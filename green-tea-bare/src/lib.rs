@@ -9,7 +9,8 @@
 //!   (`println!` on the board's serial port) and [`screen`], the demos' layout drawn on
 //!   the framebuffer.
 //! - [`heap`] (the global allocator: a free list searched first-fit, from [`fit`]),
-//!   [`arena`] (a bump allocator that can be reset), [`stack`]
+//!   [`arena`] (a bump allocator that can be reset), [`kmem`] (page frames and slab caches,
+//!   under the heap: where task records come from), [`stack`]
 //!   (task stacks with guard pages, from a pool), [`memory`] (where the linker put each
 //!   section), [`Global`] (statics in place of `thread_local!`).
 //! - [`task`] and [`runtime`]: green-tea-v2's tasks and round-robin scheduler, ported to
@@ -31,6 +32,7 @@ pub mod arena;
 pub mod console;
 mod global;
 pub mod heap;
+pub mod kmem;
 pub mod memory;
 pub mod platform;
 pub mod runtime;

@@ -61,10 +61,15 @@ impl Stack {
     /// # Panics
     /// If every slot is taken.
     pub fn take() -> Stack {
-        match with_pool(|pool| pool.take()) {
-            Some(base) => Stack { base },
+        match Stack::try_take() {
+            Some(stack) => stack,
             None => panic!("out of task stacks (all {SLOTS} in use)"),
         }
+    }
+
+    /// Take a free slot, if there is one.
+    pub fn try_take() -> Option<Stack> {
+        with_pool(|pool| pool.take()).map(|base| Stack { base })
     }
 
     /// One past the highest byte: where the stack starts.

@@ -67,6 +67,7 @@ pub fn run(main: impl FnOnce() + 'static, mut on_switch: impl FnMut(Switch)) {
             None => runtime.queue.borrow_mut().push_back(task),
         }
     }
+    crate::task::reap(); // every task has finished: their records' stacks go back to the pool
     RUNTIME.set(ptr::null()); // no unwinding here (panics halt), so no drop guard needed
 }
 
