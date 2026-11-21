@@ -78,6 +78,7 @@ cargo xtask kernel --kernel tlsf      # allocators that don't search: a buddy sy
 cargo xtask kernel --kernel slab      # page frames from a buddy system, and a slab cache for task records
 cargo xtask kernel --kernel smp       # four CPUs: the heap behind a lock, then a cache for each CPU
 cargo xtask kernel --kernel lisp      # a small Lisp on a heap that counts references
+cargo xtask kernel --kernel gc        # the same Lisp on heaps that mark and sweep, mark and compact, and copy
 cargo xtask kernel --kernel shell     # the shell's test, typed at its serial console
 cargo xtask kernel --kernel trace     # the shell records its heap, and replays the trace against each policy
 cargo xtask kernel --kernel safety    # a task corrupts the free list; the allocator hardened, a defence at a time
@@ -363,6 +364,26 @@ many times a count was raised or lowered, frees a list each of the three ways, a
 the two programs that make cycles in a heap too small for what they leak. Every number is
 a count, the same on each architecture, but for the bytes of stack the recursion used. The
 crate's own tests run on the host: `cargo test -p green-tea-lisp`.
+
+### Heaps that trace
+
+Three more heaps implement the same `Heap` trait, and the evaluator doesn't change.
+[`MarkHeap`](green-tea-lisp/src/mark.rs) marks every object the root stack reaches, with a
+mark bit in each header and a mark stack of a fixed size, and then either sweeps the heap
+into free lists (`Reclaim::Sweep`) or slides the marked objects down to its start
+(`Reclaim::Compact`). [`Semispace`](green-tea-lisp/src/semispace.rs) copies what the root
+stack reaches into the other half of its memory with Cheney's scan, and allocates by
+moving a pointer. They collect when `alloc` finds no room, and
+[`gc.rs`](green-tea-lisp/src/gc.rs) has what they share: the `Collect` trait (`collect`,
+the counts, a switch that collects at every allocation, a clock for timing) and
+`reachable`.
+
+`--kernel gc` types the `lisp` test's definitions at a heap that marks, runs the two
+programs that leak under reference counting in 1,024 words, runs the five programs on
+each heap and counts the collections and the objects traced, walked and moved, and shows
+where objects are after a collection, what the mark stack holds, and what a reference
+that the heap wasn't told about refers to afterwards. The smallest heap each program runs
+in is found on the host: `cargo run --release -p green-tea-lisp --example heaps`.
 
 ### A shell, and an arena
 

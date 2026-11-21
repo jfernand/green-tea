@@ -60,6 +60,10 @@ is echoed here, and the run passes when every kernel reports PASS.
   lisp      green-tea-coop's test of green-tea-lisp: a small Lisp on a heap that counts
             references, with every allocation, free and count operation counted, a list
             freed three ways, and cycles leaked and collected (riscv64, aarch64, x86_64)
+  gc        green-tea-coop's test of the heaps that trace: the same Lisp on a heap that
+            marks and sweeps, one that marks and compacts and one that copies, with every
+            collection counted, and the smallest heap each program runs in (riscv64,
+            aarch64, x86_64)
   shell     green-tea-shell: types two commands at the shell on the serial console; the
             second is its `test`, which checks that commands free what they allocate,
             from the heap or from an arena
@@ -116,6 +120,7 @@ const KERNELS: &[Kernel] = &[
     Kernel { name: "pages", package: "green-tea-coop", arches: &["riscv64", "x86_64"], test: Some("pages"), disk: false, input: None },
     Kernel { name: "smp", package: "green-tea-coop", arches: ALL, test: Some("smp"), disk: false, input: None },
     Kernel { name: "lisp", package: "green-tea-coop", arches: ALL, test: Some("lisp"), disk: false, input: None },
+    Kernel { name: "gc", package: "green-tea-coop", arches: ALL, test: Some("gc"), disk: false, input: None },
     Kernel {
         name: "shell",
         package: "green-tea-shell",

@@ -7,7 +7,9 @@
 //! The interpreter never sees memory. It reaches its objects through the [`Heap`] trait,
 //! and this crate's first implementation of it, [`rc::RcHeap`], counts references. A heap
 //! that traces, or one that copies, can take its place without a change to the evaluator,
-//! because of what the interface does and doesn't let the evaluator do.
+//! because of what the interface does and doesn't let the evaluator do. Two do:
+//! [`mark::MarkHeap`] marks what the root stack reaches and sweeps or compacts the rest,
+//! and [`semispace::Semispace`] copies what it reaches. [`gc`] has what they share.
 //!
 //! # The interface
 //!
@@ -57,13 +59,18 @@
 extern crate alloc;
 
 pub mod eval;
+pub mod gc;
+pub mod mark;
 pub mod print;
 pub mod programs;
 pub mod rc;
 pub mod read;
+pub mod semispace;
 
 #[cfg(test)]
 extern crate std;
+#[cfg(test)]
+mod gc_tests;
 #[cfg(test)]
 mod tests;
 
