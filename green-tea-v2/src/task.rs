@@ -13,7 +13,8 @@ thread_local! {
     static CURRENT: Cell<*mut Inner> = const { Cell::new(ptr::null_mut()) };
 }
 
-/// An owned handle to a task. Dropping it frees the task's stack.
+/// An owned handle to a task. Dropping it frees the task's stack, unless the task is suspended
+/// partway through its closure: then the stack is leaked (see `Drop`).
 ///
 /// The task's state lives in a separate heap allocation (`Inner`) that is only ever touched
 /// through raw pointers. That way `resume(&mut self)` borrows just this handle, while the
@@ -63,10 +64,15 @@ impl Task {
 }
 
 impl Drop for Task {
-    /// A task dropped while suspended mid-closure never gets to run its locals' destructors;
-    /// its stack is simply unmapped.
+    /// A task dropped while suspended mid-closure never gets to run its locals' destructors,
+    /// so whatever they guard stays in force: a `thread::scope` in one of its frames may still
+    /// have threads using that frame. Its state and stack are therefore leaked, not freed.
     fn drop(&mut self) {
-        drop(unsafe { Box::from_raw(self.inner.as_ptr()) });
+        let inner = self.inner.as_ptr();
+        let suspended = unsafe { (*inner).func.is_none() && !(*inner).done };
+        if !suspended {
+            drop(unsafe { Box::from_raw(inner) });
+        }
     }
 }
 
@@ -98,7 +104,7 @@ extern "C" fn task_entry(arg: *mut ()) -> ! {
 mod tests {
     use super::{Task, yield_now};
     use libc::{c_int, c_void};
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
     use std::{mem, ptr};
@@ -197,6 +203,33 @@ mod tests {
         for &(seed, got) in results.iter() {
             assert_eq!(got.to_bits(), expected(seed).to_bits(), "seed {seed}");
         }
+    }
+
+    /// Whether the page holding `addr` is mapped. Asks the kernel, because reading an unmapped
+    /// address would kill the whole test process.
+    fn is_mapped(addr: usize) -> bool {
+        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
+        let mut resident = 0;
+        unsafe { libc::mincore((addr & !(page - 1)) as *mut c_void, 1, &mut resident) == 0 }
+    }
+
+    /// Safe code can lend a task's stack to a scoped thread and then drop the suspended task
+    /// from the outside, so the frame must stay mapped and intact.
+    #[test]
+    fn dropping_a_suspended_task_keeps_its_stack() {
+        let local_addr = Rc::new(Cell::new(0usize));
+        let addr = local_addr.clone();
+        let mut task = Task::new(move || {
+            let local = std::hint::black_box(7u64);
+            addr.set(&raw const local as usize);
+            yield_now();
+            std::hint::black_box(&local);
+        });
+        task.resume();
+        let addr = local_addr.get();
+        drop(task);
+        assert!(is_mapped(addr), "the suspended task's stack was unmapped");
+        assert_eq!(unsafe { (addr as *const u64).read_volatile() }, 7);
     }
 
     #[test]
