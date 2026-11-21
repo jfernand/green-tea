@@ -124,6 +124,7 @@ dependencies = [
  "green-tea-smp",
  "green-tea-virtio",
  "green-tea-virtio-blk",
+ "green-tea-xhci",
 ]
 
 [[package]]
@@ -294,6 +295,10 @@ dependencies = [
  "green-tea-io",
  "green-tea-virtio",
 ]
+
+[[package]]
+name = "green-tea-xhci"
+version = "0.1.0"
 
 [[package]]
 name = "is_terminal_polyfill"

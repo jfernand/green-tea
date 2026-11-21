@@ -26,6 +26,8 @@ use green_tea_i8042::Keyboard;
 use green_tea_io::port::{inb, inl, outb};
 use green_tea_multiboot2::{BOOT_MAGIC, Info};
 use green_tea_ns16550::Ns16550Port;
+use green_tea_pci::Ecam;
+use green_tea_xhci::{Arena, PCI_CLASS, Xhci};
 
 pub struct Pc;
 
@@ -83,6 +85,13 @@ static CPU_COUNT: AtomicUsize = AtomicUsize::new(1);
 static TEXT_BUSY: AtomicBool = AtomicBool::new(false);
 static mut TEXT: Option<Text> = None;
 static mut SCREEN: Option<Framebuffer> = None;
+/// The USB controller with a keyboard on it, guarded by KEYBOARD_BUSY as the PS/2 one is.
+static mut USB: Option<Xhci> = None;
+/// What the USB controllers read and write. In .bss, so that it is mapped from the start.
+#[repr(align(4096))]
+struct UsbMemory(#[allow(dead_code)] [u8; USB_MEMORY]);
+const USB_MEMORY: usize = 1 << 20;
+static mut USB_ARENA: UsbMemory = UsbMemory([0; USB_MEMORY]);
 static KEYBOARD_BUSY: AtomicBool = AtomicBool::new(false);
 static mut KEYBOARD: Keyboard = Keyboard::new();
 /// The test named on the command line.
@@ -154,7 +163,10 @@ fn measure_tsc(acpi: Option<&Acpi<Identity4G>>) -> u64 {
 /// Keep the screen, and start the text console on the part the demos don't draw on.
 fn init_screen(info: &Info) {
     let Some(d) = info.display().filter(|d| d.xrgb) else { return };
-    paging::map_high(d.addr as usize, d.pitch as usize * d.height as usize);
+    if let Err(e) = paging::map_high(d.addr as usize, d.pitch as usize * d.height as usize) {
+        crate::println!("framebuffer: {e}");
+        return;
+    }
     let (w, h) = (d.width as usize, d.height as usize);
     // SAFETY: GRUB's framebuffer, of this shape, now mapped; nothing else uses that memory.
     let mut fb = unsafe { Framebuffer::new(d.addr as *mut u32, w, h, d.pitch as usize / 4) };
@@ -171,6 +183,38 @@ fn init_screen(info: &Info) {
         SCREEN = Some(fb);
         TEXT = Some(Text::new(fb, x, y, w - x, h - y));
     }
+}
+
+/// Find the xHCI controllers through ACPI's MCFG table, and start reading the first USB
+/// keyboard on them. A machine without one still boots: USB is only a way to type.
+fn init_usb(acpi: Option<&Acpi<Identity4G>>) {
+    let Some((base, buses)) = acpi.and_then(|a| a.ecam()).filter(|(base, _)| *base < 1 << 32) else { return };
+    let ecam = Ecam(base as usize);
+    // SAFETY: at boot, on the only CPU; nothing else uses the arena.
+    let mut arena = unsafe { Arena::new((&raw mut USB_ARENA).cast::<u8>(), USB_MEMORY) };
+    let mut found = None;
+    ecam.for_each_function_on(buses, |function| {
+        if found.is_some() || ecam.read_u32(function, 8) >> 8 != PCI_CLASS {
+            return;
+        }
+        let Some(bar) = ecam.bar(function, 0) else { return };
+        if let Err(e) = paging::map_high(bar as usize, 0x10000) {
+            return crate::println!("usb: {e}");
+        }
+        ecam.enable(function);
+        // SAFETY: the function's registers, just mapped and enabled, and used only here.
+        match unsafe { Xhci::new(bar as usize, &mut arena, crate::delay_ms) } {
+            Ok(mut xhci) => {
+                if let Some(port) = xhci.find_keyboard(&mut arena) {
+                    crate::println!("usb: keyboard on port {port}");
+                    found = Some(xhci);
+                }
+            }
+            Err(e) => crate::println!("usb: {e}"),
+        }
+    });
+    // SAFETY: at boot, on the only CPU.
+    unsafe { USB = found };
 }
 
 fn init_cpus(acpi: Option<&Acpi<Identity4G>>) {
@@ -241,6 +285,7 @@ impl Platform for Pc {
         }
         paging::enable_guard_pages();
         paging::unmap_heap();
+        init_usb(acpi.as_ref());
     }
 
     fn putc(byte: u8) {
@@ -266,7 +311,9 @@ impl Platform for Pc {
             return None;
         }
         // SAFETY: KEYBOARD_BUSY is ours.
-        let byte = unsafe { (&raw mut KEYBOARD).as_mut() }.and_then(Keyboard::getc);
+        let usb = unsafe { (&raw mut USB).as_mut() }.and_then(Option::as_mut).and_then(Xhci::poll);
+        // SAFETY: KEYBOARD_BUSY is ours.
+        let byte = usb.or_else(|| unsafe { (&raw mut KEYBOARD).as_mut() }.and_then(Keyboard::getc));
         KEYBOARD_BUSY.store(false, Ordering::Release);
         byte
     }

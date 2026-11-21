@@ -698,6 +698,7 @@ impl Run {
                 let vars = out_dir.join("pc").join(format!("{}.vars", job.label()));
                 fs::copy(OVMF_VARS, &vars)?;
                 cmd.args(["-machine", "q35", "-cpu", "max", "-m", "512M", "-vga", "std", "-net", "none"])
+                    .args(["-device", "qemu-xhci,id=xhci", "-device", "usb-kbd,bus=xhci.0"])
                     .arg("-drive")
                     .arg(format!("if=pflash,format=raw,readonly=on,file={OVMF_CODE}"))
                     .arg("-drive")

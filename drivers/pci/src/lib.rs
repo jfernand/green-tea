@@ -77,8 +77,13 @@ impl Ecam {
     }
 
     /// Call `f` with every function that's there. Missing ones read as all ones.
-    pub fn for_each_function(&self, mut f: impl FnMut(Function)) {
-        for bus in 0..=255 {
+    pub fn for_each_function(&self, f: impl FnMut(Function)) {
+        self.for_each_function_on(0..=255, f);
+    }
+
+    /// The same, on these buses only: reading past what the window covers is undefined.
+    pub fn for_each_function_on(&self, buses: core::ops::RangeInclusive<u8>, mut f: impl FnMut(Function)) {
+        for bus in buses {
             for device in 0..32 {
                 let first = Function { bus, device, function: 0 };
                 if self.vendor_id(first) == 0xffff {

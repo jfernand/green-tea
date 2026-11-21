@@ -136,6 +136,16 @@ impl<M: Memory> Acpi<M> {
         Some(address)
     }
 
+    /// PCI segment 0's ECAM window: the address bus 0 would be at, and the buses it covers.
+    pub fn ecam(&self) -> Option<(u64, core::ops::RangeInclusive<u8>)> {
+        let mut buf = [0u8; MAX_TABLE];
+        let mcfg = self.table(self.find(b"MCFG")?, &mut buf)?;
+        mcfg.get(HEADER + 8..)?.chunks_exact(16).find_map(|e| {
+            let segment = u16::from_le_bytes([e[8], e[9]]);
+            (segment == 0 && e[10] <= e[11]).then(|| (u64_at(e, 0).unwrap_or(0), e[10]..=e[11]))
+        })
+    }
+
     /// The HPET's address.
     pub fn hpet(&self) -> Option<u64> {
         let mut buf = [0u8; MAX_TABLE];
@@ -288,6 +298,24 @@ mod tests {
         body.extend(0x1_fee0_0000u64.to_le_bytes());
         let fake = with(&[(0x2000, table(b"APIC", &body))]);
         assert_eq!(Acpi::new(&fake, &rsdp_v2(0x1000)).unwrap().lapic_address(), Some(0x1_fee0_0000));
+    }
+
+    #[test]
+    fn finds_segment_0s_ecam_window() {
+        let mut body = std::vec![0u8; 8];
+        for (base, segment, last) in [(0xc000_0000u64, 1u16, 0x3fu8), (0xe000_0000, 0, 0x7f)] {
+            body.extend(base.to_le_bytes());
+            body.extend(segment.to_le_bytes());
+            body.extend([0, last, 0, 0, 0, 0]);
+        }
+        let fake = with(&[(0x2000, table(b"MCFG", &body))]);
+        assert_eq!(Acpi::new(&fake, &rsdp_v2(0x1000)).unwrap().ecam(), Some((0xe000_0000, 0..=0x7f)));
+    }
+
+    #[test]
+    fn a_machine_without_mcfg_has_no_window() {
+        let fake = with(&[(0x2000, madt(&[lapic(0, 1)]))]);
+        assert_eq!(Acpi::new(&fake, &rsdp_v2(0x1000)).unwrap().ecam(), None);
     }
 
     #[test]

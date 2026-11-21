@@ -197,8 +197,7 @@ boot_gdt_ptr:
 
     .section .bss.boot_page_tables, "aw", @nobits
     .balign 4096
-    .globl boot_pml4            # paging::map_high adds to these
-    .globl boot_pdpt
+    .globl boot_pml4            # paging::map_high adds to it
     .globl boot_pds             # paging::enable_guard_pages edits one entry
 boot_pml4: .skip 4096
 boot_pdpt: .skip 4096
@@ -827,47 +826,49 @@ mod paging {
         steps
     }
 
-    /// Make `len` bytes at `addr` reachable, for a framebuffer that firmware put above the
-    /// 4 GiB `_start` maps: identity-mapped, with 2 MiB pages. Call once, at boot.
+    /// Make `len` bytes at `addr` reachable, for a device that firmware put above the 4 GiB
+    /// `_start` maps: identity-mapped, with 2 MiB pages. Call at boot, on the boot CPU.
     #[cfg_attr(not(feature = "board-pc"), allow(dead_code))]
-    pub fn map_high(addr: usize, len: usize) {
+    pub fn map_high(addr: usize, len: usize) -> Result<(), &'static str> {
         const PAGE_SIZE: u64 = 1 << 7;
         const ADDRESS: u64 = 0x000f_ffff_ffff_f000;
-        static mut HIGH_PDPT: Table = Table([0; 512]);
-        // Two, since a framebuffer can straddle a 1 GiB boundary.
-        static mut HIGH_PDS: [Table; 2] = [const { Table([0; 512]) }; 2];
+        const TABLES: usize = 8;
+        static mut HIGH: [Table; TABLES] = [const { Table([0; 512]) }; TABLES];
+        static USED: Global<usize> = Global::new(0);
         unsafe extern "C" {
             static mut boot_pml4: [u64; 512];
-            static mut boot_pdpt: [u64; 512];
+        }
+        /// The table `entry` points at, made if there is none yet.
+        unsafe fn next_level(entry: *mut u64) -> Result<*mut u64, &'static str> {
+            unsafe {
+                if entry.read() & PRESENT == 0 {
+                    let used = USED.get();
+                    if used == TABLES {
+                        return Err("out of page tables for devices above 4 GiB");
+                    }
+                    USED.set(used + 1);
+                    entry.write((&raw mut HIGH).cast::<Table>().add(used) as u64 | PRESENT | WRITABLE);
+                }
+                Ok((entry.read() & ADDRESS) as *mut u64)
+            }
         }
         if addr + len <= 1 << 32 {
-            return;
+            return Ok(());
         }
-        assert!(addr >= 1 << 32, "a framebuffer across the 4 GiB line");
+        if addr < 1 << 32 {
+            return Err("a device across the 4 GiB line");
+        }
         let (first, last) = (addr & !(MIB2 - 1), (addr + len - 1) & !(MIB2 - 1));
-        assert!(last >> 30 <= (first >> 30) + 1 && first >> 39 == last >> 39, "framebuffer too large");
-        // SAFETY: at boot, on the only CPU; the tables are in the identity map.
+        // SAFETY: at boot, on the boot CPU; the tables are in the identity map.
         unsafe {
-            let index = first >> 39;
-            let pdpt = if index == 0 {
-                (&raw mut boot_pdpt).cast::<u64>()
-            } else {
-                (&raw mut boot_pml4).cast::<u64>().add(index).write((&raw mut HIGH_PDPT) as u64 | PRESENT | WRITABLE);
-                (&raw mut HIGH_PDPT).cast::<u64>()
-            };
-            let mut next = 0;
             for page in (first..=last).step_by(MIB2) {
-                let entry = pdpt.add(page >> 30 & 511);
-                if entry.read() & PRESENT == 0 {
-                    let pd = (&raw mut HIGH_PDS).cast::<Table>().add(next);
-                    next += 1;
-                    entry.write(pd as u64 | PRESENT | WRITABLE);
-                }
-                let pd = (entry.read() & ADDRESS) as *mut u64;
+                let pdpt = next_level((&raw mut boot_pml4).cast::<u64>().add(page >> 39 & 511))?;
+                let pd = next_level(pdpt.add(page >> 30 & 511))?;
                 pd.add(page >> 21 & 511).write(page as u64 | PRESENT | WRITABLE | PAGE_SIZE);
             }
             asm!("mov {0}, cr3", "mov cr3, {0}", out(reg) _, options(nostack));
         }
+        Ok(())
     }
 
     /// The entry for a page of the heap.
