@@ -15,11 +15,17 @@ pub const ENABLE_SLOT: u32 = 9;
 pub const ADDRESS_DEVICE: u32 = 11;
 pub const CONFIGURE_ENDPOINT: u32 = 12;
 pub const EVALUATE_CONTEXT: u32 = 13;
+pub const RESET_ENDPOINT: u32 = 14;
+pub const SET_TR_DEQUEUE: u32 = 16;
 pub const TRANSFER_EVENT: u32 = 32;
 pub const COMMAND_COMPLETION: u32 = 33;
 
 /// Completion codes.
 pub const SUCCESS: u32 = 1;
+pub const BABBLE: u32 = 3;
+pub const TRANSACTION_ERROR: u32 = 4;
+pub const STALL: u32 = 6;
+pub const SPLIT_TRANSACTION_ERROR: u32 = 36;
 pub const SHORT_PACKET: u32 = 13;
 
 const CYCLE: u32 = 1 << 0;
@@ -100,6 +106,16 @@ impl Trb {
     pub const fn with_context(command: u32, input: u64, slot: u8) -> Trb {
         Trb { param: input, status: 0, control: kind(command) | (slot as u32) << 24 }
     }
+
+    /// Take a halted endpoint out of its halted state.
+    pub const fn reset_endpoint(slot: u8, endpoint: u8) -> Trb {
+        Trb { param: 0, status: 0, control: kind(RESET_ENDPOINT) | (endpoint as u32) << 16 | (slot as u32) << 24 }
+    }
+
+    /// Point a stopped endpoint at `dequeue`, an address with the cycle bit in bit 0.
+    pub const fn set_tr_dequeue(dequeue: u64, slot: u8, endpoint: u8) -> Trb {
+        Trb { param: dequeue, status: 0, control: kind(SET_TR_DEQUEUE) | (endpoint as u32) << 16 | (slot as u32) << 24 }
+    }
 }
 
 /// A ring the driver produces on, ending in a link back to its start.
@@ -120,6 +136,12 @@ impl Ring {
     /// Its address with the cycle bit, as a context or CRCR wants it.
     pub fn dequeue_pointer(&self) -> u64 {
         self.trbs as u64 | u64::from(self.cycle)
+    }
+
+    /// Where the next TRB will go, with the cycle bit it will have.
+    pub fn enqueue_pointer(&self) -> u64 {
+        // SAFETY: within the ring.
+        unsafe { self.trbs.add(self.index) as u64 | u64::from(self.cycle) }
     }
 
     fn write(&mut self, at: usize, trb: Trb) {

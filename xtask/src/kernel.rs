@@ -118,7 +118,8 @@ counts as four.
   --screenshot  save the final screen to target/kernel/<kernel>-<arch>.png
   --board pc    build for a physical x86_64 PC instead of QEMU's machine, and test it in
                 QEMU with UEFI firmware. Copy target/kernel/pc/<kernel>-x86_64/EFI to a
-                FAT USB stick to boot it. No virtio, so no disk kernel";
+                FAT USB stick to boot it. The disk kernel uses NVMe, and refuses any disk
+                but the test image";
 
 /// What the kernels are built for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -140,7 +141,7 @@ struct Kernel {
     arches: &'static [&'static str],
     /// A test for the kernel to run instead of its demo: the fw_cfg file opt/green-tea/test.
     test: Option<&'static str>,
-    /// Attach a virtio disk, from a fresh image (see `disk_image`).
+    /// Attach a disk (virtio, or NVMe on the pc board), from a fresh image (see `disk_image`).
     disk: bool,
     /// What to type at the serial console.
     input: Option<&'static str>,
@@ -223,6 +224,7 @@ struct Arch {
 
 /// On `virt`, a virtio-mmio slot. QEMU makes those legacy (virtio 0.9) devices unless
 /// told otherwise, and green-tea-virtio speaks only virtio 1.0.
+const NVME_DISK: &[&str] = &["-device", "nvme,drive=disk,serial=green-tea-disk"];
 const VIRTIO_MMIO_BLK: &[&str] = &["-global", "virtio-mmio.force-legacy=false", "-device", "virtio-blk-device,drive=disk,serial=green-tea-disk"];
 
 const ARCHES: &[Arch] = &[
@@ -442,10 +444,6 @@ fn parse(args: &[String]) -> Result<Options, String> {
         arches = ARCHES.iter().collect();
     }
     for kernel in kernels {
-        if options.board == Board::Pc && kernel.disk {
-            eprintln!("note: skipping {} on the pc board, which has no virtio disk", kernel.name);
-            continue;
-        }
         for &arch in &arches {
             if kernel.arches.contains(&arch.name) {
                 options.jobs.push(Job { kernel, arch });
@@ -749,7 +747,7 @@ impl Run {
             fs::write(&image, disk_image(DISK_SECTORS))?; // fresh each run: the test writes to it
             cmd.arg("-drive")
                 .arg(format!("if=none,id=disk,format=raw,file={}", image.display()))
-                .args(job.arch.virtio_blk);
+                .args(if board == Board::Pc { NVME_DISK } else { job.arch.virtio_blk });
         }
         Ok(Run {
             job,
@@ -1002,10 +1000,11 @@ mod tests {
     }
 
     #[test]
-    fn the_pc_board_runs_only_x86_64_and_no_disk() {
+    fn the_pc_board_runs_only_x86_64_and_its_disk_is_nvme() {
         let options = parse(&["--board".to_string(), "pc".to_string()]).unwrap();
         assert_eq!(options.board, Board::Pc);
-        assert!(options.jobs.iter().all(|j| j.arch.name == "x86_64" && !j.kernel.disk));
+        assert!(options.jobs.iter().all(|j| j.arch.name == "x86_64"));
+        assert!(options.jobs.iter().any(|j| j.kernel.disk));
         assert!(options.jobs.iter().any(|j| j.kernel.name == "shell"));
     }
 

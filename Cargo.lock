@@ -117,6 +117,7 @@ dependencies = [
  "green-tea-kmem",
  "green-tea-multiboot2",
  "green-tea-ns16550",
+ "green-tea-nvme",
  "green-tea-pci",
  "green-tea-pl011",
  "green-tea-pool",
@@ -190,6 +191,10 @@ version = "0.1.0"
 dependencies = [
  "green-tea-io",
 ]
+
+[[package]]
+name = "green-tea-nvme"
+version = "0.1.0"
 
 [[package]]
 name = "green-tea-pci"

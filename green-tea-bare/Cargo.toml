@@ -48,4 +48,5 @@ green-tea-pl011 = { path = "../drivers/pl011" }
 green-tea-acpi = { path = "../drivers/acpi" }
 green-tea-i8042 = { path = "../drivers/i8042" }
 green-tea-multiboot2 = { path = "../drivers/multiboot2" }
+green-tea-nvme = { path = "../drivers/nvme" }
 green-tea-xhci = { path = "../drivers/xhci" }

@@ -25,9 +25,10 @@ use green_tea_framebuffer::Text;
 use green_tea_i8042::Keyboard;
 use green_tea_io::port::{inb, inl, outb};
 use green_tea_multiboot2::{BOOT_MAGIC, Info};
+use green_tea_nvme::Nvme;
 use green_tea_ns16550::Ns16550Port;
 use green_tea_pci::Ecam;
-use green_tea_xhci::{Arena, PCI_CLASS, Xhci};
+use green_tea_xhci::{ARENA_SIZE, Arena, PCI_CLASS, Xhci};
 
 pub struct Pc;
 
@@ -90,8 +91,19 @@ static mut USB: Option<Xhci> = None;
 /// What the USB controllers read and write. In .bss, so that it is mapped from the start.
 #[repr(align(4096))]
 struct UsbMemory(#[allow(dead_code)] [u8; USB_MEMORY]);
-const USB_MEMORY: usize = 1 << 20;
+const USB_MEMORY: usize = ARENA_SIZE;
 static mut USB_ARENA: UsbMemory = UsbMemory([0; USB_MEMORY]);
+/// What the demos draw on when GRUB found no screen we can use.
+const OFFSCREEN_W: usize = 640;
+const OFFSCREEN_H: usize = 480;
+static mut OFFSCREEN: [u32; OFFSCREEN_W * OFFSCREEN_H] = [0; OFFSCREEN_W * OFFSCREEN_H];
+/// PCI segment 0's ECAM window, once it is mapped: its base (0 for none), and its first and
+/// last bus, in the low two bytes.
+static ECAM_BASE: AtomicU64 = AtomicU64::new(0);
+static ECAM_BUSES: AtomicU32 = AtomicU32::new(0);
+/// What the NVMe controller reads and writes, for the one driver `find_nvme` makes.
+static mut NVME_MEMORY: green_tea_nvme::Memory = green_tea_nvme::Memory::new();
+static NVME_TAKEN: AtomicBool = AtomicBool::new(false);
 static KEYBOARD_BUSY: AtomicBool = AtomicBool::new(false);
 static mut KEYBOARD: Keyboard = Keyboard::new();
 /// The test named on the command line.
@@ -134,6 +146,7 @@ fn measure_tsc(acpi: Option<&Acpi<Identity4G>>) -> u64 {
     let acpi = acpi.unwrap_or_else(|| panic!("no ACPI tables, so no clock to measure the TSC with"));
     let (start, end) = if let Some(hpet) = acpi.hpet().filter(|&a| a < 1 << 32) {
         let hpet = hpet as usize;
+        paging::map_device(hpet, 0x400).unwrap_or_else(|e| panic!("hpet: {e}"));
         // SAFETY: ACPI's address for the HPET, inside the identity map.
         unsafe {
             let config = (hpet + 0x10) as *mut u64;
@@ -189,6 +202,13 @@ fn init_screen(info: &Info) {
 /// keyboard on them. A machine without one still boots: USB is only a way to type.
 fn init_usb(acpi: Option<&Acpi<Identity4G>>) {
     let Some((base, buses)) = acpi.and_then(|a| a.ecam()).filter(|(base, _)| *base < 1 << 32) else { return };
+    let window = base as usize + ((*buses.start() as usize) << 20);
+    let window_len = (*buses.end() as usize - *buses.start() as usize + 1) << 20;
+    if let Err(e) = paging::map_device(window, window_len) {
+        return crate::println!("usb: {e}");
+    }
+    ECAM_BUSES.store(u32::from(*buses.start()) << 8 | u32::from(*buses.end()), Ordering::Relaxed);
+    ECAM_BASE.store(base, Ordering::Release);
     let ecam = Ecam(base as usize);
     // SAFETY: at boot, on the only CPU; nothing else uses the arena.
     let mut arena = unsafe { Arena::new((&raw mut USB_ARENA).cast::<u8>(), USB_MEMORY) };
@@ -198,16 +218,20 @@ fn init_usb(acpi: Option<&Acpi<Identity4G>>) {
             return;
         }
         let Some(bar) = ecam.bar(function, 0) else { return };
-        if let Err(e) = paging::map_high(bar as usize, 0x10000) {
+        if let Err(e) = paging::map_device(bar as usize, 0x10000) {
             return crate::println!("usb: {e}");
         }
         ecam.enable(function);
+        let mark = arena.mark();
         // SAFETY: the function's registers, just mapped and enabled, and used only here.
         match unsafe { Xhci::new(bar as usize, &mut arena, crate::delay_ms) } {
             Ok(mut xhci) => {
                 if let Some(port) = xhci.find_keyboard(&mut arena) {
                     crate::println!("usb: keyboard on port {port}");
                     found = Some(xhci);
+                } else if xhci.stop() {
+                    // SAFETY: that controller is halted, and no longer uses its memory.
+                    unsafe { arena.rewind(mark) };
                 }
             }
             Err(e) => crate::println!("usb: {e}"),
@@ -227,6 +251,35 @@ fn init_cpus(acpi: Option<&Acpi<Identity4G>>) {
         slot.store(*id, Ordering::Relaxed);
     }
     CPU_COUNT.store(count, Ordering::Release);
+}
+
+impl Pc {
+    /// Start the first NVMe controller on the PCI bus. Resetting it is safe for what's on
+    /// the disk, and nothing is written unless the caller writes. Can be called once, and
+    /// only while one CPU is running, since it changes the page tables.
+    pub fn find_nvme() -> Result<Option<Nvme>, &'static str> {
+        if NVME_TAKEN.swap(true, Ordering::AcqRel) {
+            return Err("the NVMe driver is already in use");
+        }
+        let base = ECAM_BASE.load(Ordering::Acquire);
+        if base == 0 {
+            return Ok(None);
+        }
+        let buses = ECAM_BUSES.load(Ordering::Relaxed);
+        let ecam = Ecam(base as usize);
+        let mut found = None;
+        ecam.for_each_function_on((buses >> 8) as u8..=buses as u8, |function| {
+            if found.is_none() && ecam.read_u32(function, 8) >> 8 == green_tea_nvme::PCI_CLASS {
+                found = ecam.bar(function, 0).map(|bar| (function, bar));
+            }
+        });
+        let Some((function, bar)) = found else { return Ok(None) };
+        paging::map_device(bar as usize, green_tea_nvme::REGISTERS)?;
+        ecam.enable(function);
+        // SAFETY: the function's registers, just mapped and enabled. NVME_TAKEN makes this
+        // the only driver for them, and the only user of NVME_MEMORY, which is in .bss.
+        unsafe { Nvme::new(bar as usize, &raw mut NVME_MEMORY, crate::delay_ms) }.map(Some)
+    }
 }
 
 impl Platform for Pc {
@@ -273,6 +326,7 @@ impl Platform for Pc {
         TSC_PER_MS.store(measure_tsc(acpi.as_ref()), Ordering::Relaxed);
         if let Some(address) = acpi.as_ref().and_then(|a| a.lapic_address()) {
             set_lapic_base(address);
+            paging::map_device(address as usize, 0x1000).unwrap_or_else(|e| panic!("local APIC: {e}"));
         }
         enable_x2apic_if_available();
         init_cpus(acpi.as_ref());
@@ -358,8 +412,13 @@ impl Platform for Pc {
 
     fn display() -> Result<Framebuffer, &'static str> {
         // SAFETY: only `init` writes it, before this can be called.
-        let screen = unsafe { (&raw const SCREEN).read() };
-        let fb = screen.ok_or("GRUB set up no 32-bit XRGB framebuffer")?;
+        let Some(fb) = (unsafe { (&raw const SCREEN).read() }) else {
+            // A machine can run without a screen, so the demos draw into plain memory.
+            crate::println!("framebuffer: none usable, drawing to memory");
+            let pixels = (&raw mut OFFSCREEN).cast::<u32>();
+            // SAFETY: a static of this shape, and every call shares the one set of pixels.
+            return Ok(unsafe { Framebuffer::new(pixels, OFFSCREEN_W, OFFSCREEN_H, OFFSCREEN_W) });
+        };
         crate::println!("framebuffer: {}x{} XRGB8888", fb.width(), fb.height());
         Ok(fb)
     }

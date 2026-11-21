@@ -53,6 +53,8 @@ pub use {
     green_tea_smp as smp, green_tea_virtio as virtio, green_tea_virtio_blk as virtio_blk,
 };
 pub use green_tea_framebuffer::Framebuffer;
+#[cfg(feature = "board-pc")]
+pub use green_tea_nvme as nvme;
 #[cfg(not(feature = "board-pc"))]
 pub use platform::Qemu;
 pub use platform::{Board, Platform, TimerInterrupt, VirtioBus};
