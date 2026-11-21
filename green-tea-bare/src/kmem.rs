@@ -2,9 +2,9 @@
 //! of objects cut from them. The allocators are green-tea-kmem's; here is the kernel's one
 //! instance of each.
 //!
-//! The page frames are the [`REGION`] bytes of RAM after the kernel's last section. The
-//! kernel doesn't ask the machine how much RAM it has: `cargo xtask kernel` starts QEMU
-//! with 128 MiB, and the kernel and this region end well inside that on every board. The
+//! The page frames are the [`REGION`] bytes of RAM after the kernel's last section.
+//! `cargo xtask kernel` starts QEMU with 128 MiB, and the kernel and this region end well
+//! inside that on every board. On a machine with too little, the first use panics. The
 //! allocator's table, a record per frame, is in the region's first pages, which are never
 //! handed out.
 //!
@@ -14,7 +14,7 @@
 //! panic.
 
 use crate::global::Global;
-use crate::platform::{Board, TimerInterrupt};
+use crate::platform::{Board, Platform, TimerInterrupt};
 use core::cell::UnsafeCell;
 use core::hint::black_box;
 use core::ops::Range;
@@ -56,10 +56,13 @@ static BUSY: Global<bool> = Global::new(false);
 /// everything after the table free.
 #[cold]
 fn start() -> Frames<'static> {
-    let base = region().start;
+    let Range { start: base, end } = region();
+    if let Some(ram_end) = Board::ram_end() {
+        assert!(end <= ram_end, "the page frames end at {end:#x}, past the end of RAM at {ram_end:#x}");
+    }
     let table = base as *mut Frame;
-    // SAFETY: linker.ld ends the kernel on a page, the RAM after it is there (see above)
-    // and nothing else uses it. The table is written before a reference to it is made.
+    // SAFETY: linker.ld ends the kernel on a page, the RAM after it is there (checked above,
+    // or a fault if not) and nothing else uses it. The table is written before a reference to it is made.
     unsafe {
         (0..PAGES).for_each(|frame| table.add(frame).write(Frame::NEW));
         Frames::new(base, slice::from_raw_parts_mut(table, PAGES), TABLE_PAGES)

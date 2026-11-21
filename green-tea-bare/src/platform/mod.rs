@@ -105,6 +105,12 @@ pub trait Platform {
         FwCfg(Self::FW_CFG)
     }
 
+    /// The first address past the machine's RAM, on a board where an access beyond it
+    /// would go unnoticed. On the others it faults, and the fault handler reports it.
+    fn ram_end() -> Option<usize> {
+        None
+    }
+
     /// Call `f` with every virtio device on the board: in `virt`'s virtio-mmio slots on
     /// riscv64 and aarch64, on the PCI bus on x86_64. An error if one is there that the
     /// driver can't use (a legacy virtio-mmio device).

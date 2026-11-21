@@ -323,6 +323,14 @@ impl Platform for Q35 {
     type FwCfg = IoPorts;
     const FW_CFG: IoPorts = IoPorts;
 
+    /// RAM starts at 0, and fw_cfg's item 3 is its size in bytes: what QEMU's `-m` said. A
+    /// write past it faults on nothing here, and is lost.
+    fn ram_end() -> Option<usize> {
+        use green_tea_fw_cfg::FwCfgPort;
+        IoPorts.select(0x03);
+        Some(u64::from_le_bytes([0; 8].map(|_| IoPorts.read_u8())) as usize)
+    }
+
     /// virtio devices are PCI functions here. SeaBIOS put ECAM at 0xb000_0000 (inside
     /// the 4 GiB that `_start` maps) and gave their BARs addresses below 4 GiB.
     fn for_each_virtio(mut f: impl FnMut(virtio::Device)) -> Result<(), &'static str> {
