@@ -55,12 +55,16 @@ pub use {
 };
 pub use green_tea_framebuffer::Framebuffer;
 #[cfg(feature = "board-pc")]
+pub use green_tea_clevo_lights as clevo_lights;
+#[cfg(feature = "board-pc")]
 pub use green_tea_nvme as nvme;
 #[cfg(not(feature = "board-pc"))]
 pub use platform::Qemu;
 pub use platform::{Board, Platform, TimerInterrupt, VirtioBus};
 #[cfg(feature = "board-pc")]
 pub use platform::InterruptCounts;
+#[cfg(feature = "board-pc")]
+pub use platform::EcPort;
 
 use core::panic::PanicInfo;
 

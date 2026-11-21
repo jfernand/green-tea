@@ -20,8 +20,9 @@ use crate::platform::{Platform, TimerInterrupt};
 use crate::{Framebuffer, pages};
 use core::arch::{asm, global_asm};
 use core::ptr::{read_volatile, write_volatile};
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use green_tea_acpi::{Acpi, Identity4G, IoApicEntry, IsaRoute};
+use green_tea_clevo_lights::{EcPorts, Firmware, Lights};
 use green_tea_framebuffer::Text;
 use green_tea_i8042::Keyboard;
 use green_tea_ioapic::{IoApic, Mmio, Route};
@@ -137,6 +138,10 @@ static SERIAL_IRQS: AtomicU64 = AtomicU64::new(0);
 static MOUSE_IRQS: AtomicU64 = AtomicU64::new(0);
 static BACKUP_TICKS: AtomicU64 = AtomicU64::new(0);
 static HALTS: AtomicU64 = AtomicU64::new(0);
+/// The DSDT's table id, length and checksum, which say which firmware this is.
+static DSDT_TABLE_ID: AtomicU64 = AtomicU64::new(0);
+static DSDT_LENGTH: AtomicU32 = AtomicU32::new(0);
+static DSDT_CHECKSUM: AtomicU8 = AtomicU8::new(0);
 static KEYBOARD_BUSY: AtomicBool = AtomicBool::new(false);
 static mut KEYBOARD: Keyboard = Keyboard::new();
 /// The test named on the command line.
@@ -362,6 +367,26 @@ fn init_cpus(acpi: Option<&Acpi<Identity4G>>) {
     CPU_COUNT.store(count, Ordering::Release);
 }
 
+/// The embedded controller's standard I/O ports.
+pub struct EcPort;
+
+impl EcPorts for EcPort {
+    fn status(&mut self) -> u8 {
+        // SAFETY: reading the EC's status has no effect.
+        unsafe { inb(0x66) }
+    }
+
+    fn command(&mut self, value: u8) {
+        // SAFETY: `Lights::new` has checked that this firmware's EC is the one it expects.
+        unsafe { outb(0x66, value) }
+    }
+
+    fn data(&mut self, value: u8) {
+        // SAFETY: as for `command`.
+        unsafe { outb(0x62, value) }
+    }
+}
+
 impl Pc {
     pub fn interrupt_counts() -> InterruptCounts {
         InterruptCounts {
@@ -371,6 +396,16 @@ impl Pc {
             backup_timer: BACKUP_TICKS.load(Ordering::Relaxed),
             halts: HALTS.load(Ordering::Relaxed),
         }
+    }
+
+    /// The keyboard lights, if this is a firmware whose lights we know.
+    pub fn keyboard_lights() -> Result<Lights<EcPort>, green_tea_clevo_lights::Error> {
+        let firmware = Firmware {
+            table_id: DSDT_TABLE_ID.load(Ordering::Relaxed).to_le_bytes(),
+            length: DSDT_LENGTH.load(Ordering::Relaxed),
+            checksum: DSDT_CHECKSUM.load(Ordering::Relaxed),
+        };
+        Lights::new(EcPort, crate::delay_ms, firmware)
     }
 
     /// Start the NVMe controller whose serial number is `serial`. Finding it means starting
@@ -464,6 +499,14 @@ impl Platform for Pc {
         }
         enable_x2apic_if_available();
         init_cpus(acpi.as_ref());
+        if let Some(header) = acpi.as_ref().and_then(Acpi::dsdt_header) {
+            let table_id = u64::from_le_bytes([
+                header[16], header[17], header[18], header[19], header[20], header[21], header[22], header[23],
+            ]);
+            DSDT_TABLE_ID.store(table_id, Ordering::Relaxed);
+            DSDT_LENGTH.store(u32::from_le_bytes([header[4], header[5], header[6], header[7]]), Ordering::Relaxed);
+            DSDT_CHECKSUM.store(header[9], Ordering::Relaxed);
+        }
 
         // SAFETY: the linker's symbols bound the heap and the stack pool, which nothing
         // uses yet; the boot stack is below them.

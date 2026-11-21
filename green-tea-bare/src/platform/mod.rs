@@ -32,6 +32,8 @@ pub use riscv64::RiscvVirt as Board;
 pub use x86_64::Pc as Board;
 #[cfg(all(target_arch = "x86_64", feature = "board-pc"))]
 pub use x86_64::InterruptCounts;
+#[cfg(all(target_arch = "x86_64", feature = "board-pc"))]
+pub use x86_64::EcPort;
 #[cfg(all(target_arch = "x86_64", not(feature = "board-pc")))]
 pub use x86_64::Q35 as Board;
 

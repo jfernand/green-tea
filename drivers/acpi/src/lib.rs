@@ -225,6 +225,16 @@ impl<M: Memory> Acpi<M> {
         (*table.get(40)? == 0).then(|| u64_at(table, 44)).flatten().filter(|&a| a != 0)
     }
 
+    /// The DSDT's 36-byte header, which identifies the firmware: the FADT's 64-bit pointer
+    /// to the table if it has one, and its 32-bit one if not.
+    pub fn dsdt_header(&self) -> Option<[u8; HEADER]> {
+        let mut buf = [0u8; MAX_TABLE];
+        let fadt = self.table(self.find(b"FACP")?, &mut buf)?;
+        let address = u64_at(fadt, 140).filter(|&a| a != 0).or_else(|| u32_at(fadt, 40).map(u64::from))?;
+        let mut header = [0u8; HEADER];
+        (self.memory.read(address, &mut header) && &header[..4] == b"DSDT").then_some(header)
+    }
+
     /// The I/O port of the power management timer, which counts at 3.579545 MHz.
     pub fn pm_timer_port(&self) -> Option<u16> {
         let mut buf = [0u8; MAX_TABLE];
@@ -498,6 +508,27 @@ mod tests {
         let fake = with(&[(0x2000, madt(&[isa_override(4, 20, 0b1111)]))]);
         let route = Acpi::new(&fake, &rsdp_v2(0x1000)).unwrap().isa_route(4);
         assert_eq!(route, IsaRoute { gsi: 20, active_low: true, level: true });
+    }
+
+    #[test]
+    fn the_dsdt_header_comes_from_the_64_bit_pointer_first() {
+        let mut fadt = std::vec![0u8; 112];
+        fadt[4..8].copy_from_slice(&0x5000u32.to_le_bytes());
+        fadt[104..112].copy_from_slice(&0x6000u64.to_le_bytes());
+        let mut fake = with(&[(0x3000, table(b"FACP", &fadt))]);
+        fake.0.insert(0x5000, table(b"DSDT", b"old"));
+        fake.0.insert(0x6000, table(b"DSDT", b"new one"));
+        let header = Acpi::new(&fake, &rsdp_v2(0x1000)).unwrap().dsdt_header().unwrap();
+        assert_eq!(u32::from_le_bytes(header[4..8].try_into().unwrap()), HEADER as u32 + 7);
+    }
+
+    #[test]
+    fn a_fadt_pointing_at_something_else_has_no_dsdt() {
+        let mut fadt = std::vec![0u8; 8];
+        fadt[4..8].copy_from_slice(&0x5000u32.to_le_bytes());
+        let mut fake = with(&[(0x3000, table(b"FACP", &fadt))]);
+        fake.0.insert(0x5000, table(b"SSDT", b""));
+        assert_eq!(Acpi::new(&fake, &rsdp_v2(0x1000)).unwrap().dsdt_header(), None);
     }
 
     #[test]

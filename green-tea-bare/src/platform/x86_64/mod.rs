@@ -43,7 +43,7 @@ mod pc;
 #[cfg(not(feature = "board-pc"))]
 mod q35;
 #[cfg(feature = "board-pc")]
-pub use pc::{InterruptCounts, Pc};
+pub use pc::{EcPort, InterruptCounts, Pc};
 #[cfg(not(feature = "board-pc"))]
 pub use q35::Q35;
 
