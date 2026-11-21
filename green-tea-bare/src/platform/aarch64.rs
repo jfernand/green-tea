@@ -85,7 +85,9 @@ impl Platform for AarchVirt {
     const NAME: &'static str = "aarch64";
     const GUARD_PAGES: bool = false;
 
+    /// The serial port, and the exception vectors, so that a fault on this CPU is reported.
     fn init() {
+        unsafe { asm!("msr vbar_el1, {}", "isb", in(reg) &raw const green_tea_vectors) };
         Pl011(0x0900_0000).enable();
     }
 
@@ -352,7 +354,6 @@ impl TimerInterrupt for AarchVirt {
         ON_TICK.set(Some(on_tick));
         Self::set_deadline(u64::MAX);
         unsafe {
-            asm!("msr vbar_el1, {}", "isb", in(reg) &raw const green_tea_vectors);
             // The priority byte for interrupt 27 (anything below the mask passes), then
             // enable it, and turn on the distributor and this CPU's interface.
             write_volatile((GICD_IPRIORITYR + TIMER_IRQ as usize) as *mut u8, 0x80);

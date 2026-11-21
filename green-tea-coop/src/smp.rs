@@ -75,6 +75,8 @@ fn run() -> Result<(usize, usize), &'static str> {
     if running != CPUS {
         return Err("the machine should have 4 CPUs: run it with -smp 4");
     }
+    #[cfg(target_arch = "aarch64")]
+    vectors()?;
     counter()?;
     let heap_locks = kernel_heap()?;
     let cache_locks = caches(0)?;
@@ -84,6 +86,27 @@ fn run() -> Result<(usize, usize), &'static str> {
 
 fn ms(ticks: u64) -> u64 {
     ticks / Board::ticks_per_ms()
+}
+
+/// Every CPU, the boot CPU included, has the exception vectors installed: without them a
+/// fault doesn't report anything.
+#[cfg(target_arch = "aarch64")]
+fn vectors() -> Result<(), &'static str> {
+    static VBAR: [AtomicUsize; CPUS] = [const { AtomicUsize::new(0) }; CPUS];
+    cpus::run(|cpu| {
+        let vbar: usize;
+        // SAFETY: reading a system register of this CPU's.
+        unsafe { core::arch::asm!("mrs {}, vbar_el1", out(reg) vbar) };
+        VBAR[cpu].store(vbar, Ordering::Relaxed);
+    });
+    let boot = VBAR[0].load(Ordering::Relaxed);
+    if boot == 0 {
+        return Err("the boot CPU has no exception vectors (VBAR_EL1 is 0)");
+    }
+    if VBAR.iter().any(|vbar| vbar.load(Ordering::Relaxed) != boot) {
+        return Err("the CPUs don't all have the same exception vectors");
+    }
+    Ok(())
 }
 
 // ---- A counter ------------------------------------------------------------------------

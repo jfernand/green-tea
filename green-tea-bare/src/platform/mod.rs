@@ -129,7 +129,7 @@ pub trait Platform {
 /// and with every register of the interrupted code saved, so a handler may switch to
 /// another task and come back much later.
 pub trait TimerInterrupt: Platform {
-    /// Install the trap handler and enable the timer interrupt at its source, so that
+    /// Enable the timer interrupt at its source (`init` installed the trap handler), so that
     /// `on_tick` runs once every time a deadline set with `set_deadline` passes, while
     /// interrupts are on. Interrupts stay off until `interrupts_on`.
     fn init_timer(on_tick: fn());
