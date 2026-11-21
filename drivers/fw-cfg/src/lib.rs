@@ -131,9 +131,10 @@ impl<P: FwCfgPort> FwCfg<P> {
 
     /// Write `data` to item `key` with a DMA request, and wait for it to finish.
     pub fn dma_write(&self, key: u16, data: &[u8]) -> Result<(), &'static str> {
+        let length = u32::try_from(data.len()).map_err(|_| "fw_cfg DMA write of 4 GiB or more")?;
         let mut access = DmaAccess {
             control: ((u32::from(key) << 16) | DMA_SELECT | DMA_WRITE).to_be(),
-            length: (data.len() as u32).to_be(),
+            length: length.to_be(),
             address: (data.as_ptr() as u64).to_be(),
         };
         let address = &raw mut access as u64;
@@ -198,5 +199,47 @@ impl FwCfgPort for IoPorts {
             green_tea_io::port::outl(0x514, ((address >> 32) as u32).to_be());
             green_tea_io::port::outl(0x518, (address as u32).to_be());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+    use core::cell::Cell;
+    use std::vec;
+
+    /// A device that finishes every DMA request at once, and counts them.
+    #[derive(Default)]
+    struct FakePort {
+        started: Cell<usize>,
+    }
+
+    impl FwCfgPort for FakePort {
+        fn select(&self, _key: u16) {}
+
+        fn read_u8(&self) -> u8 {
+            0
+        }
+
+        fn start_dma(&self, address: u64) {
+            self.started.set(self.started.get() + 1);
+            unsafe { write_volatile(address as *mut u32, 0) };
+        }
+    }
+
+    #[test]
+    fn a_dma_write_reaches_the_device() {
+        let fw_cfg = FwCfg(FakePort::default());
+        assert_eq!(fw_cfg.dma_write(0x20, &[1, 2, 3]), Ok(()));
+        assert_eq!(fw_cfg.0.started.get(), 1);
+    }
+
+    #[test]
+    fn a_dma_write_of_4_gib_is_refused() {
+        let fw_cfg = FwCfg(FakePort::default());
+        let data = vec![0u8; 1 << 32]; // zeroed on demand: never touched, so never resident
+        assert!(fw_cfg.dma_write(0x20, &data).is_err());
+        assert_eq!(fw_cfg.0.started.get(), 0, "the device was given a shortened length");
     }
 }

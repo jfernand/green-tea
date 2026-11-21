@@ -57,8 +57,8 @@ pub struct PciTransport {
     queue_notify: [usize; MAX_QUEUES],
 }
 
-/// If `f` is a virtio device: its virtio id and transport. Turns on its memory decoding
-/// and DMA, which the device needs from here on.
+/// If `f` is a virtio device with the capabilities this driver needs: its virtio id and
+/// transport. Only then turns on its memory decoding and DMA, which it needs from here on.
 pub fn probe(ecam: Ecam, f: Function) -> Option<(u32, PciTransport)> {
     if ecam.vendor_id(f) != VENDOR_VIRTIO {
         return None;
@@ -89,12 +89,13 @@ pub fn probe(ecam: Ecam, f: Function) -> Option<(u32, PciTransport)> {
             _ => {}
         }
     });
+    let (common, notify) = (common?, notify?);
     ecam.enable(f);
     Some((
         id,
         PciTransport {
-            common: common?,
-            notify: notify?,
+            common,
+            notify,
             notify_multiplier,
             device: device.unwrap_or(0),
             queue_notify: [0; MAX_QUEUES],
@@ -146,13 +147,19 @@ impl Transport for PciTransport {
             return 0;
         }
         self.write(QUEUE_SELECT, queue);
-        if self.read::<u16>(QUEUE_ENABLE) != 0 {
-            return 0;
-        }
         self.read(QUEUE_SIZE) // the maximum, until the driver writes a smaller one
     }
 
+    fn queue_in_use(&mut self, queue: u16) -> bool {
+        if usize::from(queue) >= MAX_QUEUES {
+            return false;
+        }
+        self.write(QUEUE_SELECT, queue);
+        self.read::<u16>(QUEUE_ENABLE) != 0
+    }
+
     fn setup_queue(&mut self, queue: u16, size: u16, descriptors: u64, driver: u64, device: u64) {
+        assert!(usize::from(queue) < MAX_QUEUES, "virtio queue {queue} is past what this driver can notify");
         self.write(QUEUE_SELECT, queue);
         self.write(QUEUE_SIZE, size);
         self.write_u64(QUEUE_DESC, descriptors);
@@ -164,7 +171,9 @@ impl Transport for PciTransport {
     }
 
     fn notify(&self, queue: u16) {
-        unsafe { write_volatile(self.queue_notify[usize::from(queue)] as *mut u16, queue) };
+        let address = self.queue_notify.get(usize::from(queue)).copied().unwrap_or(0);
+        assert!(address != 0, "virtio queue {queue} was never set up");
+        unsafe { write_volatile(address as *mut u16, queue) };
     }
 
     fn config_generation(&self) -> u32 {
@@ -174,5 +183,131 @@ impl Transport for PciTransport {
     fn read_config_u32(&self, offset: usize) -> u32 {
         assert!(self.device != 0, "this virtio device has no device configuration");
         unsafe { read_volatile((self.device + offset) as *const u32) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+    use crate::queue::Queue;
+    use std::boxed::Box;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    const F: Function = Function { bus: 0, device: 0, function: 0 };
+    const COMMAND: usize = 0x04;
+    const NOTIFY_OFFSET: usize = 0x100;
+    const NOTIFY_MULTIPLIER: u32 = 4;
+
+    #[repr(C, align(4096))]
+    struct Page([u8; 4096]);
+
+    /// A virtio disk in ordinary memory: its configuration space, and one 64-bit BAR
+    /// holding the common configuration at +0, and notifications at +0x100.
+    struct FakeDevice {
+        config: Box<Page>,
+        bar: Box<Page>,
+    }
+
+    impl FakeDevice {
+        fn new(with_notify: bool) -> FakeDevice {
+            let mut device = FakeDevice { config: Box::new(Page([0; 4096])), bar: Box::new(Page([0; 4096])) };
+            let bar = device.bar.0.as_ptr() as u64;
+            let config = &mut device.config.0;
+            config[0..2].copy_from_slice(&VENDOR_VIRTIO.to_le_bytes());
+            config[2..4].copy_from_slice(&0x1042u16.to_le_bytes());
+            config[0x06] = 1 << 4; // has a capability list
+            config[0x10..0x14].copy_from_slice(&(bar as u32 | 0b100).to_le_bytes());
+            config[0x14..0x18].copy_from_slice(&((bar >> 32) as u32).to_le_bytes());
+            config[0x34] = 0x40;
+            config[0x40] = CAPABILITY_VENDOR;
+            config[0x40 + CAP_CFG_TYPE] = CFG_COMMON;
+            if with_notify {
+                config[0x41] = 0x60;
+                config[0x60] = CAPABILITY_VENDOR;
+                config[0x60 + CAP_CFG_TYPE] = CFG_NOTIFY;
+                config[0x60 + CAP_OFFSET..0x60 + CAP_OFFSET + 4].copy_from_slice(&(NOTIFY_OFFSET as u32).to_le_bytes());
+                config[0x60 + CAP_NOTIFY_MULTIPLIER..0x60 + CAP_NOTIFY_MULTIPLIER + 4]
+                    .copy_from_slice(&NOTIFY_MULTIPLIER.to_le_bytes());
+            }
+            device.bar.0[QUEUE_SIZE..QUEUE_SIZE + 2].copy_from_slice(&16u16.to_le_bytes());
+            device
+        }
+
+        fn ecam(&self) -> Ecam {
+            Ecam(self.config.0.as_ptr() as usize)
+        }
+
+        fn transport(&self) -> PciTransport {
+            probe(self.ecam(), F).unwrap().1
+        }
+
+        fn command(&self) -> u16 {
+            self.ecam().read_u16(F, COMMAND)
+        }
+
+        fn bar_u16(&self, offset: usize) -> u16 {
+            unsafe { read_volatile(self.bar.0.as_ptr().add(offset).cast::<u16>()) }
+        }
+
+        fn set_bar_u16(&mut self, offset: usize, value: u16) {
+            unsafe { write_volatile(self.bar.0.as_mut_ptr().add(offset).cast::<u16>(), value) };
+        }
+    }
+
+    #[test]
+    fn a_free_queue_can_be_set_up_and_notified() {
+        let mut device = FakeDevice::new(true);
+        device.set_bar_u16(QUEUE_NOTIFY_OFF, 2);
+        let mut transport = device.transport();
+        transport.setup_queue(1, 16, 0x1000, 0x2000, 0x3000);
+        transport.notify(1);
+        assert_eq!(device.bar_u16(NOTIFY_OFFSET + 2 * NOTIFY_MULTIPLIER as usize), 1);
+    }
+
+    #[test]
+    fn a_queue_in_use_is_not_reported_as_missing() {
+        let mut device = FakeDevice::new(true);
+        device.set_bar_u16(QUEUE_ENABLE, 1);
+        let error = Queue::new(&mut device.transport(), 0).err();
+        assert_eq!(error, Some("the virtio queue is already in use"));
+    }
+
+    #[test]
+    fn probe_turns_on_a_complete_device() {
+        let device = FakeDevice::new(true);
+        assert!(probe(device.ecam(), F).is_some());
+        assert_eq!(device.command(), 0b110);
+    }
+
+    #[test]
+    fn probe_leaves_an_incomplete_device_off() {
+        let device = FakeDevice::new(false);
+        assert!(probe(device.ecam(), F).is_none());
+        assert_eq!(device.command(), 0, "memory decoding and bus mastering were left on");
+    }
+
+    #[test]
+    #[should_panic(expected = "never set up")]
+    fn notifying_a_queue_never_set_up_panics() {
+        FakeDevice::new(true).transport().notify(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "never set up")]
+    fn notifying_a_queue_past_the_table_panics() {
+        FakeDevice::new(true).transport().notify(MAX_QUEUES as u16);
+    }
+
+    #[test]
+    fn setting_up_a_queue_past_the_table_writes_no_register() {
+        let device = FakeDevice::new(true);
+        let mut transport = device.transport();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            transport.setup_queue(MAX_QUEUES as u16, 8, 0x1000, 0x2000, 0x3000);
+        }));
+        assert!(result.is_err());
+        assert_eq!(device.bar_u16(QUEUE_SELECT), 0, "the queue was selected");
+        assert_eq!(device.bar_u16(QUEUE_SIZE), 16, "the queue's size was written");
     }
 }

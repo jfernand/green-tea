@@ -1,8 +1,10 @@
 //! What green-tea's drivers share: [`dma_fence`], and on x86_64 the [`port`] I/O
 //! instructions.
 //!
-//! The drivers assume what green-tea-bare provides: one CPU, and memory mapped one to
-//! one, so the address of a buffer is also the physical address a device needs for DMA.
+//! The drivers assume what green-tea-bare provides: memory mapped one to one, so the
+//! address of a buffer is also the physical address a device needs for DMA. They take no
+//! locks: where a kernel starts several CPUs, keeping them from using one device at once
+//! is the caller's job.
 
 #![no_std]
 

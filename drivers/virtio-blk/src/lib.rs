@@ -14,7 +14,7 @@ extern crate alloc;
 use alloc::boxed::Box;
 use green_tea_io::dma_fence;
 use green_tea_virtio::queue::{Buffer, Queue};
-use green_tea_virtio::{Transport, driver_ok, negotiate};
+use green_tea_virtio::{Transport, driver_ok, failed, negotiate};
 use core::fmt;
 use core::ptr::{read_volatile, write_volatile};
 
@@ -43,6 +43,8 @@ pub enum Error {
     Unaligned,
     /// Past the end of the disk.
     OutOfRange,
+    /// 4 GiB or more: one request's buffer can't be that long.
+    TooLong,
     ReadOnly,
     /// The device said so.
     Io,
@@ -56,6 +58,7 @@ impl fmt::Display for Error {
         f.write_str(match self {
             Error::Unaligned => "not a whole number of sectors",
             Error::OutOfRange => "past the end of the disk",
+            Error::TooLong => "a request must be under 4 GiB",
             Error::ReadOnly => "the disk is read-only",
             Error::Io => "I/O error",
             Error::Unsupported => "the device doesn't support that request",
@@ -91,7 +94,7 @@ impl<T: Transport> Blk<T> {
     /// Initialize the device behind `transport`, which must be a virtio block device.
     pub fn new(mut transport: T) -> Result<Blk<T>, &'static str> {
         let features = negotiate(&mut transport, F_RO | F_FLUSH)?;
-        let queue = Queue::new(&mut transport, 0)?;
+        let queue = Queue::new(&mut transport, 0).inspect_err(|_| failed(&mut transport))?;
         driver_ok(&mut transport);
         let capacity = transport.read_config_u64(CONFIG_CAPACITY);
         let request = Box::into_raw(Box::new(Request {
@@ -118,7 +121,12 @@ impl<T: Transport> Blk<T> {
     /// Read sectors from `sector` on into `buf`, a whole number of sectors long.
     pub fn read(&mut self, sector: u64, buf: &mut [u8]) -> Result<(), Error> {
         self.check(sector, buf.len())?;
-        self.request(T_IN, sector, Some(Buffer::writes(buf)))
+        let written = self.request(T_IN, sector, Some(Buffer::writes(buf)))?;
+        // The device counts what it wrote: the data, then the status byte.
+        if (written as usize) < buf.len() + 1 {
+            return Err(Error::Device);
+        }
+        Ok(())
     }
 
     /// Write `buf`, a whole number of sectors long, from `sector` on.
@@ -127,7 +135,7 @@ impl<T: Transport> Blk<T> {
             return Err(Error::ReadOnly);
         }
         self.check(sector, buf.len())?;
-        self.request(T_OUT, sector, Some(Buffer::reads(buf)))
+        self.request(T_OUT, sector, Some(Buffer::reads(buf))).map(|_| ())
     }
 
     /// Wait until every write so far is on the disk, not just in its cache.
@@ -135,7 +143,7 @@ impl<T: Transport> Blk<T> {
         if !self.write_cache() {
             return Ok(()); // writes go straight through
         }
-        self.request(T_FLUSH, 0, None)
+        self.request(T_FLUSH, 0, None).map(|_| ())
     }
 
     /// The device's serial number: up to 20 bytes, NUL-padded.
@@ -149,6 +157,9 @@ impl<T: Transport> Blk<T> {
         if len == 0 || !len.is_multiple_of(SECTOR_SIZE) {
             return Err(Error::Unaligned);
         }
+        if u32::try_from(len).is_err() {
+            return Err(Error::TooLong);
+        }
         let sectors = (len / SECTOR_SIZE) as u64;
         match sector.checked_add(sectors) {
             Some(end) if end <= self.capacity => Ok(()),
@@ -156,8 +167,9 @@ impl<T: Transport> Blk<T> {
         }
     }
 
-    /// Make one request and spin until the device answers.
-    fn request(&mut self, kind: u32, sector: u64, data: Option<Buffer>) -> Result<(), Error> {
+    /// Make one request and spin until the device answers. Returns how many bytes it says
+    /// it wrote, the status byte included.
+    fn request(&mut self, kind: u32, sector: u64, data: Option<Buffer>) -> Result<u32, Error> {
         let request = self.request;
         unsafe {
             write_volatile(&raw mut (*request).header, Header { kind, reserved: 0, sector });
@@ -171,9 +183,9 @@ impl<T: Transport> Blk<T> {
         }
         .map_err(|_| Error::Device)?;
 
-        let done = loop {
-            if let Some((done, _written)) = self.queue.pop_used() {
-                break done;
+        let (done, written) = loop {
+            if let Some(used) = self.queue.pop_used() {
+                break used;
             }
             core::hint::spin_loop();
         };
@@ -182,10 +194,146 @@ impl<T: Transport> Blk<T> {
             return Err(Error::Device);
         }
         match unsafe { read_volatile(&raw const (*request).status) } {
-            S_OK => Ok(()),
+            S_OK => Ok(written),
             S_IOERR => Err(Error::Io),
             S_UNSUPP => Err(Error::Unsupported),
             _ => Err(Error::Device),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+    use core::cell::Cell;
+    use green_tea_virtio::{F_VERSION_1, STATUS_ACKNOWLEDGE, STATUS_DRIVER, STATUS_FAILED, STATUS_FEATURES_OK};
+    use std::vec;
+
+    const DESC_F_NEXT: u16 = 1;
+    const DESC_F_WRITE: u16 = 2;
+
+    /// A disk that answers each request as soon as it's notified: it fills what it may
+    /// write with 0xab, and reports status OK.
+    struct FakeDisk {
+        max_queue: u16,
+        capacity: u64,
+        /// How many bytes fewer than it wrote the device reports in the used ring.
+        short_by: u32,
+        status: Cell<u8>,
+        rings: Cell<(u64, u64, u64)>,
+        notified: Cell<usize>,
+    }
+
+    impl FakeDisk {
+        fn new() -> FakeDisk {
+            FakeDisk {
+                max_queue: 16,
+                capacity: 8,
+                short_by: 0,
+                status: Cell::new(0),
+                rings: Cell::new((0, 0, 0)),
+                notified: Cell::new(0),
+            }
+        }
+    }
+
+    impl Transport for &FakeDisk {
+        fn device_features(&mut self) -> u64 {
+            F_VERSION_1
+        }
+        fn set_driver_features(&mut self, _features: u64) {}
+        fn status(&self) -> u8 {
+            self.status.get()
+        }
+        fn set_status(&mut self, status: u8) {
+            self.status.set(status);
+        }
+        fn max_queue_size(&mut self, _queue: u16) -> u16 {
+            self.max_queue
+        }
+        fn queue_in_use(&mut self, _queue: u16) -> bool {
+            false
+        }
+        fn setup_queue(&mut self, _queue: u16, _size: u16, descriptors: u64, driver: u64, device: u64) {
+            self.rings.set((descriptors, driver, device));
+        }
+        fn config_generation(&self) -> u32 {
+            0
+        }
+        fn read_config_u32(&self, offset: usize) -> u32 {
+            (self.capacity >> (offset * 8)) as u32
+        }
+
+        fn notify(&self, _queue: u16) {
+            self.notified.set(self.notified.get() + 1);
+            let (descriptors, driver, device) = self.rings.get();
+            unsafe {
+                let index = read_volatile((driver + 2) as *const u16);
+                let slot = u64::from(index.wrapping_sub(1) % 16);
+                let head = read_volatile((driver + 4 + 2 * slot) as *const u16);
+                let (mut current, mut written) = (head, 0);
+                loop {
+                    let descriptor = descriptors + 16 * u64::from(current);
+                    let address = read_volatile(descriptor as *const u64);
+                    let length = read_volatile((descriptor + 8) as *const u32);
+                    let flags = read_volatile((descriptor + 12) as *const u16);
+                    let next = read_volatile((descriptor + 14) as *const u16);
+                    if flags & DESC_F_WRITE != 0 {
+                        let fill = if flags & DESC_F_NEXT != 0 { 0xab } else { S_OK };
+                        core::ptr::write_bytes(address as *mut u8, fill, length as usize);
+                        written += length;
+                    }
+                    if flags & DESC_F_NEXT == 0 {
+                        break;
+                    }
+                    current = next;
+                }
+                write_volatile((device + 4 + 8 * slot) as *mut u32, u32::from(head));
+                write_volatile((device + 8 + 8 * slot) as *mut u32, written - self.short_by);
+                write_volatile((device + 2) as *mut u16, index);
+            }
+        }
+    }
+
+    #[test]
+    fn a_read_returns_what_the_device_wrote() {
+        let disk = FakeDisk::new();
+        let mut blk = Blk::new(&disk).unwrap();
+        let mut buf = [0u8; SECTOR_SIZE];
+        assert_eq!(blk.read(0, &mut buf), Ok(()));
+        assert_eq!(buf, [0xab; SECTOR_SIZE]);
+    }
+
+    #[test]
+    fn a_queue_failure_marks_the_device_failed() {
+        let disk = FakeDisk { max_queue: 0, ..FakeDisk::new() };
+        assert!(Blk::new(&disk).is_err());
+        let expected = STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK | STATUS_FAILED;
+        assert_eq!(disk.status.get(), expected);
+    }
+
+    #[test]
+    fn a_short_read_reported_ok_is_an_error() {
+        let disk = FakeDisk { short_by: 1, ..FakeDisk::new() };
+        let mut blk = Blk::new(&disk).unwrap();
+        let mut buf = [0u8; SECTOR_SIZE];
+        assert_eq!(blk.read(0, &mut buf), Err(Error::Device));
+    }
+
+    #[test]
+    fn a_write_needs_only_the_status_byte_back() {
+        let disk = FakeDisk::new();
+        let mut blk = Blk::new(&disk).unwrap();
+        assert_eq!(blk.write(0, &[1; SECTOR_SIZE]), Ok(()));
+    }
+
+    #[test]
+    fn a_read_of_4_gib_is_refused_before_the_device_sees_it() {
+        let disk = FakeDisk { capacity: 1 << 40, ..FakeDisk::new() };
+        let mut blk = Blk::new(&disk).unwrap();
+        let mut buf = vec![0u8; 1 << 32]; // zeroed on demand: never touched, so never resident
+        assert_eq!(blk.read(0, &mut buf), Err(Error::TooLong));
+        assert_eq!(disk.notified.get(), 0, "the device was given a shortened length");
     }
 }

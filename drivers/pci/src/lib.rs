@@ -23,6 +23,7 @@ const HEADER_TYPE: usize = 0x0e;
 const BAR0: usize = 0x10;
 const SUBSYSTEM_ID: usize = 0x2e;
 const CAPABILITIES: usize = 0x34;
+const CAPABILITIES_START: usize = 0x40; // the first offset past the header
 
 const COMMAND_MEMORY: u16 = 1 << 1; // respond to its memory BARs
 const COMMAND_BUS_MASTER: u16 = 1 << 2; // allowed to do DMA
@@ -96,27 +97,39 @@ impl Ecam {
 
     /// The memory address BAR `index` points at, as the firmware set it: `None` for an
     /// I/O-port BAR or one that wasn't given an address. A 64-bit BAR takes two slots,
-    /// low half first.
+    /// low half first. An endpoint has six slots and a bridge two; `None` past them, and
+    /// for any other header type.
     pub fn bar(&self, f: Function, index: usize) -> Option<u64> {
+        let slots = match self.read_u8(f, HEADER_TYPE) & !HEADER_MULTI_FUNCTION {
+            0 => 6,
+            1 => 2,
+            _ => 0,
+        };
+        if index >= slots {
+            return None;
+        }
         let low = self.read_u32(f, BAR0 + 4 * index);
         if low & 1 != 0 {
             return None; // I/O space
         }
         let address = match (low >> 1) & 0b11 {
             0b00 => u64::from(low & !0xf),
-            0b10 if index < 5 => u64::from(low & !0xf) | u64::from(self.read_u32(f, BAR0 + 4 * (index + 1))) << 32,
+            0b10 if index + 1 < slots => u64::from(low & !0xf) | u64::from(self.read_u32(f, BAR0 + 4 * (index + 1))) << 32,
             _ => return None,
         };
         (address != 0).then_some(address)
     }
 
-    /// Call `f` with the offset and id of each capability in the list.
+    /// Call `f` with the offset and id of each capability in the list. A malformed list
+    /// ends the walk: capabilities live after the 64-byte header, and each is visited once.
     pub fn for_each_capability(&self, function: Function, mut f: impl FnMut(usize, u8)) {
         if self.read_u16(function, STATUS) & STATUS_CAPABILITIES == 0 {
             return;
         }
+        let mut visited = [false; 64]; // one per 4-byte slot of the first 256 bytes
         let mut offset = usize::from(self.read_u8(function, CAPABILITIES) & !0b11);
-        while offset != 0 {
+        while offset >= CAPABILITIES_START && !visited[offset / 4] {
+            visited[offset / 4] = true;
             f(offset, self.read_u8(function, offset));
             offset = usize::from(self.read_u8(function, offset + 1) & !0b11);
         }
@@ -126,5 +139,114 @@ impl Ecam {
     pub fn enable(&self, f: Function) {
         let command = self.read_u16(f, COMMAND);
         self.write_u16(f, COMMAND, command | COMMAND_MEMORY | COMMAND_BUS_MASTER);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+    use std::vec::Vec;
+
+    const F: Function = Function { bus: 0, device: 0, function: 0 };
+
+    /// One function's configuration space, in ordinary memory.
+    #[repr(C, align(4096))]
+    struct Space([u8; 4096]);
+
+    impl Space {
+        fn new() -> Space {
+            Space([0; 4096])
+        }
+
+        fn ecam(&self) -> Ecam {
+            Ecam(self.0.as_ptr() as usize)
+        }
+
+        fn set_u32(&mut self, offset: usize, value: u32) {
+            self.0[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+
+        /// A capability list with these `(offset, next)` entries, the first one at the head.
+        fn capabilities(&mut self, list: &[(u8, u8)]) {
+            self.0[STATUS] = STATUS_CAPABILITIES as u8;
+            self.0[CAPABILITIES] = list[0].0;
+            for &(offset, next) in list {
+                self.0[usize::from(offset)] = 0x09;
+                self.0[usize::from(offset) + 1] = next;
+            }
+        }
+    }
+
+    fn walk(space: &Space) -> Vec<usize> {
+        let mut seen = Vec::new();
+        space.ecam().for_each_capability(F, |offset, _| {
+            seen.push(offset);
+            assert!(seen.len() <= 48, "still walking the capability list after 48 entries: {:x?}", &seen[..4]);
+        });
+        seen
+    }
+
+    #[test]
+    fn a_capability_list_ends_at_zero() {
+        let mut space = Space::new();
+        space.capabilities(&[(0x40, 0x50), (0x50, 0)]);
+        assert_eq!(walk(&space), [0x40, 0x50]);
+    }
+
+    #[test]
+    fn a_cycle_in_the_capability_list_ends_the_walk() {
+        let mut space = Space::new();
+        space.capabilities(&[(0x40, 0x50), (0x50, 0x40)]);
+        assert_eq!(walk(&space), [0x40, 0x50]);
+    }
+
+    #[test]
+    fn a_capability_cannot_point_into_the_header() {
+        let mut space = Space::new();
+        space.capabilities(&[(0x40, 0x10)]);
+        space.set_u32(0x10, 0x0000_5009); // would read as a capability, with a next pointer
+        assert_eq!(walk(&space), [0x40]);
+    }
+
+    #[test]
+    fn an_endpoint_has_six_bars() {
+        let mut space = Space::new();
+        space.set_u32(BAR0 + 4 * 5, 0xfe00_0000);
+        assert_eq!(space.ecam().bar(F, 5), Some(0xfe00_0000));
+    }
+
+    #[test]
+    fn a_64_bit_bar_takes_two_slots() {
+        let mut space = Space::new();
+        space.set_u32(BAR0 + 4 * 4, 0xfe00_0004);
+        space.set_u32(BAR0 + 4 * 5, 0x1);
+        assert_eq!(space.ecam().bar(F, 4), Some(0x1_fe00_0000));
+    }
+
+    #[test]
+    fn there_is_no_seventh_bar() {
+        let mut space = Space::new();
+        space.set_u32(BAR0 + 4 * 6, 0xfe00_0000); // the CardBus CIS pointer
+        assert_eq!(space.ecam().bar(F, 6), None);
+    }
+
+    #[test]
+    fn a_bridge_has_two_bars() {
+        let mut space = Space::new();
+        space.0[HEADER_TYPE] = 1;
+        space.set_u32(BAR0 + 4, 0xfe00_0000);
+        space.set_u32(BAR0 + 4 * 2, 0x0002_0100); // primary, secondary, subordinate bus
+        assert_eq!(space.ecam().bar(F, 1), Some(0xfe00_0000));
+        assert_eq!(space.ecam().bar(F, 2), None);
+    }
+
+    #[test]
+    fn a_64_bit_bar_cannot_start_in_a_bridges_last_slot() {
+        let mut space = Space::new();
+        space.0[HEADER_TYPE] = 1 | HEADER_MULTI_FUNCTION;
+        space.set_u32(BAR0 + 4, 0xfe00_0004);
+        space.set_u32(BAR0 + 4 * 2, 0x0002_0100); // not a high half: bus numbers
+        assert_eq!(space.ecam().bar(F, 1), None);
     }
 }

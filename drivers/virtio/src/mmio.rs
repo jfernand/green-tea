@@ -96,10 +96,12 @@ impl Transport for MmioTransport {
 
     fn max_queue_size(&mut self, queue: u16) -> u16 {
         self.write(QUEUE_SEL, u32::from(queue));
-        if self.read(QUEUE_READY) != 0 {
-            return 0; // already in use
-        }
         self.read(QUEUE_NUM_MAX) as u16
+    }
+
+    fn queue_in_use(&mut self, queue: u16) -> bool {
+        self.write(QUEUE_SEL, u32::from(queue));
+        self.read(QUEUE_READY) != 0
     }
 
     fn setup_queue(&mut self, queue: u16, size: u16, descriptors: u64, driver: u64, device: u64) {
@@ -121,5 +123,44 @@ impl Transport for MmioTransport {
 
     fn read_config_u32(&self, offset: usize) -> u32 {
         self.read(CONFIG + offset)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::queue::Queue;
+
+    /// A device's registers, in ordinary memory.
+    #[repr(C, align(4096))]
+    struct Registers([u32; 0x200 / 4]);
+
+    impl Registers {
+        fn new(queue_ready: u32) -> Registers {
+            let mut registers = Registers([0; 0x200 / 4]);
+            registers.0[MAGIC_VALUE / 4] = MAGIC;
+            registers.0[VERSION / 4] = 2;
+            registers.0[DEVICE_ID / 4] = crate::ID_BLOCK;
+            registers.0[QUEUE_NUM_MAX / 4] = 16;
+            registers.0[QUEUE_READY / 4] = queue_ready;
+            registers
+        }
+
+        fn transport(&mut self) -> MmioTransport {
+            probe(self.0.as_mut_ptr() as usize).unwrap().unwrap().1
+        }
+    }
+
+    #[test]
+    fn a_free_queue_can_be_set_up() {
+        let mut registers = Registers::new(0);
+        assert!(Queue::new(&mut registers.transport(), 0).is_ok());
+    }
+
+    #[test]
+    fn a_queue_in_use_is_not_reported_as_missing() {
+        let mut registers = Registers::new(1);
+        let error = Queue::new(&mut registers.transport(), 0).err();
+        assert_eq!(error, Some("the virtio queue is already in use"));
     }
 }
