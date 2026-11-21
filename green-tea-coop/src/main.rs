@@ -2,8 +2,9 @@
 //! context switch on a ramfb display. Runs on riscv64 and aarch64 (`virt`) and x86_64
 //! (`q35`): `cargo xtask kernel --kernel coop`.
 //!
-//! Tasks switch only when they call `yield_now`: no interrupts, one CPU. Everything else
-//! (boot, drivers, tasks, scheduler) is green-tea-bare; this is just the demo.
+//! In the demo, tasks switch only when they call `yield_now`: no interrupts, one CPU (the
+//! smp, shard and smr tests start the other CPUs). Everything else (boot, drivers, tasks,
+//! scheduler) is green-tea-bare; this is just the demo.
 //!
 //! With the fw_cfg file `opt/green-tea/test` set to a test's name, it runs that test
 //! instead of the demo: `kmain` matches the name. `cargo xtask kernel --kernel <name>` sets
@@ -436,7 +437,7 @@ struct PoolRun {
 static VICTIM: Global<usize> = Global::new(0);
 
 fn pool_run<P: Pool>() -> PoolRun {
-    // Never freed: the heap doesn't, and the test runs once.
+    // Never freed: the test runs once.
     let base = Box::leak(Box::new([0usize; POOL_SLOTS * POOL_SLOT / size_of::<usize>()])).as_mut_ptr() as usize;
     let mut pool = unsafe { P::new(base, POOL_SLOT, POOL_SLOTS, 0) };
     let take = |pool: &mut P| pool.take().map_or(usize::MAX, |slot| (slot - base) / POOL_SLOT);
