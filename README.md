@@ -31,7 +31,7 @@ kernels built on the same context switch:
 | [`green-tea-lisp`](green-tea-lisp) | A small Lisp: a reader, an evaluator and a printer, over a heap it reaches only through the ten operations of a trait. The first heap counts references. `no_std`; `--kernel lisp` runs it. |
 | [`green-tea-shard`](green-tea-shard) | Allocating from several CPUs with no lock, after mimalloc: pages of one size class each, a free list in every page, and a second list in every page that other CPUs push to with a compare-and-swap. `no_std`; its tests run on the host with real threads. |
 | [`green-tea-smr`](green-tea-smr) | Safe memory reclamation: a lock-free stack and queue with their nodes on the heap, and when a node they have unlinked may be freed, by epochs and by hazard pointers. `no_std`; its tests run on the host with real threads. |
-| [`drivers/`](drivers) | The device drivers, one crate each, which know their device but not the machine: serial ports (16550, PL011), QEMU's fw_cfg and ramfb, PCI through ECAM, virtio (MMIO and PCI transports, split virtqueues) and virtio-blk. |
+| [`drivers/`](drivers) | The device drivers, one crate each, which know their device but not the machine: serial ports (16550, PL011), QEMU's fw_cfg and ramfb, drawing on a framebuffer, PCI through ECAM, virtio (MMIO and PCI transports, split virtqueues), virtio-blk, and for physical PCs Multiboot2, ACPI and a PS/2 keyboard. |
 | [`green-tea-bare`](green-tea-bare) | What the kernels share: boot code per board behind the `Platform` and `TimerInterrupt` traits (timers, interrupts, paging, and where each device is), a port of v2's `Task` and scheduler, and a heap. |
 | [`green-tea-coop`](green-tea-coop) | A bare-metal kernel for QEMU on riscv64, aarch64 and x86_64 whose tasks yield to each other, so you can watch the context switches on screen. |
 | [`green-tea-preempt`](green-tea-preempt) | The same, but the tasks never yield: a timer interrupt preempts them. One task sleeps instead, and costs no time slices. |
@@ -98,6 +98,22 @@ cargo xtask shell                     # the shell, on this terminal (--target to
 cargo xtask kernel --target aarch64   # just one architecture
 cargo xtask kernel --headless --screenshot   # no windows; saves target/kernel/<kernel>-<arch>.png
 ```
+
+### On a physical PC
+
+The kernels build for QEMU by default. `--board pc` builds them for a physical x86_64 PC
+booted by GRUB from UEFI, and tests them in QEMU with UEFI firmware:
+
+```sh
+sudo apt install grub-efi-amd64-bin ovmf
+cargo xtask kernel --board pc --headless              # every kernel but disk
+cargo xtask kernel --board pc --kernel shell --headless
+```
+
+To boot one on a machine, copy `target/kernel/pc/shell-x86_64/EFI` to a FAT-formatted USB
+stick and choose the stick in the firmware's boot menu. Secure Boot must be off, since this
+GRUB isn't signed. Output goes to the screen, and input comes from a PS/2 keyboard, which
+is what most laptops' built-in keyboards are. USB keyboards and disks aren't supported.
 
 ### Cooperative: green-tea-coop
 

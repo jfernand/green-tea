@@ -157,7 +157,8 @@ fn init_screen(info: &Info) {
     paging::map_high(d.addr as usize, d.pitch as usize * d.height as usize);
     let (w, h) = (d.width as usize, d.height as usize);
     // SAFETY: GRUB's framebuffer, of this shape, now mapped; nothing else uses that memory.
-    let fb = unsafe { Framebuffer::new(d.addr as *mut u32, w, h, d.pitch as usize / 4) };
+    let mut fb = unsafe { Framebuffer::new(d.addr as *mut u32, w, h, d.pitch as usize / 4) };
+    fb.fill_rect(0, 0, w, h, 0); // the firmware's logo and GRUB's text are still there
     let (x, y) = if w >= 1024 {
         (BESIDE_DEMO, 0)
     } else if h >= 600 {
