@@ -255,6 +255,7 @@ impl Shell {
     fn trace(&mut self, arg: &str) {
         match arg {
             "on" => {
+                drop(heap::stop_recording()); // one under way: its buffer's free isn't in the new one
                 self.trace = None; // frees the last trace's buffer
                 let buffer = alloc::vec![Default::default(); replay::TRACE_EVENTS].into_boxed_slice();
                 // The runtime allocates its list of sleeping tasks the first time a task
@@ -262,7 +263,7 @@ impl Shell {
                 // now, so that it isn't sometimes in the trace and sometimes not.
                 green_tea_bare::task::sleep_ms(1);
                 self.counted = heap::with(|fit| (fit.stats().allocations, fit.stats().frees));
-                drop(heap::record(buffer));
+                heap::record(buffer);
                 println!("recording the heap's allocations and frees, up to {} of them", replay::TRACE_EVENTS);
             }
             "off" => match heap::stop_recording() {
@@ -290,6 +291,23 @@ impl Shell {
         if self.unknown != unknown {
             self.unknown = unknown;
             return Err("a nested `repeat` counted as an unknown command");
+        }
+        Ok(())
+    }
+
+    /// A second `trace on` starts a clean recording: the old one's buffer is freed before
+    /// it starts. Leaves alone a recording that was typed, and the last one kept.
+    fn trace_twice(&mut self) -> Result<(), &'static str> {
+        if heap::is_recording() {
+            return Ok(());
+        }
+        let kept = (self.trace.take(), self.counted);
+        self.trace("on");
+        self.trace("on");
+        let events = heap::stop_recording().map_or(0, |recording| recording.len);
+        (self.trace, self.counted) = kept;
+        if events != 0 {
+            return Err("a second `trace on` put the old buffer's free in the new trace");
         }
         Ok(())
     }
@@ -337,7 +355,7 @@ impl Shell {
             println!("FAIL: the arena has {in_use} bytes in use after a reset, and peaked at {peak}");
         } else if let Err(e) = heap::with(|fit| fit.check()) {
             println!("FAIL: the heap is inconsistent: {e}");
-        } else if let Err(e) = empty_arena().and_then(|()| self.repeats()) {
+        } else if let Err(e) = empty_arena().and_then(|()| self.repeats()).and_then(|()| self.trace_twice()) {
             println!("FAIL: {e}");
         } else {
             println!(

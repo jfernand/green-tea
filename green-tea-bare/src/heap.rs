@@ -104,6 +104,11 @@ pub fn stop_recording() -> Option<Recording> {
     locked(|_, recording| recording.take())
 }
 
+/// Whether a recording is under way.
+pub fn is_recording() -> bool {
+    locked(|_, recording| recording.is_some())
+}
+
 /// Make the allocator, on the heap's first use. Out of line on purpose: a `Tlsf` is 3 KiB
 /// of table, and built in `locked` it would be in the stack frame of every allocation,
 /// on task stacks of 16 KiB.
