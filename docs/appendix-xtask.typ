@@ -22,7 +22,7 @@
   [`kernel`], [`--headless`], [No windows: quit each QEMU as soon as its kernel finishes],
   [`kernel`], [`--screenshot`], [Save the final screen to `target/kernel/<kernel>-<arch>.png`],
   [`kernel`], [`--jobs <n>`], [At most this many virtual CPUs running at once. Default: half of the host's when headless, and no limit with windows],
-  [`kernel`], [`--board <b>`], [`qemu`, the default, or `pc`: build for a physical x86_64 PC and test it in QEMU under UEFI. Runs on x86_64 only, and skips `disk`],
+  [`kernel`], [`--board <b>`], [`qemu`, the default, or `pc`: build for a physical x86_64 PC and test it in QEMU under UEFI. Runs on x86_64 only, with `disk` on NVMe],
   [`shell`], [`--target <arch>`], [The architecture. Default: riscv64],
   [`shell`], [`--release`], [Build with optimizations],
   [`trace`], [`--target <arch>`], [The architecture. Default: riscv64],

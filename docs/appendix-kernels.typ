@@ -8,7 +8,7 @@
   [`coop`], [coop], [Tasks yield to each other, and the number of switches is as expected],
   [`preempt`], [preempt], [A timer preempts tasks that never yield, and one that sleeps],
   [`overflow`], [coop], [A task overflowing its stack hits its guard page. riscv64, x86_64],
-  [`disk`], [coop], [Reads a disk image over virtio-blk, and writes a sector],
+  [`disk`], [coop], [Reads a disk image over virtio-blk (NVMe on `pc`), and writes a sector],
   [`memmap`], [coop], [The order, alignment and size of the linker's sections],
   [`pool`], [coop], [A bitmap and a free list given the same takes and gives, and 1,000 tasks on one reused stack],
   [`fit`], [coop], [Freed blocks merge, the three policies choose differently, and 1,000 tasks leave the heap as they found it],
@@ -45,7 +45,7 @@ ok    coop-x86_64     57 switches, as expected
 
 == On the pc board
 
-`cargo xtask kernel --board pc` runs 24 of the 25 on x86_64. Every kernel in the table runs but `disk`, because the board has no virtio. `smp`, `shard` and `smr` again get four CPUs. A test is named on the kernel's command line by GRUB, in place of the fw_cfg file, and the shell kernels get their input over a socket once the banner has appeared (@crate-xtask). All 24 pass, under QEMU with UEFI firmware. The first lines of the summary, in release and with one virtual CPU running at a time:
+`cargo xtask kernel --board pc` runs all 25 on x86_64, with `disk` on an NVMe drive. `smp`, `shard` and `smr` again get four CPUs. A test is named on the kernel's command line by GRUB, in place of the fw_cfg file, and the shell kernels get their input over a socket once the banner has appeared (@crate-xtask). All 25 pass, under QEMU with UEFI firmware. The first lines of the summary, in release and with one virtual CPU running at a time:
 
 #output(title: "cargo xtask kernel --release --headless --board pc --jobs 1")[
 ```

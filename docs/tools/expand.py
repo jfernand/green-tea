@@ -5,7 +5,7 @@
 It becomes a #srcfile call with those lines, dedented, and `// …` between ranges.
 Usage: python3 -I docs/tools/expand.py docs/crates/fit.typ ..."""
 import re, subprocess, sys
-PIN = "59e8c91"
+PIN = "79b31d6"
 LANG = {"rs": "rust", "lisp": "lisp", "ld": "text", "toml": "toml", "yml": "yaml", "S": "text"}
 def expand(m):
     spec, _, extra = m.group(1).partition("|")

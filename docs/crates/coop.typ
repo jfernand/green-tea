@@ -13,14 +13,13 @@
 
 The choice of kernel is made outside the binary. `xtask` passes the name in a `fw_cfg` file, `opt/green-tea/test`, or on the `pc` board as `test=` on GRUB's command line. `Board::test_name` reads it, and `kmain` matches it:
 
-#srcfile("green-tea-coop/src/main.rs", lines: ((54, 65), (77, 81),), notes: ((58, [No name means the demo.]), (60, [The `pc` board has no virtio, so `disk` isn't compiled for it.]), (77, [A name the binary doesn't know is a panic, which `xtask` reports as a failure.]),))[```rust
+#srcfile("green-tea-coop/src/main.rs", lines: ((54, 64), (76, 80),), notes: ((58, [No name means the demo.]), (60, [virtio-blk on the QEMU boards, NVMe on `pc`: two functions of this name, chosen at build time.]), (76, [A name the binary doesn't know is a panic, which `xtask` reports as a failure.]),))[```rust
     let fb = boot("green-tea-coop");
     let mut test = [0u8; 16];
     let len = Board::test_name(&mut test);
     match &test[..len] {
         b"" => demo(fb),
         b"overflow" => overflow_test(fb),
-        #[cfg(not(feature = "board-pc"))]
         b"disk" => disk_test(fb),
         b"memmap" => memmap_test(fb),
         b"pool" => pool_test(fb),
@@ -37,7 +36,7 @@ The choice of kernel is made outside the binary. `xtask` passes the name in a `f
 #dtable(columns: (auto, auto, 1fr), ("Kernel", "File", "What it exercises"),
   [`coop`], [`main.rs`], [tasks that yield, drawn],
   [`overflow`], [`main.rs`], [guard pages (riscv64, x86_64)],
-  [`disk`], [`main.rs`], [the virtio-blk driver (not on `pc`)],
+  [`disk`], [`main.rs`], [the virtio-blk driver, or NVMe on `pc`],
   [`memmap`], [`main.rs`], [the linker script],
   [`pool`], [`main.rs`], [`green-tea-pool`, and the stack pool],
   [`fit`], [`fit.rs`], [`Fit`, and the kernel's heap],
@@ -61,7 +60,7 @@ Each of the thirteen files after `main.rs` has one public function, `test`, whic
 
 Five workers each grow a bar, one step per turn, and yield. The scheduler's hook moves the highlight to the task about to run and waits 150 ms, so that the switches can be watched. Worker 0 spawns worker 4 during its third turn:
 
-#srcfile("green-tea-coop/src/main.rs", lines: ((132, 144),), notes: ((135, [The only way a task gives up the CPU here.]),))[```rust
+#srcfile("green-tea-coop/src/main.rs", lines: ((131, 143),), notes: ((134, [The only way a task gives up the CPU here.]),))[```rust
 fn worker(mut painter: Painter, column: usize) {
     for turn in 1..=TURNS[column] {
         if turn > 1 {
@@ -91,7 +90,7 @@ PASS: 57 switches, as expected
 
 A task recurses with a frame of 256 bytes, well under a page, so that it can't skip the guard:
 
-#srcfile("green-tea-coop/src/main.rs", lines: ((192, 200),))[```rust
+#srcfile("green-tea-coop/src/main.rs", lines: ((191, 199),))[```rust
 #[inline(never)]
 fn recurse(depth: u64) -> u64 {
     DEPTH.set(depth);
@@ -112,11 +111,11 @@ PASS: overflowed after 26 frames, into the task's guard page at 0x80a05ff0
 ```
 ]
 
-== `disk`: virtio-blk
+== `disk`: virtio-blk and NVMe
 
 `xtask` attaches a 64-sector image in which every byte is a function of where it is, so a sector read from the wrong place doesn't match:
 
-#srcfile("green-tea-coop/src/main.rs", lines: ((210, 212),))[```rust
+#srcfile("green-tea-coop/src/main.rs", lines: ((208, 210),))[```rust
 fn pattern(sector: u64, offset: usize) -> u8 {
     (sector as u8).wrapping_mul(31) ^ (offset as u8) ^ (offset >> 8) as u8
 }
@@ -133,11 +132,27 @@ PASS: read 64 sectors over virtio-PCI, and wrote one back
 ```
 ]
 
+The checks are written once, in `check_disk`, against a small trait that both drivers implement:
+
+#srcfile("green-tea-coop/src/main.rs", lines: ((260, 268),),)[```rust
+trait Disk {
+    type Error: core::fmt::Display + PartialEq;
+    const OUT_OF_RANGE: Self::Error;
+    const UNALIGNED: Self::Error;
+    fn capacity(&self) -> u64;
+    fn read(&mut self, sector: u64, buf: &mut [u8]) -> Result<(), Self::Error>;
+    fn write(&mut self, sector: u64, buf: &[u8]) -> Result<(), Self::Error>;
+    fn flush(&mut self) -> Result<(), Self::Error>;
+}
+```]
+
+On `pc` the same checks run on NVMe, behind a guard, since that board can meet a real disk (@crate-nvme).
+
 == `memmap`: the linker script from inside
 
 `memmap_test` prints each section (the output is in @crate-bare), and `check_memmap` verifies that each starts on its alignment, that they are in order without overlap, and that the ones the script sizes have that size. Then eight *witnesses*, one address of each kind, must be where they belong:
 
-#srcfile("green-tea-coop/src/main.rs", lines: ((357, 366),))[```rust
+#srcfile("green-tea-coop/src/main.rs", lines: ((425, 434),))[```rust
 let witnesses = [
     ("a function", memmap_test as fn(Framebuffer) as usize, ".text", 1),
     ("a constant static", &raw const CONSTANT as usize, ".rodata", 1),
@@ -169,7 +184,7 @@ PASS: 7 sections in order and aligned; 8 addresses where they should be
 
 The same takes and gives go to both of `green-tea-pool`'s pools (@crate-pool). A slot given back twice breaks `give`'s contract on purpose:
 
-#srcfile("green-tea-coop/src/main.rs", lines: ((464, 467),))[```rust
+#srcfile("green-tea-coop/src/main.rs", lines: ((532, 535),))[```rust
 let slot = base + 7 * POOL_SLOT;
 let _ = unsafe { pool.give(slot) };
 let second_give = unsafe { pool.give(slot) };
@@ -611,6 +626,5 @@ the clerk's second record is inside the logger's buffer: true
 - `overflow` and `pages` print `FAIL` on aarch64, which has neither guard pages nor paging, and `xtask` doesn't run them there.
 - `smp`, `shard` and `smr` need four CPUs, and fail with a message on any other number.
 - Lines marked `this run:` or `a time, not a count:` differ between runs, and no verdict depends on them, except that `incremental` needs a tick to be seen.
-- `disk` isn't built for the `pc` board, which has no virtio (@bare-limits).
 
 Eighteen kernels, one binary, and a line that says `PASS`. @crate-preempt takes the `yield_now` away.

@@ -8,7 +8,7 @@ This appendix has two parts: what is open at commit #raw(pinned), and the 73 def
 
 === The two defects left
 
-- *A port to other physical hardware is unproven.* The `pc` board is written for physical x86_64 PCs, and it has run only in QEMU, under OVMF. All 24 of its kernels pass there (@app-kernels), which shows the code works against QEMU's firmware and devices, and says nothing about any particular machine's. QEMU's own boards keep their assumptions on purpose, and on aarch64 a CPU's number is still the low byte of `MPIDR_EL1`.
+- *A port to other physical hardware is unproven.* The `pc` board is written for physical x86_64 PCs, and it has run only in QEMU, under OVMF. All 25 of its kernels pass there (@app-kernels), which shows the code works against QEMU's firmware and devices, and says nothing about any particular machine's. QEMU's own boards keep their assumptions on purpose, and on aarch64 a CPU's number is still the low byte of `MPIDR_EL1`.
 - *`lisp instructions` measures each heap against its own floor.* The floor of a garbage-collected heap is that heap with room never to collect, and the mark-sweep floor is 2.1 to 2.4 times the explicit one across the five programs, because `MarkHeap` checks every object and field access and a release `Explicit` doesn't. The columns over the floor therefore compare the cost of reclamation, and not the cost of running a program on each heap (@crate-measure).
 
 === Limits of the pc board and USB
@@ -17,7 +17,26 @@ This appendix has two parts: what is open at commit #raw(pinned), and the 73 def
 - *No hot-plugging.* The keyboard must be attached at boot.
 - *No USB storage.* A USB keyboard is the only device class the driver uses. The stick the kernel boots from is read by the firmware and GRUB.
 - *Secure Boot must be off*, because the GRUB that `xtask` builds isn't signed.
-- *No virtio*, so the `disk` kernel doesn't run on this board.
+- *One NVMe drive.* The `disk` kernel uses the first controller's first namespace, and refuses any disk whose serial isn't `green-tea-disk`, so a machine's own drive is left alone (@crate-nvme).
+
+=== Found while describing the pc board
+
+Writing the sections on the `pc` board turned up these problems in the code at `59e8c91`. Commit `1363d86` fixed the first six. The rest are open.
+
+#dtable(columns: (1fr, 1.1fr), ("Problem", "State"),
+  [A CPU the MADT marks Online Capable but not Enabled counted as present, and `start_all` could panic waiting for it.], [Fixed in `1363d86`: only Enabled counts.],
+  [A framebuffer that isn't XRGB, or none, stopped the boot.], [Fixed in `1363d86`: the kernels draw into memory.],
+  [An XSDT above 4 GiB left no tables, with no fallback.], [Fixed in `1363d86` for the root table. An entry of a readable XSDT that points above 4 GiB still reads as absent.],
+  [`pm_timer_port` ignored the FADT's `X_PM_TMR_BLK`.], [Fixed in `1363d86`, for an I/O port. A timer in memory space isn't supported.],
+  [Device registers were mapped write-back, relying on the MTRRs.], [Fixed in `1363d86`: `map_device`. The framebuffer stays write-back.],
+  [The USB arena ran out at 256 scratchpads, firmware that kept the controller wasn't overridden, and a keyboard error stopped input for good.], [Fixed in `1363d86`: a 6 MiB arena, a forced handoff, and endpoint recovery.],
+  [The TSC is assumed invariant and synchronised between CPUs, with no CPUID check.], [Open (@bare-limits).],
+  [A report shorter than 8 bytes is decoded with the tail of the previous one.], [Open (@crate-xhci).],
+  [A configuration descriptor with a total length of 0 produces a setup TRB with no data, followed by a data TRB.], [Open (@crate-xhci).],
+  [A keyboard that stalled the refused `SET_IDLE` leaves endpoint 0 halted, so a later endpoint recovery fails and the keyboard is given up.], [Open (@crate-xhci).],
+)
+
+*What hasn't run.* Nothing here has run on physical hardware. The xHCI firmware handoff, the scratchpad pages and endpoint recovery have run only in host tests, against fake registers and a fake controller, because QEMU's controller exercises none of them. The NVMe driver has run on QEMU's device and a fake one.
 
 === Smaller items
 

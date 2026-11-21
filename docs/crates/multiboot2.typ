@@ -81,7 +81,7 @@ pub fn display(&self) -> Option<Display> {
 }
 ```]
 
-`xrgb` is what the rest of the kernel needs to know. A display with red and blue swapped is reported, with `xrgb` false. The `pc` board doesn't use such a display: its `display` returns an error, and `boot` panics with it.
+`xrgb` is what the rest of the kernel needs to know. A display with red and blue swapped is reported, with `xrgb` false. The `pc` board doesn't use such a display: its kernels draw into plain memory instead (@bare-pc).
 
 == Exercised by
 

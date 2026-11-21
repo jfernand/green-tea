@@ -1,1 +1,1 @@
-host tests: 524 passed, 0 failed, 0 ignored
+host tests: 546 passed, 0 failed, 0 ignored

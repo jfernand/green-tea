@@ -2,7 +2,7 @@
 
 = Overview <overview>
 
-green-tea is a Rust workspace of 31 crates and 39,650 lines, in which every level of a small system is written by hand: a context switch, a scheduler, allocators, device drivers, kernels, a Lisp to allocate for, and the tools that measure the result. It began as green threads under Linux, and the kernels still run the same context switch. All of it is `MIT OR Apache-2.0`, and none of it is published as a crate.
+green-tea is a Rust workspace of 32 crates and 40,850 lines, in which every level of a small system is written by hand: a context switch, a scheduler, allocators, device drivers, kernels, a Lisp to allocate for, and the tools that measure the result. It began as green threads under Linux, and the kernels still run the same context switch. All of it is `MIT OR Apache-2.0`, and none of it is published as a crate.
 
 The kernels run in QEMU, on its `virt` machine for riscv64 and aarch64 and on `q35` for x86_64. A second x86_64 board, `pc`, is written for physical PCs: GRUB boots it from UEFI through Multiboot2, and it finds the machine from the boot information and ACPI. It has been run only in QEMU, under UEFI firmware, and @app-issues says what that leaves unproven.
 
@@ -13,7 +13,7 @@ Crates fall into five groups, which are the five parts of this report. Each grou
 #figure(layers(
   ("Tooling", [`green-tea-trace`, `green-tea-measure`, `xtask`], "amber"),
   ("Kernels", [`green-tea-coop`, `green-tea-preempt`, `green-tea-shell`, on `green-tea-bare`], "dark"),
-  ("Drivers", [`io`, `ns16550`, `pl011`, `fw-cfg`, `framebuffer`, `ramfb`, `pci`, `virtio`, `virtio-blk`, `multiboot2`, `acpi`, `i8042`, `xhci`], "light"),
+  ("Drivers", [`io`, `ns16550`, `pl011`, `fw-cfg`, `framebuffer`, `ramfb`, `pci`, `virtio`, `virtio-blk`, `multiboot2`, `acpi`, `i8042`, `xhci`, `nvme`], "light"),
   ("Allocators", [`pool`, `fit`, `kmem`, `region`, `smp`, `shard`, `smr`, `lisp`], "light"),
   ("Green threads", [`green-tea-v1`, `green-tea-arch`, `green-tea-v2`], "light"),
 ), kind: image, caption: [The workspace, by what builds on what.]) <fig-layers>
@@ -40,16 +40,17 @@ Crates fall into five groups, which are the five parts of this report. Each grou
   [#link(<crate-virtio>)[`green-tea-virtio`]], [991], [Virtio: negotiation, split virtqueues, two transports],
   [#link(<crate-virtio-blk>)[`green-tea-virtio-blk`]], [339], [A virtio disk],
   [#link(<crate-multiboot2>)[`green-tea-multiboot2`]], [245], [The boot information GRUB hands over],
-  [#link(<crate-acpi>)[`green-tea-acpi`]], [342], [The CPUs and clocks in the firmware's ACPI tables],
+  [#link(<crate-acpi>)[`green-tea-acpi`]], [405], [The CPUs and clocks in the firmware's ACPI tables],
   [#link(<crate-i8042>)[`green-tea-i8042`]], [176], [A polled PS/2 keyboard controller],
-  [#link(<crate-xhci>)[`green-tea-xhci`]], [1,095], [A polled xHCI (USB 3) controller, and a USB keyboard],
-  [#link(<crate-bare>)[`green-tea-bare`]], [4,262], [Boot, platforms, heap, paging, CPUs, tasks, scheduler],
-  [#link(<crate-coop>)[`green-tea-coop`]], [6,057], [The cooperative kernel and its test kernels],
+  [#link(<crate-xhci>)[`green-tea-xhci`]], [1,413], [A polled xHCI (USB 3) controller, and a USB keyboard],
+  [#link(<crate-nvme>)[`green-tea-nvme`]], [654], [A polled NVMe disk],
+  [#link(<crate-bare>)[`green-tea-bare`]], [4,360], [Boot, platforms, heap, paging, CPUs, tasks, scheduler],
+  [#link(<crate-coop>)[`green-tea-coop`]], [6,125], [The cooperative kernel and its test kernels],
   [#link(<crate-preempt>)[`green-tea-preempt`]], [240], [A kernel whose tasks are preempted by a timer],
   [#link(<crate-shell>)[`green-tea-shell`]], [1,780], [A shell on the serial console],
   [#link(<crate-trace>)[`green-tea-trace`]], [595], [Replays a trace file on the host],
   [#link(<crate-measure>)[`green-tea-measure`]], [2,639], [One trace against every allocator],
-  [#link(<crate-xtask>)[`xtask`]], [1,526], [Builds, boots and judges everything],
+  [#link(<crate-xtask>)[`xtask`]], [1,525], [Builds, boots and judges everything],
 )
 
 Line counts include each crate's tests and examples.
@@ -72,7 +73,7 @@ The boards differ in what they offer, and the differences recur throughout:
   [Paging], [identity map], [MMU off], [identity map], [identity map],
   [Guard pages], [yes], [no], [yes], [yes],
   [Demand paging], [yes], [no], [yes], [yes],
-  [Virtio transport], [MMIO], [MMIO], [PCI], [none],
+  [Disk], [virtio MMIO], [virtio MMIO], [virtio PCI], [NVMe],
 )
 
 == Building and running
@@ -82,7 +83,7 @@ cargo test                                   # every host crate
 cargo xtask test                             # green-tea-v2 on three architectures, under qemu-user
 cargo xtask kernel --headless                # every kernel, everywhere it runs
 cargo xtask kernel --kernel tlsf --target x86_64
-cargo xtask kernel --board pc --headless     # every kernel but disk, for a physical PC, in QEMU
+cargo xtask kernel --board pc --headless     # every kernel, for a physical PC, in QEMU
 cargo xtask shell --target riscv64           # type at the shell
 cargo xtask trace --out shell.gtt            # record a trace from the shell
 cargo run -p green-tea-trace -- replay shell.gtt  # replay it on the host
@@ -92,7 +93,7 @@ At the commit this report describes, the host tests pass:
 
 #output(title: "cargo test")[
 ```
-host tests: 524 passed, 0 failed, 0 ignored
+host tests: 546 passed, 0 failed, 0 ignored
 ```
 ]
 

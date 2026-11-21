@@ -2,9 +2,9 @@
 ok    coop-riscv64    57 switches, as expected
 ok    coop-aarch64    57 switches, as expected
 ok    coop-x86_64     57 switches, as expected
-ok    preempt-riscv64 42 preemptions; every busy worker ran in several slices, and the sleeper used 5 ms of CPU in 70 wakeups
-ok    preempt-aarch64 43 preemptions; every busy worker ran in several slices, and the sleeper used 6 ms of CPU in 70 wakeups
-ok    preempt-x86_64  38 preemptions; every busy worker ran in several slices, and the sleeper used 5 ms of CPU in 70 wakeups
+ok    preempt-riscv64 44 preemptions; every busy worker ran in several slices, and the sleeper used 38 ms of CPU in 70 wakeups
+ok    preempt-aarch64 44 preemptions; every busy worker ran in several slices, and the sleeper used 51 ms of CPU in 70 wakeups
+ok    preempt-x86_64  43 preemptions; every busy worker ran in several slices, and the sleeper used 24 ms of CPU in 70 wakeups
 ok    overflow-riscv64 overflowed after 56 frames, into the task's guard page at 0x80805fb8
 ok    overflow-x86_64 overflowed after 56 frames, into the task's guard page at 0x805f98
 ok    disk-riscv64    read 64 sectors over virtio-MMIO, and wrote one back
@@ -48,9 +48,9 @@ ok    smr-x86_64      an interrupted pop corrupted its stack when nodes were fre
 ok    gen-riscv64     seven programs on two generations: 7632 of 47009 objects left the nursery alive, and nothing was left
 ok    gen-aarch64     seven programs on two generations: 7632 of 47009 objects left the nursery alive, and nothing was left
 ok    gen-x86_64      seven programs on two generations: 7632 of 47009 objects left the nursery alive, and nothing was left
-ok    incremental-riscv64 212 cycles in 61497 steps of at most 28 units lost nothing; then 1576 ticks of the timer
-ok    incremental-aarch64 212 cycles in 61497 steps of at most 28 units lost nothing; then 1686 ticks of the timer
-ok    incremental-x86_64 212 cycles in 61497 steps of at most 28 units lost nothing; then 1997 ticks of the timer
+ok    incremental-riscv64 212 cycles in 61497 steps of at most 28 units lost nothing; then 1813 ticks of the timer
+ok    incremental-aarch64 212 cycles in 61497 steps of at most 28 units lost nothing; then 1426 ticks of the timer
+ok    incremental-x86_64 212 cycles in 61497 steps of at most 28 units lost nothing; then 1123 ticks of the timer
 ok    shell-riscv64   1000 commands made 8000 heap allocations and freed them all, or none from an arena that peaked at 368
 ok    shell-aarch64   1000 commands made 8000 heap allocations and freed them all, or none from an arena that peaked at 368
 ok    shell-x86_64    1000 commands made 8000 heap allocations and freed them all, or none from an arena that peaked at 368

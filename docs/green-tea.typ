@@ -11,7 +11,7 @@
   docid: "ISSS-TR-0506",
   running: "green-tea — a technical report",
   abstract: [
-    green-tea is a Rust workspace of 31 crates and about 39,650 lines. It starts from a
+    green-tea is a Rust workspace of 32 crates and about 40,850 lines. It starts from a
     context switch under Linux and ends with bare-metal kernels for riscv64, aarch64 and
     x86_64 in QEMU, a board for physical PCs, with pool, free-list, buddy, TLSF, slab, region and lock-free
     allocators, a small Lisp on reference-counted and tracing heaps, safe memory
@@ -65,6 +65,7 @@
 #include "crates/acpi.typ"
 #include "crates/i8042.typ"
 #include "crates/xhci.typ"
+#include "crates/nvme.typ"
 
 #part("Kernels", [The shared bare-metal layer, and the three kernels built on it.])
 #include "crates/bare.typ"

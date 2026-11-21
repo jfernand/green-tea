@@ -95,4 +95,5 @@ counts as four.
   --screenshot  save the final screen to target/kernel/<kernel>-<arch>.png
   --board pc    build for a physical x86_64 PC instead of QEMU's machine, and test it in
                 QEMU with UEFI firmware. Copy target/kernel/pc/<kernel>-x86_64/EFI to a
-                FAT USB stick to boot it. No virtio, so no disk kernel
+                FAT USB stick to boot it. The disk kernel uses NVMe, and refuses any disk
+                but the test image

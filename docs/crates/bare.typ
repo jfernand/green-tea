@@ -31,7 +31,7 @@
 
 `boot` is the first call of every `kmain`. It initialises the board, prints the banner that `cargo xtask kernel` waits for, and asks the board for its display:
 
-#srcfile("green-tea-bare/src/lib.rs", lines: ((65, 72),), notes: ((66, [Per board: paging on riscv64 and x86_64, the UART and the exception vectors on aarch64.]), (68, [On QEMU's boards, `ramfb` through `fw_cfg`. On `pc`, the framebuffer GRUB set up. A board with no display it can use panics on the next line but one.]),))[```rust
+#srcfile("green-tea-bare/src/lib.rs", lines: ((67, 74),), notes: ((68, [Per board: paging on riscv64 and x86_64, the UART and the exception vectors on aarch64.]), (70, [On QEMU's boards, `ramfb` through `fw_cfg`. On `pc`, the framebuffer GRUB set up. A QEMU board with no display it can use panics on the next line but one. `pc` never returns an error here.]),))[```rust
 pub fn boot(kernel: &str) -> Framebuffer {
     Board::init();
     println!("{kernel} on {}", Board::NAME);
@@ -125,7 +125,7 @@ QEMU boots the ELF through *PVH*: it finds a 32-bit entry point in a Xen ELF not
 
 `_start`, in #repo("green-tea-bare/src/platform/x86_64/mod.rs"), is shared by both boards. It keeps what a Multiboot2 loader left in `eax` and `ebx`, then does what a bootloader would. It zeroes `.bss`, builds an identity map of the first 4 GiB out of 2,048 pages of 2 MiB, and enters long mode:
 
-#srcfile("green-tea-bare/src/platform/x86_64/mod.rs", lines: ((84, 117),), notes: ((84, [`0x83`: present, writable, page size. No cache-disable bit, on device memory either.]), (102, [With `EFER.LME` set, turning paging on is what enters long mode.]), (105, [The far jump reloads `CS` with a 64-bit code segment.]),))[```rust
+#srcfile("green-tea-bare/src/platform/x86_64/mod.rs", lines: ((84, 117),), notes: ((84, [`0x83`: present, writable, page size. No cache-disable bit: on `pc`, `map_device` adds it for device registers.]), (102, [With `EFER.LME` set, turning paging on is what enters long mode.]), (105, [The far jump reloads `CS` with a 64-bit code segment.]),))[```rust
     mov $0x83, %eax
     xor %ecx, %ecx
 2:  mov %eax, boot_pds(,%ecx,8)
@@ -767,6 +767,7 @@ loop {
   [Local APIC], [xAPIC], [x2APIC if the CPU has it],
   [Console], [COM1], [the screen, and COM1 if it answers],
   [Keyboard], [the serial port], [the serial port, USB and PS/2],
+  [Disk], [virtio-blk], [NVMe],
   [Test to run], [fw_cfg file], [`test=` on GRUB's command line],
 )
 
@@ -774,7 +775,7 @@ loop {
 
 GRUB looks for a Multiboot2 header in the first 32 KiB of the file. The linker script puts the section `.multiboot2` first:
 
-#srcfile("green-tea-bare/src/platform/x86_64/pc.rs", lines: ((41, 52),), notes: ((46, [Tag 5, the framebuffer, with the flag that makes it optional.]), (48, [Any width and height, 32 bits per pixel.]),))[```rust
+#srcfile("green-tea-bare/src/platform/x86_64/pc.rs", lines: ((42, 53),), notes: ((47, [Tag 5, the framebuffer, with the flag that makes it optional.]), (49, [Any width and height, 32 bits per pixel.]),))[```rust
 mb2_start:
     .long 0xe85250d6
     .long 0
@@ -791,11 +792,12 @@ mb2_end:
 
 GRUB enters `_start` in 32-bit protected mode with paging off, as PVH does, with a magic number in `eax` and the address of its boot information in `ebx`. The kernel is linked at 32 MiB because UEFI firmware keeps data of its own a few MiB up, where a kernel at 1 MiB would overlap it. From the memory map, `init` keeps the end of the free RAM the kernel is in, for the check in `kmem`, and whether the page at `0x8000` is free, since `start_cpu` refuses to start a CPU if it isn't. Then it turns to ACPI:
 
-#srcfile("green-tea-bare/src/platform/x86_64/pc.rs", lines: ((272, 278), (286, 288),), notes: ((273, [Before the first `delay_ms`.]), (277, [Before `init_cpus`, which reads this CPU's APIC id.]),))[```rust
+#srcfile("green-tea-bare/src/platform/x86_64/pc.rs", lines: ((325, 332), (340, 342),), notes: ((326, [Before the first `delay_ms`.]), (329, [Uncached, in the page tables.]), (331, [Before `init_cpus`, which reads this CPU's APIC id.]),))[```rust
 let acpi = info.rsdp().and_then(|rsdp| Acpi::new(Identity4G, rsdp));
 TSC_PER_MS.store(measure_tsc(acpi.as_ref()), Ordering::Relaxed);
 if let Some(address) = acpi.as_ref().and_then(|a| a.lapic_address()) {
     set_lapic_base(address);
+    paging::map_device(address as usize, 0x1000).unwrap_or_else(|e| panic!("local APIC: {e}"));
 }
 enable_x2apic_if_available();
 init_cpus(acpi.as_ref());
@@ -811,11 +813,28 @@ Unlike QEMU's, a physical machine's RAM doesn't start out zero, so `init` also c
 
 `init_screen` takes the framebuffer GRUB set up, if it is 32-bit XRGB, maps it with `map_high` when it is above 4 GiB, and clears what the firmware and GRUB left on it. The demos draw in the top-left 640×480. A text console, the `Text` of `green-tea-framebuffer` (@crate-framebuffer), takes the rest: beside the demos on a screen at least 1,024 pixels wide, below them on one at least 600 high, and over them on anything smaller. `putc` writes every byte to that console, and to COM1 if there is one. `init_serial` decides that by writing two values to the UART's scratch register and reading them back, since a laptop has no UART and its ports read `0xff`. A flag guards the console: a CPU or interrupt that finds it taken leaves its character off the screen, so that a `panic!` can't deadlock on it.
 
+A screen is optional. With no framebuffer, or one that isn't XRGB, the kernels draw into 640×480 of plain memory and report through the serial port:
+
+#srcfile("green-tea-bare/src/platform/x86_64/pc.rs", lines: ((413, 424),), notes: ((418, [A static, so that every kernel has somewhere to draw.]),))[```rust
+fn display() -> Result<Framebuffer, &'static str> {
+    // SAFETY: only `init` writes it, before this can be called.
+    let Some(fb) = (unsafe { (&raw const SCREEN).read() }) else {
+        // A machine can run without a screen, so the demos draw into plain memory.
+        crate::println!("framebuffer: none usable, drawing to memory");
+        let pixels = (&raw mut OFFSCREEN).cast::<u32>();
+        // SAFETY: a static of this shape, and every call shares the one set of pixels.
+        return Ok(unsafe { Framebuffer::new(pixels, OFFSCREEN_W, OFFSCREEN_H, OFFSCREEN_W) });
+    };
+    crate::println!("framebuffer: {}x{} XRGB8888", fb.width(), fb.height());
+    Ok(fb)
+}
+```]
+
 === The clock
 
 The TSC is the counter `ticks` reads, and nothing says how fast it runs, so `measure_tsc` times it for 10 ms against a clock whose rate ACPI (@crate-acpi) gives. That is the HPET if the firmware lists one below 4 GiB, and otherwise the ACPI power management timer, at 3,579,545 Hz, of which only 24 bits are sure to exist:
 
-#srcfile("green-tea-bare/src/platform/x86_64/pc.rs", lines: ((148, 156),))[```rust
+#srcfile("green-tea-bare/src/platform/x86_64/pc.rs", lines: ((161, 169),))[```rust
 } else if let Some(port) = acpi.pm_timer_port() {
     const MASK: u32 = 0x00ff_ffff; // 24 bits is all a timer is sure to have
     let wait = (PM_TIMER_HZ * CALIBRATE_MS / 1000) as u32;
@@ -831,7 +850,7 @@ The TSC is the counter `ticks` reads, and nothing says how fast it runs, so `mea
 
 The MADT lists the local APICs, and on a physical machine their ids can have gaps. So a CPU's number is its position in a list, with the boot CPU first:
 
-#srcfile("green-tea-bare/src/platform/x86_64/pc.rs", lines: ((220, 230),), notes: ((225, [At most `MAX` ids, in the MADT's order, leaving out the boot CPU's, which is already first.]),))[```rust
+#srcfile("green-tea-bare/src/platform/x86_64/pc.rs", lines: ((244, 254),), notes: ((249, [At most `MAX` ids, in the MADT's order, leaving out the boot CPU's, which is already first.]),))[```rust
 fn init_cpus(acpi: Option<&Acpi<Identity4G>>) {
     let boot = apic_id();
     APIC_IDS[0].store(boot, Ordering::Relaxed);
@@ -847,9 +866,49 @@ fn init_cpus(acpi: Option<&Acpi<Identity4G>>) {
 
 `cpu` searches that list for this CPU's APIC id, and `start_cpu` passes `wake_cpu` the id at position `cpu`. The list is written once, before any other CPU starts. `enable_x2apic_if_available` moves the boot CPU to x2APIC whenever CPUID reports it, because firmware may already have turned it on and it can't be turned off without resetting the APIC's state. Ids above 255 need that mode.
 
+=== Device memory
+
+`_start` maps everything write-back. On a PC the firmware's MTRRs normally make device registers uncached, and we don't rely on them: `map_device` sets `PCD` and `PWT` on the 2 MiB pages a device is in. With the PAT at its reset value, that combination selects uncacheable. The board calls it for the HPET, the local APIC, the ECAM window and each controller's BAR. A page that holds any part of the kernel is refused:
+
+#srcfile("green-tea-bare/src/platform/x86_64/mod.rs", lines: ((840, 866),), size: 6.4pt, notes: ((841, [Bits 3 and 4 of a page entry.]), (847, [A device above 4 GiB gets new entries, with the same bits.]), (858, [A heap or stack page has already been split into a table, and it counts as the kernel too.]),))[```rust
+pub fn map_device(addr: usize, len: usize) -> Result<(), &'static str> {
+    const UNCACHED: u64 = 1 << 3 | 1 << 4;
+    const PAGE_SIZE: u64 = 1 << 7;
+    unsafe extern "C" {
+        fn _start();
+        static __kernel_end: u8;
+    }
+    map_above_4g(addr, len, UNCACHED)?;
+    if addr >= 1 << 32 {
+        return Ok(());
+    }
+    let kernel = (_start as *const () as usize & !(MIB2 - 1))..(&raw const __kernel_end as usize);
+    let (first, last) = (addr & !(MIB2 - 1), (addr + len - 1).min((1 << 32) - 1) & !(MIB2 - 1));
+    // SAFETY: at boot, on the boot CPU; each index is within the 2048 entries.
+    unsafe {
+        let pds = (&raw mut boot_pds).cast::<u64>();
+        for page in (first..=last).step_by(MIB2) {
+            let entry = pds.add(page / MIB2);
+            if kernel.start < page + MIB2 && page < kernel.end || entry.read() & PAGE_SIZE == 0 {
+                return Err("a device shares a 2 MiB page with the kernel");
+            }
+            entry.write(entry.read() | UNCACHED);
+        }
+        asm!("mov {0}, cr3", "mov cr3, {0}", out(reg) _, options(nostack));
+    }
+    Ok(())
+}
+```]
+
+In QEMU's page tables, after a boot, the local APIC's page reads `--P-ACT-W`, where `C` and `T` are those two bits.
+
 === The keyboards
 
 `getc` polls three sources in order: COM1 if it answered, then a USB keyboard, then a PS/2 one. `init_usb` finds the xHCI controllers through ACPI's MCFG table and keeps the first with a boot keyboard on one of its own ports (@crate-xhci). PS/2 is `green-tea-i8042` (@crate-i8042), which is what most laptops' built-in keyboards are. Neither takes an interrupt.
+
+=== The disk
+
+`Pc::find_nvme` walks the ECAM window that `init_usb` kept for the first function of class `0x010802`, maps its BAR with `map_device`, enables it, and returns a started `Nvme` (@crate-nvme). It can be called once, and only while one CPU is running, since it changes the page tables. Only the `disk` kernel calls it.
 
 === A run
 
@@ -871,10 +930,9 @@ PASS: 57 switches, as expected
 
 - *The `pc` board has run only in QEMU with UEFI firmware and under KVM, never on physical hardware.* The run above is QEMU with OVMF, emulated, as `xtask` starts it. The conditions a physical machine would bring were forced in QEMU: no HPET, xAPIC and x2APIC, sparse APIC ids, 12 CPUs with a limit of 16, memory mapped above 4 GiB, and PS/2 and USB keyboards at full and high speed. A local APIC at a non-default address is covered only by a host test of its parsing.
 - *Secure Boot must be off*, since the GRUB that `xtask` builds isn't signed.
-- *The `disk` kernel isn't available on `pc`.* The board has no `VirtioBus`, and there is no USB storage driver. USB is a keyboard plugged straight into a controller's port before boot: no hubs, no hot-plugging.
-- *`pc` treats a CPU the MADT marks only online-capable as present* (`apic_ids` in `green-tea-acpi`). Such an entry may be a CPU that isn't there, and `start_all` then panics after a second with "was started and didn't arrive". This comes from reading the code; no run has had such an entry.
+- *USB is a keyboard plugged straight into a controller's port before boot*: no hubs, no hot-plugging, and no USB storage. The disk the board drives is NVMe, and it has run only against QEMU's `nvme` device.
 - `pc` assumes the TSC runs at a constant rate and agrees between CPUs. It doesn't check CPUID for an invariant TSC.
-- Every mapping is write-back, device registers included. On `pc` the firmware's MTRRs are what make those registers uncached, and nothing checks them.
+- The framebuffer stays write-back, and `map_device` works in 2 MiB pages, so anything else in a device's page becomes uncached with it.
 - *`q35` and the two `virt` boards assume their QEMU machine.* Addresses are constants, and `q35` needs fw_cfg for the CPU count and the display. It uses the CPU number as an APIC id (`q35.rs:107`), and aarch64 takes it from `MPIDR_EL1`'s low byte (`aarch64.rs:125`), which holds on QEMU, whose ids run 0, 1, 2, ….
 - *A regression in the guard pages wouldn't show in CI.* `unmap_heap` on riscv64 and x86_64 must not touch the stack pool's 2 MiB page when the heap starts on a 2 MiB boundary. Only a build with the heap on that boundary exercises this, and the builds CI runs don't have one.
 - The scheduler's idle wait is a busy loop (`runtime.rs:57`), and the serial port is polled.

@@ -1,7 +1,8 @@
 === summary
 ok    coop-x86_64     57 switches, as expected
-ok    preempt-x86_64  38 preemptions; every busy worker ran in several slices, and the sleeper used 3 ms of CPU in 70 wakeups
-ok    overflow-x86_64 overflowed after 56 frames, into the task's guard page at 0x2605f68
+ok    preempt-x86_64  38 preemptions; every busy worker ran in several slices, and the sleeper used 6 ms of CPU in 70 wakeups
+ok    overflow-x86_64 overflowed after 56 frames, into the task's guard page at 0x2e05f68
+ok    disk-x86_64     read 64 sectors over NVMe, and wrote one back
 ok    memmap-x86_64   7 sections in order and aligned; 8 addresses where they should be
 ok    pool-x86_64     1000 tasks ran on one stack; the bitmap caught a double give, the free list didn't
 ok    fit-x86_64      freed blocks merged and were reused; 1000 tasks and six workloads left their heaps as they found them
@@ -15,7 +16,7 @@ ok    shard-x86_64    4 CPUs allocated through a heap of pages each and took no 
 ok    gc-x86_64       five programs on three heaps that trace: 160 collections traced 25698 objects, and nothing was left
 ok    smr-x86_64      an interrupted pop corrupted its stack when nodes were freed at once, and not with epochs or hazard pointers; 4 CPUs lost no value on a stack or a queue, and found 3512 primes
 ok    gen-x86_64      seven programs on two generations: 7632 of 47009 objects left the nursery alive, and nothing was left
-ok    incremental-x86_64 212 cycles in 61497 steps of at most 28 units lost nothing; then 1000 ticks of the timer
+ok    incremental-x86_64 212 cycles in 61497 steps of at most 28 units lost nothing; then 785 ticks of the timer
 ok    shell-x86_64    1000 commands made 8000 heap allocations and freed them all, or none from an arena that peaked at 368
 ok    trace-x86_64    20483 events replayed six ways: a peak of 14902 live bytes needed 21456 (first fit by address) to 156608 (next fit, LIFO); 25216 to 52688 when shuffled
 ok    safety-x86_64   a write to a freed block went unseen by the plain allocator and was caught by encoded links and by the quarantine; a freed block was reused after 17 allocations, or 3 to 5595 at random; the workload's footprint went from 201200 to 238992 bytes

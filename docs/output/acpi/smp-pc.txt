@@ -6,16 +6,16 @@ framebuffer: 1280x800 XRGB8888
 4 CPUs are running: the one that booted, and 3 it started
 each CPU adds 1 to a counter 1000000 times:
   with a lock: the counter is 4000000, and the lock was taken 4000000 times
-  this run: without a lock the counter is 1419922; with one, 1769727 acquisitions waited
+  this run: without a lock the counter is 1378468; with one, 1012521 acquisitions waited
 each CPU makes 20000 allocations and frees, of 1 to 512 bytes, holding up to 96:
   the kernel's heap, behind its lock:  80128 operations, and the lock was taken 80128 times
-  this run: 61771 of those waited for another CPU; 782 ms
+  this run: 60491 of those waited for another CPU; 605 ms
   a cache for each CPU:                80128 operations, and the lock was taken 2680 times
     1373 times to fill a cache with 8 blocks, and 1307 times to take 8 back
     when the work ended the CPUs held no blocks, and their caches held 528, of 105984 bytes in all
-  this run: 944 of those waited for another CPU; 331 ms
+  this run: 812 of those waited for another CPU; 343 ms
   the same, with a depot of 4 batches:  80128 operations, and the lock was taken 2680 times
-  this run: 207 of those waited; 299 ms; the depot served 1186 of the 1373 fills, and the heap made 2360 allocations and frees
+  this run: 197 of those waited; 367 ms; the depot served 1146 of the 1373 fills, and the heap made 3008 allocations and frees
 each CPU took 20000 page faults, all at once, and came back from each with its own registers
 PASS: 4 CPUs made 80128 allocations and frees each way: the heap's lock was taken 80128 times, and the lock behind a cache per CPU 2680 times
 halting

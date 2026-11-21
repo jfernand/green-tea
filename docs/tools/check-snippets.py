@@ -2,7 +2,7 @@
 """Checks every #srcfile listing against the pinned commit, line by line, ignoring whitespace.
 Usage: python3 -I docs/tools/check-snippets.py docs/crates/fit.typ ..."""
 import re, subprocess, sys
-PIN = "59e8c91"
+PIN = "79b31d6"
 norm = lambda t: re.sub(r"\s+", "", t)
 cache, bad = {}, 0
 def source(path):

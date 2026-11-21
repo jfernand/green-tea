@@ -30,7 +30,7 @@
 
 `kernel` builds each chosen kernel for each chosen architecture and boots it in QEMU. A *kernel* here is a row of `KERNELS`: a package to build, the architectures it runs on, and how to make that binary do one job.
 
-#srcfile("xtask/src/kernel.rs", lines: ((136, 147),), notes: ((142, [The `-fw_cfg` file QEMU exposes to the guest. `green-tea-coop` reads it and runs that test instead of its demo.]), (146, [Typed at the serial console, for the kernels that are a shell.]),))[```rust
+#srcfile("xtask/src/kernel.rs", lines: ((137, 148),), notes: ((143, [The `-fw_cfg` file QEMU exposes to the guest. `green-tea-coop` reads it and runs that test instead of its demo.]), (147, [Typed at the serial console, for the kernels that are a shell.]),))[```rust
 struct Kernel {
     name: &'static str,
     package: &'static str,
@@ -38,7 +38,7 @@ struct Kernel {
     arches: &'static [&'static str],
     /// A test for the kernel to run instead of its demo: the fw_cfg file opt/green-tea/test.
     test: Option<&'static str>,
-    /// Attach a virtio disk, from a fresh image (see `disk_image`).
+    /// Attach a disk (virtio, or NVMe on the pc board), from a fresh image (see `disk_image`).
     disk: bool,
     /// What to type at the serial console.
     input: Option<&'static str>,
@@ -54,11 +54,11 @@ There are three packages behind the table's 25 rows, and the same binary serves 
   [`green-tea-shell`], [`shell`, `trace`, `harden`, `region`, `gtt`, `resident`#super[†]], [`input`, typed],
 )
 
-#text(size: 8pt)[† riscv64 and x86_64 only: the kernel needs guard pages or demand paging, and aarch64 runs with its MMU off. ‡ With a virtio disk. § On a machine of four CPUs (`SMP_KERNELS`); every other kernel has one.]
+#text(size: 8pt)[† riscv64 and x86_64 only: the kernel needs guard pages or demand paging, and aarch64 runs with its MMU off. ‡ With a disk: virtio on QEMU's boards, NVMe on `pc`. § On a machine of four CPUs (`SMP_KERNELS`); every other kernel has one.]
 
 Of the 25 rows, 22 run on all three architectures and 3 on two, so a full `cargo xtask kernel` is 72 runs. What the shell kernels type is in the table too, and starts with an empty line:
 
-#srcfile("xtask/src/kernel.rs", lines: ((169, 178),), notes: ((175, [On riscv64 the firmware reads the serial port before the kernel does, and takes the first byte with it. The empty line is there to be lost.]),))[```rust
+#srcfile("xtask/src/kernel.rs", lines: ((170, 179),), notes: ((176, [On riscv64 the firmware reads the serial port before the kernel does, and takes the first byte with it. The empty line is there to be lost.]),))[```rust
 Kernel {
     name: "shell",
     package: "green-tea-shell",
@@ -91,7 +91,7 @@ On `virt`, `VIRTIO_MMIO_BLK` sets `force-legacy=false`, because QEMU otherwise m
 
 `watch` is the loop at the centre of the command. Every 100 ms it starts whatever fits, reads each machine's log, and looks for a verdict:
 
-#srcfile("xtask/src/kernel.rs", lines: ((842, 881),), notes: ((846, [Jobs start strictly in order: a four-CPU machine at the front waits, and nothing behind it overtakes.]), (856, [`follow` reads the new lines and passes each to `judge`.]), (858, [The moment a run first has an outcome.]), (864, [Headless, a verdict quits the machine, after any screendump: the monitor runs commands in order.]), (868, [Each run's 120 seconds count from its own start. With windows there is no limit.]), (875, [A machine that exits with no verdict has failed.]),))[```rust
+#srcfile("xtask/src/kernel.rs", lines: ((840, 879),), notes: ((844, [Jobs start strictly in order: a four-CPU machine at the front waits, and nothing behind it overtakes.]), (854, [`follow` reads the new lines and passes each to `judge`.]), (856, [The moment a run first has an outcome.]), (862, [Headless, a verdict quits the machine, after any screendump: the monitor runs commands in order.]), (866, [Each run's 120 seconds count from its own start. With windows there is no limit.]), (873, [A machine that exits with no verdict has failed.]),))[```rust
 let limit = options.limit.unwrap_or_else(|| default_limit(options.headless));
 while !queue.is_empty() || runs.iter().any(|r| !r.exited) {
     let mut busy: usize = runs.iter().filter(|r| !r.exited).map(|r| r.job.cpus()).sum();
@@ -136,7 +136,7 @@ while !queue.is_empty() || runs.iter().any(|r| !r.exited) {
 
 The kernel judges itself, and `xtask` reads its verdict. A failure stands once seen, and a failure after a pass replaces the pass:
 
-#srcfile("xtask/src/kernel.rs", lines: ((812, 832),))[```rust
+#srcfile("xtask/src/kernel.rs", lines: ((810, 830),))[```rust
 fn verdict(line: &str) -> Option<Result<String, String>> {
     if let Some(rest) = line.strip_prefix("panic: ") {
         return Some(Err(format!("kernel panicked: {rest}")));
@@ -184,7 +184,7 @@ The command succeeds only if every run has an `Ok` outcome. The logs stay in `ta
 
 `--jobs <n>` limits the *virtual CPUs* running at once, and a machine of four counts as four. Without it, windowed runs all start together, and headless runs use half of the host's CPUs:
 
-#srcfile("xtask/src/kernel.rs", lines: ((285, 287), (836, 838),), notes: ((286, [The kernels that check their own timing need the CPU time they think they are getting. This is the reason for the default.]), (837, [A machine too big for the limit still runs, alone, so that a limit of 2 doesn't make a four-CPU kernel impossible.]),))[```rust
+#srcfile("xtask/src/kernel.rs", lines: ((287, 289), (834, 836),), notes: ((288, [The kernels that check their own timing need the CPU time they think they are getting. This is the reason for the default.]), (835, [A machine too big for the limit still runs, alone, so that a limit of 2 doesn't make a four-CPU kernel impossible.]),))[```rust
 fn default_limit(headless: bool) -> usize {
     if headless { thread::available_parallelism().map_or(1, |n| n.get() / 2).max(1) } else { usize::MAX }
 }
@@ -198,11 +198,11 @@ With windows, a cap means the next kernel starts when a window is closed.
 
 === The pc board
 
-`--board pc` builds the kernels with the feature `board-pc`, for a physical x86_64 PC booted by GRUB through Multiboot2, and tests them in QEMU under UEFI firmware. It selects x86_64, refuses any other `--target`, and skips `disk`, because the kernel has no virtio on that board: 24 of the 25 kernels run. `preflight` also asks for `grub-mkstandalone` and for OVMF at `OVMF_CODE` and `OVMF_VARS`, the paths of Debian's and Ubuntu's `ovmf` package.
+`--board pc` builds the kernels with the feature `board-pc`, for a physical x86_64 PC booted by GRUB through Multiboot2, and tests them in QEMU under UEFI firmware. It selects x86_64 and refuses any other `--target`. All 25 kernels run, and `disk` gets an NVMe drive, `NVME_DISK`, with the serial number `green-tea-disk`, which the kernel checks before it touches the disk. `preflight` also asks for `grub-mkstandalone` and for OVMF at `OVMF_CODE` and `OVMF_VARS`, the paths of Debian's and Ubuntu's `ovmf` package.
 
 For each job, `make_esp` builds a directory to boot from, `target/kernel/pc/<kernel>-x86_64`. Its one file is `EFI/BOOT/BOOTX64.EFI`, the path firmware looks for on removable media: a GRUB made by `grub-mkstandalone`, with its configuration and the kernel inside it. The configuration passes the test by name on the kernel's command line, in place of the fw_cfg file:
 
-#srcfile("xtask/src/kernel.rs", lines: ((508, 511), (520, 533),), notes: ((509, [`test=<name>`, which the board reads from the Multiboot2 information.]), (527, [A standalone GRUB: its modules, configuration and kernel are all in one UEFI application.]),))[```rust
+#srcfile("xtask/src/kernel.rs", lines: ((506, 509), (518, 531),), notes: ((507, [`test=<name>`, which the board reads from the Multiboot2 information.]), (525, [A standalone GRUB: its modules, configuration and kernel are all in one UEFI application.]),))[```rust
 fn grub_config(test: Option<&str>) -> String {
     let args = test.map_or(String::new(), |t| format!(" test={t}"));
     format!("set timeout=0\ninsmod efi_gop\nmultiboot2 /boot/kernel{args}\nboot\n")
@@ -226,7 +226,7 @@ fn make_esp(job: &Job, elf: &Path, out_dir: &Path) -> std::io::Result<()> {
 
 Copying that directory's `EFI` to a FAT-formatted USB stick is how a kernel goes onto a machine. Under QEMU the run differs from the default in its machine, its firmware and its devices:
 
-#srcfile("xtask/src/kernel.rs", lines: ((697, 710),), notes: ((699, [A private copy of the firmware's variables for each run.]), (700, [512 MiB and a standard VGA, whose framebuffer GRUB hands to the kernel.]), (701, [An xHCI controller with a USB keyboard, so every pc run boots with one attached.]), (707, [The boot directory as a read-only FAT drive. The firmware reads it through its own virtio driver, and the kernel never touches it.]),))[```rust
+#srcfile("xtask/src/kernel.rs", lines: ((695, 708),), notes: ((697, [A private copy of the firmware's variables for each run.]), (698, [512 MiB and a standard VGA, whose framebuffer GRUB hands to the kernel.]), (699, [An xHCI controller with a USB keyboard, so every pc run boots with one attached.]), (705, [The boot directory as a read-only FAT drive. The firmware reads it through its own virtio driver, and the kernel never touches it.]),))[```rust
     Board::Pc => {
         let vars = out_dir.join("pc").join(format!("{}.vars", job.label()));
         fs::copy(OVMF_VARS, &vars)?;
@@ -245,7 +245,7 @@ Copying that directory's `EFI` to a FAT-formatted USB stick is how a kernel goes
 
 The serial input also takes another path. On this board the firmware and GRUB read the serial port too, and would eat a script given as a file, so a kernel with `input` gets a socket instead, and `type_late_input` connects to it once `follow` has seen the kernel's banner:
 
-#srcfile("xtask/src/kernel.rs", lines: ((775, 788),), notes: ((776, [Nothing is sent until a line starting `green-tea-` has appeared.]), (783, [Held open until QEMU exits, since closing it could lose what is still queued.]),))[```rust
+#srcfile("xtask/src/kernel.rs", lines: ((773, 786),), notes: ((774, [Nothing is sent until a line starting `green-tea-` has appeared.]), (781, [Held open until QEMU exits, since closing it could lose what is still queued.]),))[```rust
 fn type_late_input(&mut self) {
     if !self.seen_kernel {
         return;
