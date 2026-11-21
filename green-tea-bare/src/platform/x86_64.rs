@@ -693,8 +693,8 @@ impl TimerInterrupt for Q35 {
 
 /// `_start` identity-maps the first 4 GiB with 2 MiB pages. The stack pool is one of them;
 /// this replaces it with a table of 4 KiB pages in which the guard pages are missing. The
-/// heap is in three more, and each of those gets a table in which the heap's pages are
-/// missing until they are first touched.
+/// heap is in two or three more, and each of those gets a table in which the heap's pages
+/// are missing until they are first touched.
 mod paging {
     use crate::Global;
     use crate::{pages, stack};
@@ -710,7 +710,8 @@ mod paging {
     static mut STACKS_4K: Table = Table([0; 512]);
     /// For the 2 MiB pages the heap is in. The heap is 4 MiB and starts wherever .stack
     /// ends, so it is in three of them, and shares the first and the last with other
-    /// sections.
+    /// sections; or in two, if it starts on a 2 MiB boundary, and then the third table is
+    /// not used: the next 2 MiB page is the stack pool's.
     static mut HEAP_4K: [Table; HEAP_TABLES] = [const { Table([0; 512]) }; HEAP_TABLES];
     const HEAP_TABLES: usize = 3;
     /// The address that `HEAP_4K[0]` starts at.
@@ -749,7 +750,7 @@ mod paging {
         unsafe {
             // Only ever touched here, at boot: no other references exist.
             let (tables, pds) = (&raw mut HEAP_4K, &raw mut boot_pds);
-            for (t, table) in (*tables).iter_mut().enumerate() {
+            for (t, table) in (*tables).iter_mut().enumerate().take((heap.end - base).div_ceil(MIB2)) {
                 for (i, entry) in table.0.iter_mut().enumerate() {
                     let page = base + t * MIB2 + i * pages::PAGE;
                     *entry = if heap.contains(&page) { 0 } else { page as u64 | PRESENT | WRITABLE };

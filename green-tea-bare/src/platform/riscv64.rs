@@ -428,7 +428,8 @@ mod paging {
     static mut STACKS_4K: Table = Table([0; 512]); // 4 KiB per entry, for the stack pool
     /// 4 KiB per entry, for the 2 MiB pages the heap is in. The heap is 4 MiB and starts
     /// wherever .stack ends, so it is in three of them, and shares the first and the last
-    /// with other sections.
+    /// with other sections; or in two, if it starts on a 2 MiB boundary, and then the third
+    /// table is not used: the next 2 MiB page is the stack pool's.
     static mut HEAP_4K: [Table; HEAP_TABLES] = [const { Table([0; 512]) }; HEAP_TABLES];
     const HEAP_TABLES: usize = 3;
     /// The address that `HEAP_4K[0]` starts at.
@@ -472,7 +473,7 @@ mod paging {
             assert!(heap.start >= RAM && heap.end <= base + HEAP_TABLES * MIB2 && heap.end <= stacks);
             HEAP_BASE.set(base);
             let tables = &raw mut HEAP_4K;
-            for (t, table) in (*tables).iter_mut().enumerate() {
+            for (t, table) in (*tables).iter_mut().enumerate().take((heap.end - base).div_ceil(MIB2)) {
                 for (i, entry) in table.0.iter_mut().enumerate() {
                     let page = base + t * MIB2 + i * pages::PAGE;
                     *entry = if heap.contains(&page) { 0 } else { leaf(page, MEMORY) };
