@@ -9,15 +9,17 @@ mod kernel;
 const USAGE: &str = "\
 usage: cargo xtask test [--target <triple>]... [--profile debug|release]...
        cargo xtask kernel [--kernel <name>]... [--target <arch>]... [--release] [--headless] [--screenshot]
+                          [--jobs <n>]
+       cargo xtask shell [--target <arch>] [--release]
        cargo xtask trace [--target <arch>] [--release] [--out <file>] [--type <command>]...
 
 test:   runs green-tea-v2's tests and demo binaries on the host and, under qemu, on every
         cross target, in both profiles. Also checks that the library builds for targets
         we can compile for but not run (Apple Silicon). --target and --profile narrow
         the matrix.
-kernel: builds the bare-metal kernels (green-tea-coop, green-tea-preempt) and boots them,
-        and coop's stack overflow, disk, memory map and pool tests, in QEMU on riscv64,
-        aarch64 and x86_64 (see cargo xtask kernel --help).
+kernel: builds the bare-metal kernels (green-tea-coop, green-tea-preempt, green-tea-shell)
+        and boots them and their tests in QEMU on riscv64, aarch64 and x86_64. The list of
+        them is in cargo xtask kernel --help.
 shell:  boots green-tea-shell with its serial console on this terminal (see cargo xtask
         shell --help).
 trace:  boots green-tea-shell, records its heap while it runs a script, and saves the
@@ -218,7 +220,16 @@ fn workspace_root() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_test_args;
+    use super::{USAGE, kernel, parse_test_args};
+
+    #[test]
+    fn the_usage_has_every_command_and_option() {
+        assert!(USAGE.contains("cargo xtask shell ["), "no usage line for shell");
+        let kernel_usage = USAGE.split("cargo xtask shell").next().unwrap();
+        assert!(kernel_usage.contains("--jobs"), "no --jobs in the usage of kernel");
+        assert!(USAGE.contains("cargo xtask kernel --help"), "the list of kernels is in kernel --help");
+        assert!(kernel::USAGE.contains("\n  --jobs "), "kernel --help's options omit --jobs");
+    }
 
     #[test]
     fn test_help_asks_for_the_usage() {

@@ -111,6 +111,7 @@ counts as four.
   --target      only these architectures (default: all three)
   --release     build with optimizations
   --headless    no windows: quit each QEMU as soon as its kernel finishes
+  --jobs <n>    at most this many virtual CPUs at once
   --screenshot  save the final screen to target/kernel/<kernel>-<arch>.png";
 
 struct Kernel {
