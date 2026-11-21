@@ -21,7 +21,7 @@ swap_context:
     mov rbp, [rsi + 0x30]
 
     ret // pops the value at the top of the stack, jumps to it think 'pop rip'
-        // The value was put there by `call` which in essence is 'push rip'
+        // `call` put the value there ('push rip'), or `Context::new` for a first switch
 .global _bootstrap_entry
 .global bootstrap_entry
 _bootstrap_entry:
