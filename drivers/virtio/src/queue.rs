@@ -119,6 +119,9 @@ impl Queue {
     /// Allocate queue `index` and hand it to the device. Call between
     /// [`crate::negotiate`] and [`crate::driver_ok`].
     pub fn new(transport: &mut impl Transport, index: u16) -> Result<Queue, &'static str> {
+        if transport.queue_in_use(index) {
+            return Err("the virtio queue is already in use");
+        }
         let max = transport.max_queue_size(index);
         if max == 0 {
             return Err("the virtio device has no such queue");

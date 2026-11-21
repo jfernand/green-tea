@@ -252,6 +252,9 @@ mod tests {
         fn max_queue_size(&mut self, _queue: u16) -> u16 {
             self.max_queue
         }
+        fn queue_in_use(&mut self, _queue: u16) -> bool {
+            false
+        }
         fn setup_queue(&mut self, _queue: u16, _size: u16, descriptors: u64, driver: u64, device: u64) {
             self.rings.set((descriptors, driver, device));
         }

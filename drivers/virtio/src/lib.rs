@@ -70,6 +70,8 @@ pub trait Transport {
 
     /// The largest size queue `queue` can have; 0 if there's no such queue.
     fn max_queue_size(&mut self, queue: u16) -> u16;
+    /// Whether queue `queue` has already been set up and enabled.
+    fn queue_in_use(&mut self, queue: u16) -> bool;
     /// Give queue `queue` its size and the physical addresses of its three parts, and
     /// enable it.
     fn setup_queue(&mut self, queue: u16, size: u16, descriptors: u64, driver: u64, device: u64);
@@ -168,6 +170,9 @@ impl Transport for AnyTransport {
     fn max_queue_size(&mut self, queue: u16) -> u16 {
         delegate!(self, t => t.max_queue_size(queue))
     }
+    fn queue_in_use(&mut self, queue: u16) -> bool {
+        delegate!(self, t => t.queue_in_use(queue))
+    }
     fn setup_queue(&mut self, queue: u16, size: u16, descriptors: u64, driver: u64, device: u64) {
         delegate!(self, t => t.setup_queue(queue, size, descriptors, driver, device))
     }
@@ -217,6 +222,9 @@ mod tests {
         }
         fn max_queue_size(&mut self, _queue: u16) -> u16 {
             0
+        }
+        fn queue_in_use(&mut self, _queue: u16) -> bool {
+            false
         }
         fn setup_queue(&mut self, _queue: u16, _size: u16, _descriptors: u64, _driver: u64, _device: u64) {}
         fn notify(&self, _queue: u16) {}

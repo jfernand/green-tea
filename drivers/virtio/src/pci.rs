@@ -146,10 +146,15 @@ impl Transport for PciTransport {
             return 0;
         }
         self.write(QUEUE_SELECT, queue);
-        if self.read::<u16>(QUEUE_ENABLE) != 0 {
-            return 0;
-        }
         self.read(QUEUE_SIZE) // the maximum, until the driver writes a smaller one
+    }
+
+    fn queue_in_use(&mut self, queue: u16) -> bool {
+        if usize::from(queue) >= MAX_QUEUES {
+            return false;
+        }
+        self.write(QUEUE_SELECT, queue);
+        self.read::<u16>(QUEUE_ENABLE) != 0
     }
 
     fn setup_queue(&mut self, queue: u16, size: u16, descriptors: u64, driver: u64, device: u64) {
@@ -174,5 +179,87 @@ impl Transport for PciTransport {
     fn read_config_u32(&self, offset: usize) -> u32 {
         assert!(self.device != 0, "this virtio device has no device configuration");
         unsafe { read_volatile((self.device + offset) as *const u32) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+    use crate::queue::Queue;
+    use std::boxed::Box;
+
+    const F: Function = Function { bus: 0, device: 0, function: 0 };
+    const NOTIFY_OFFSET: usize = 0x100;
+    const NOTIFY_MULTIPLIER: u32 = 4;
+
+    #[repr(C, align(4096))]
+    struct Page([u8; 4096]);
+
+    /// A virtio disk in ordinary memory: its configuration space, and one 64-bit BAR
+    /// holding the common configuration at +0, and notifications at +0x100.
+    struct FakeDevice {
+        config: Box<Page>,
+        bar: Box<Page>,
+    }
+
+    impl FakeDevice {
+        fn new(with_notify: bool) -> FakeDevice {
+            let mut device = FakeDevice { config: Box::new(Page([0; 4096])), bar: Box::new(Page([0; 4096])) };
+            let bar = device.bar.0.as_ptr() as u64;
+            let config = &mut device.config.0;
+            config[0..2].copy_from_slice(&VENDOR_VIRTIO.to_le_bytes());
+            config[2..4].copy_from_slice(&0x1042u16.to_le_bytes());
+            config[0x06] = 1 << 4; // has a capability list
+            config[0x10..0x14].copy_from_slice(&(bar as u32 | 0b100).to_le_bytes());
+            config[0x14..0x18].copy_from_slice(&((bar >> 32) as u32).to_le_bytes());
+            config[0x34] = 0x40;
+            config[0x40] = CAPABILITY_VENDOR;
+            config[0x40 + CAP_CFG_TYPE] = CFG_COMMON;
+            if with_notify {
+                config[0x41] = 0x60;
+                config[0x60] = CAPABILITY_VENDOR;
+                config[0x60 + CAP_CFG_TYPE] = CFG_NOTIFY;
+                config[0x60 + CAP_OFFSET..0x60 + CAP_OFFSET + 4].copy_from_slice(&(NOTIFY_OFFSET as u32).to_le_bytes());
+                config[0x60 + CAP_NOTIFY_MULTIPLIER..0x60 + CAP_NOTIFY_MULTIPLIER + 4]
+                    .copy_from_slice(&NOTIFY_MULTIPLIER.to_le_bytes());
+            }
+            device.bar.0[QUEUE_SIZE..QUEUE_SIZE + 2].copy_from_slice(&16u16.to_le_bytes());
+            device
+        }
+
+        fn ecam(&self) -> Ecam {
+            Ecam(self.config.0.as_ptr() as usize)
+        }
+
+        fn transport(&self) -> PciTransport {
+            probe(self.ecam(), F).unwrap().1
+        }
+
+        fn bar_u16(&self, offset: usize) -> u16 {
+            unsafe { read_volatile(self.bar.0.as_ptr().add(offset).cast::<u16>()) }
+        }
+
+        fn set_bar_u16(&mut self, offset: usize, value: u16) {
+            unsafe { write_volatile(self.bar.0.as_mut_ptr().add(offset).cast::<u16>(), value) };
+        }
+    }
+
+    #[test]
+    fn a_free_queue_can_be_set_up_and_notified() {
+        let mut device = FakeDevice::new(true);
+        device.set_bar_u16(QUEUE_NOTIFY_OFF, 2);
+        let mut transport = device.transport();
+        transport.setup_queue(1, 16, 0x1000, 0x2000, 0x3000);
+        transport.notify(1);
+        assert_eq!(device.bar_u16(NOTIFY_OFFSET + 2 * NOTIFY_MULTIPLIER as usize), 1);
+    }
+
+    #[test]
+    fn a_queue_in_use_is_not_reported_as_missing() {
+        let mut device = FakeDevice::new(true);
+        device.set_bar_u16(QUEUE_ENABLE, 1);
+        let error = Queue::new(&mut device.transport(), 0).err();
+        assert_eq!(error, Some("the virtio queue is already in use"));
     }
 }
