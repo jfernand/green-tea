@@ -96,6 +96,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "green-tea-acpi"
+version = "0.1.0"
+
+[[package]]
 name = "green-tea-arch"
 version = "0.1.0"
 
@@ -145,6 +149,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "green-tea-i8042"
+version = "0.1.0"
+
+[[package]]
 name = "green-tea-io"
 version = "0.1.0"
 
@@ -167,6 +175,10 @@ dependencies = [
  "green-tea-shard",
  "green-tea-smp",
 ]
+
+[[package]]
+name = "green-tea-multiboot2"
+version = "0.1.0"
 
 [[package]]
 name = "green-tea-ns16550"

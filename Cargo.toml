@@ -22,7 +22,7 @@ members = [
 ]
 # What a plain `cargo build` / `cargo test` covers: everything that builds for the host.
 # green-tea-bare, the kernels and the drivers with no host tests build only for bare-metal targets: cargo xtask kernel.
-default-members = ["green-tea-v1", "green-tea-v2", "green-tea-arch", "green-tea-pool", "green-tea-fit", "green-tea-kmem", "green-tea-region", "green-tea-trace", "green-tea-measure", "green-tea-smp", "green-tea-lisp", "green-tea-shard", "green-tea-smr", "drivers/framebuffer", "drivers/pci", "drivers/fw-cfg", "drivers/virtio", "drivers/virtio-blk", "xtask"]
+default-members = ["green-tea-v1", "green-tea-v2", "green-tea-arch", "green-tea-pool", "green-tea-fit", "green-tea-kmem", "green-tea-region", "green-tea-trace", "green-tea-measure", "green-tea-smp", "green-tea-lisp", "green-tea-shard", "green-tea-smr", "drivers/acpi", "drivers/framebuffer", "drivers/i8042", "drivers/multiboot2", "drivers/pci", "drivers/fw-cfg", "drivers/virtio", "drivers/virtio-blk", "xtask"]
 resolver = "3"
 
 [workspace.package]
