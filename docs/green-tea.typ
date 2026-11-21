@@ -6,6 +6,7 @@
   title: "green-tea",
   subtitle: "Green threads, allocators and kernels, crate by crate",
   author: "Javier Fernandez",
+  credit: "JAVIER FERNANDEZ, EDITOR",
   contact: "jotafernand.casaroja.es",
   date: "2026-11-21",
   docid: "ISSS-TR-0506",
