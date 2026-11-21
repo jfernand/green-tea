@@ -293,11 +293,8 @@ pub fn main(args: &[String]) -> ExitCode {
     }
 
     let profile = if options.release { "release" } else { "debug" };
-    for job in &options.jobs {
+    for job in builds(&options.jobs) {
         eprintln!("=== build {} {} {profile}", job.kernel.package, job.arch.name);
-        if options.jobs.iter().take_while(|j| !ptr::eq(*j, job)).any(|j| j.kernel.package == job.kernel.package && ptr::eq(j.arch, job.arch)) {
-            continue; // already built: another kernel runs the same binary
-        }
         if !build(job, options.release) {
             return ExitCode::FAILURE;
         }
@@ -337,6 +334,18 @@ pub fn main(args: &[String]) -> ExitCode {
     } else {
         ExitCode::FAILURE
     }
+}
+
+/// The jobs to build for: one for each package on each architecture, since several kernels
+/// run the same binary.
+fn builds(jobs: &[Job]) -> Vec<&Job> {
+    let mut builds: Vec<&Job> = Vec::new();
+    for job in jobs {
+        if !builds.iter().any(|b| b.kernel.package == job.kernel.package && ptr::eq(b.arch, job.arch)) {
+            builds.push(job);
+        }
+    }
+    builds
 }
 
 fn parse(args: &[String]) -> Result<Options, String> {
@@ -758,6 +767,17 @@ mod tests {
         assert_eq!(labels(&[]), expected(None));
         assert!(labels(&[]).contains(&"overflow-riscv64".to_string()));
         assert!(!labels(&[]).contains(&"overflow-aarch64".to_string()));
+    }
+
+    #[test]
+    fn a_binary_is_built_once_for_each_architecture() {
+        let args: Vec<String> = ["--kernel", "coop", "--kernel", "disk", "--kernel", "shell", "--target", "riscv64"]
+            .iter()
+            .map(|a| a.to_string())
+            .collect();
+        let options = parse(&args).unwrap();
+        let built: Vec<&str> = super::builds(&options.jobs).iter().map(|j| j.kernel.package).collect();
+        assert_eq!(built, ["green-tea-coop", "green-tea-shell"]);
     }
 
     #[test]
