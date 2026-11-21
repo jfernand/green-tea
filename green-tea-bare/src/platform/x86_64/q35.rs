@@ -3,7 +3,7 @@
 //! be entered. fw_cfg says how much RAM and how many CPUs there are, and a CPU's number is
 //! its local APIC's id.
 
-use super::{LAPIC_ID, lapic_read, paging, traps};
+use super::{apic_id, paging, traps};
 use crate::platform::{Platform, Qemu, VirtioBus};
 use crate::{Framebuffer, pages};
 use core::arch::{asm, global_asm};
@@ -91,7 +91,7 @@ impl Platform for Q35 {
 
     /// The local APIC's id: each CPU reads its own APIC at the same address.
     fn cpu() -> usize {
-        (lapic_read(LAPIC_ID) >> 24) as usize
+        apic_id() as usize
     }
 
     /// INIT, then STARTUP, sent to the CPU's local APIC from ours. Neither message is

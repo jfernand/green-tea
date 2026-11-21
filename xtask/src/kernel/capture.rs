@@ -5,7 +5,7 @@
 //! its console as a trace file (`trace dump`), and this picks the file out of the log:
 //! everything from the line `gtt 1` to the line that starts with `end`.
 
-use super::{ARCHES, Arch, Job, KERNELS, build, preflight, target_dir};
+use super::{Board, ARCHES, Arch, Job, KERNELS, build, preflight, target_dir};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
@@ -117,9 +117,9 @@ pub fn main(args: &[String]) -> ExitCode {
 
 fn capture(options: &Options) -> Result<(), String> {
     let arch = options.arch;
-    preflight(&[arch]).map_err(|problems| format!("missing prerequisites: {}", problems.join("; ")))?;
+    preflight(&[arch], Board::Qemu).map_err(|problems| format!("missing prerequisites: {}", problems.join("; ")))?;
     let kernel = KERNELS.iter().find(|k| k.name == "shell").expect("the shell kernel");
-    if !build(&Job { kernel, arch }, options.release) {
+    if !build(&Job { kernel, arch }, options.release, Board::Qemu) {
         return Err("the shell didn't build".into());
     }
     let profile = if options.release { "release" } else { "debug" };

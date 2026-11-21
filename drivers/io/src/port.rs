@@ -29,3 +29,11 @@ pub unsafe fn outw(port: u16, value: u16) {
 pub unsafe fn outl(port: u16, value: u32) {
     unsafe { asm!("out dx, eax", in("dx") port, in("eax") value, options(nostack, preserves_flags)) };
 }
+
+/// # Safety
+/// As for [`inb`], on a 32-bit port.
+pub unsafe fn inl(port: u16) -> u32 {
+    let value: u32;
+    unsafe { asm!("in eax, dx", in("dx") port, out("eax") value, options(nostack, preserves_flags)) };
+    value
+}

@@ -18,10 +18,14 @@ use green_tea_bare::Framebuffer;
 use green_tea_bare::runtime::{Switch, run, spawn};
 use green_tea_bare::screen::{COLORS, COLUMNS, Painter, Screen};
 use green_tea_bare::task::{current_guard, yield_now};
+#[cfg(not(feature = "board-pc"))]
 use green_tea_bare::virtio::{self, Transport};
+#[cfg(not(feature = "board-pc"))]
 use green_tea_bare::virtio_blk::{self as blk, Blk, SECTOR_SIZE};
 use green_tea_bare::pool::{Bitmap, FreeList, GiveError, Pool};
-use green_tea_bare::{Board, Global, Platform, VirtioBus, boot, delay_ms, heap, memory, println, stack};
+#[cfg(not(feature = "board-pc"))]
+use green_tea_bare::VirtioBus;
+use green_tea_bare::{Board, Global, Platform, boot, delay_ms, heap, memory, println, stack};
 
 extern crate alloc;
 
@@ -40,6 +44,7 @@ mod incremental;
 mod tlsf;
 use alloc::boxed::Box;
 use alloc::string::String;
+#[cfg(not(feature = "board-pc"))]
 use alloc::vec;
 use core::sync::atomic::AtomicUsize;
 
@@ -52,6 +57,7 @@ extern "C" fn kmain() -> ! {
     match &test[..len] {
         b"" => demo(fb),
         b"overflow" => overflow_test(fb),
+        #[cfg(not(feature = "board-pc"))]
         b"disk" => disk_test(fb),
         b"memmap" => memmap_test(fb),
         b"pool" => pool_test(fb),
@@ -199,18 +205,23 @@ fn recurse(depth: u64) -> u64 {
 // Read it all back, a few sectors per request; then overwrite one sector, flush, and
 // check that it reads back changed and its neighbours didn't.
 
+#[cfg(not(feature = "board-pc"))]
 /// Must match xtask's `disk_pattern`.
 fn pattern(sector: u64, offset: usize) -> u8 {
     (sector as u8).wrapping_mul(31) ^ (offset as u8) ^ (offset >> 8) as u8
 }
 
+#[cfg(not(feature = "board-pc"))]
 /// The serial number xtask gives the disk.
 const DISK_ID: &[u8] = b"green-tea-disk";
+#[cfg(not(feature = "board-pc"))]
 /// Sectors per read request.
 const CHUNK: usize = 4;
+#[cfg(not(feature = "board-pc"))]
 /// The sector the test overwrites.
 const SCRATCH: u64 = 3;
 
+#[cfg(not(feature = "board-pc"))]
 fn disk_test(fb: Framebuffer) {
     Board::for_each_virtio(|d| println!("virtio: {} device (id {})", virtio::device_name(d.id), d.id))
         .unwrap_or_else(|e| panic!("{e}"));
@@ -250,6 +261,7 @@ fn disk_test(fb: Framebuffer) {
     println!("PASS: read {sectors} sectors over virtio-{kind}, and wrote one back");
 }
 
+#[cfg(not(feature = "board-pc"))]
 fn check_disk(disk: &mut Blk<impl Transport>) -> Result<(), String> {
     use alloc::format;
     let sectors = disk.capacity();

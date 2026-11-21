@@ -18,6 +18,11 @@ links = "green-tea-bare"
 test = false
 bench = false
 
+[features]
+# Build for a physical x86_64 PC booted by GRUB, instead of QEMU's q35: see
+# src/platform/x86_64/pc.rs. Chosen with: cargo xtask kernel --board pc
+board-pc = []
+
 [dependencies]
 green-tea-arch = { path = "../green-tea-arch" }
 green-tea-pool = { path = "../green-tea-pool" }
@@ -38,3 +43,8 @@ green-tea-ns16550 = { path = "../drivers/ns16550" }
 
 [target.'cfg(target_arch = "aarch64")'.dependencies]
 green-tea-pl011 = { path = "../drivers/pl011" }
+
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+green-tea-acpi = { path = "../drivers/acpi" }
+green-tea-i8042 = { path = "../drivers/i8042" }
+green-tea-multiboot2 = { path = "../drivers/multiboot2" }

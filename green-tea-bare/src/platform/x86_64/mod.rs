@@ -1,6 +1,7 @@
 //! What the x86_64 boards share: the 32-bit entry that builds an identity map and enters
 //! long mode, waking other CPUs, interrupts, the local APIC timer, and paging. Each board
-//! says how it was booted and where its devices are: [`q35`] is QEMU's machine.
+//! says how it was booted and where its devices are: `q35` is QEMU's machine, and `pc` a
+//! physical one booted by GRUB.
 //!
 //! `_start` is entered in 32-bit protected mode with paging off. It does what a bootloader
 //! would: identity-map the first 4 GiB with 2 MiB pages, turn on long mode, and far-jump
@@ -34,9 +35,16 @@ use crate::Global;
 use crate::{pages, stack};
 use core::arch::{asm, global_asm};
 use core::ptr::{read_volatile, write_volatile};
+use core::sync::atomic::{AtomicBool, Ordering};
 use green_tea_io::port::outb;
 
+#[cfg(feature = "board-pc")]
+mod pc;
+#[cfg(not(feature = "board-pc"))]
 mod q35;
+#[cfg(feature = "board-pc")]
+pub use pc::Pc;
+#[cfg(not(feature = "board-pc"))]
 pub use q35::Q35;
 
 global_asm!(
@@ -47,6 +55,9 @@ global_asm!(
 _start:
     cli
     cld
+    # What a Multiboot2 loader passes. Kept before anything else uses the registers.
+    mov %eax, green_tea_boot_magic
+    mov %ebx, green_tea_boot_info
 
     # Zero .bss (the framebuffer, the statics and the page tables below).
     mov $__bss_start, %edi
@@ -186,6 +197,8 @@ boot_gdt_ptr:
 
     .section .bss.boot_page_tables, "aw", @nobits
     .balign 4096
+    .globl boot_pml4            # paging::map_high adds to these
+    .globl boot_pdpt
     .globl boot_pds             # paging::enable_guard_pages edits one entry
 boot_pml4: .skip 4096
 boot_pdpt: .skip 4096
@@ -198,6 +211,17 @@ unsafe extern "C" {
     static ap_trampoline: u8;
     static ap_trampoline_end: u8;
 }
+
+/// What the boot loader left in eax and ebx. In .data, since `_start` stores them before
+/// it clears .bss.
+#[unsafe(no_mangle)]
+#[used]
+#[unsafe(link_section = ".data")]
+static mut green_tea_boot_magic: u32 = 0;
+#[unsafe(no_mangle)]
+#[used]
+#[unsafe(link_section = ".data")]
+static mut green_tea_boot_info: u32 = 0;
 
 /// Where the trampoline is copied: a page of ordinary memory below 1 MiB that nothing
 /// else of ours uses.
@@ -212,6 +236,7 @@ static mut green_tea_ap_stack: u64 = 0;
 /// CPU shares.
 #[unsafe(no_mangle)]
 extern "C" fn green_tea_secondary() -> ! {
+    join_x2apic();
     let cpu = Board::cpu();
     traps::join(cpu);
     crate::cpus::enter(cpu)
@@ -514,11 +539,9 @@ fn wake_cpu(apic_id: u32, stack_top: usize) {
         green_tea_ap_stack = stack_top as u64;
     }
     lapic_write(LAPIC_SPURIOUS, APIC_ENABLE | SPURIOUS_VECTOR as u32);
-    lapic_write(LAPIC_ICR_HIGH, apic_id << 24);
-    lapic_write(LAPIC_ICR_LOW, INIT);
+    send_ipi(apic_id, INIT);
     crate::delay_ms(10);
-    lapic_write(LAPIC_ICR_HIGH, apic_id << 24);
-    lapic_write(LAPIC_ICR_LOW, STARTUP | (AP_TRAMPOLINE >> 12) as u32); // the page to start at
+    send_ipi(apic_id, STARTUP | (AP_TRAMPOLINE >> 12) as u32); // the page to start at
 }
 
 const LAPIC: usize = 0xfee0_0000;
@@ -533,12 +556,85 @@ const LAPIC_CURRENT_COUNT: usize = 0x390;
 const LAPIC_DIVIDE: usize = 0x3e0;
 const LVT_MASKED: u32 = 1 << 16;
 
+/// Whether the local APICs are in x2APIC mode, where registers are MSRs instead of memory.
+/// Only the `pc` board turns it on.
+static X2APIC: AtomicBool = AtomicBool::new(false);
+const IA32_APIC_BASE: u32 = 0x1b;
+const APIC_BASE_ENABLE: u64 = 1 << 11;
+const APIC_BASE_X2APIC: u64 = 1 << 10;
+/// An xAPIC register at offset `r` is MSR `X2APIC_MSRS + (r >> 4)`.
+const X2APIC_MSRS: u32 = 0x800;
+const X2APIC_ICR: u32 = 0x830;
+
+fn rdmsr(msr: u32) -> u64 {
+    let (low, high): (u32, u32);
+    // SAFETY: only architectural MSRs that this CPU is known to have are read.
+    unsafe { asm!("rdmsr", in("ecx") msr, out("eax") low, out("edx") high, options(nomem, nostack)) };
+    u64::from(high) << 32 | u64::from(low)
+}
+
+fn wrmsr(msr: u32, value: u64) {
+    // SAFETY: as for `rdmsr`; the callers write values the architecture defines.
+    unsafe { asm!("wrmsr", in("ecx") msr, in("eax") value as u32, in("edx") (value >> 32) as u32, options(nostack)) };
+}
+
+/// Move this CPU's local APIC to x2APIC mode. From disabled it has to go through enabled.
+fn enter_x2apic() {
+    let base = rdmsr(IA32_APIC_BASE);
+    if base & APIC_BASE_X2APIC == 0 {
+        wrmsr(IA32_APIC_BASE, base | APIC_BASE_ENABLE);
+        wrmsr(IA32_APIC_BASE, base | APIC_BASE_ENABLE | APIC_BASE_X2APIC);
+    }
+}
+
+/// Use x2APIC mode if the CPU has it. Firmware may have turned it on already, and it can't
+/// be turned off without a reset of the APIC's state, so this is the one path that works
+/// wherever the firmware left it. Call on the boot CPU, before any other starts.
+#[cfg_attr(not(feature = "board-pc"), allow(dead_code))]
+fn enable_x2apic_if_available() {
+    const CPUID_X2APIC: u32 = 1 << 21;
+    let features = core::arch::x86_64::__cpuid(1).ecx;
+    if features & CPUID_X2APIC != 0 {
+        enter_x2apic();
+        X2APIC.store(true, Ordering::Release);
+    }
+}
+
+/// A started CPU's local APIC follows the boot CPU's.
+fn join_x2apic() {
+    if X2APIC.load(Ordering::Acquire) {
+        enter_x2apic();
+    }
+}
+
 fn lapic_read(register: usize) -> u32 {
+    if X2APIC.load(Ordering::Relaxed) {
+        return rdmsr(X2APIC_MSRS + (register >> 4) as u32) as u32;
+    }
     unsafe { read_volatile((LAPIC + register) as *const u32) }
 }
 
 fn lapic_write(register: usize, value: u32) {
+    if X2APIC.load(Ordering::Relaxed) {
+        return wrmsr(X2APIC_MSRS + (register >> 4) as u32, u64::from(value));
+    }
     unsafe { write_volatile((LAPIC + register) as *mut u32, value) }
+}
+
+/// This CPU's local APIC id.
+fn apic_id() -> u32 {
+    let id = lapic_read(LAPIC_ID);
+    if X2APIC.load(Ordering::Relaxed) { id } else { id >> 24 }
+}
+
+/// Send the interrupt command `command` to the local APIC with id `apic_id`.
+fn send_ipi(apic_id: u32, command: u32) {
+    if X2APIC.load(Ordering::Relaxed) {
+        wrmsr(X2APIC_ICR, u64::from(apic_id) << 32 | u64::from(command));
+    } else {
+        lapic_write(LAPIC_ICR_HIGH, apic_id << 24);
+        lapic_write(LAPIC_ICR_LOW, command);
+    }
 }
 
 /// The function `init_timer` installed, run on every timer tick.
@@ -712,6 +808,49 @@ mod paging {
             table = next;
         }
         steps
+    }
+
+    /// Make `len` bytes at `addr` reachable, for a framebuffer that firmware put above the
+    /// 4 GiB `_start` maps: identity-mapped, with 2 MiB pages. Call once, at boot.
+    #[cfg_attr(not(feature = "board-pc"), allow(dead_code))]
+    pub fn map_high(addr: usize, len: usize) {
+        const PAGE_SIZE: u64 = 1 << 7;
+        const ADDRESS: u64 = 0x000f_ffff_ffff_f000;
+        static mut HIGH_PDPT: Table = Table([0; 512]);
+        // Two, since a framebuffer can straddle a 1 GiB boundary.
+        static mut HIGH_PDS: [Table; 2] = [const { Table([0; 512]) }; 2];
+        unsafe extern "C" {
+            static mut boot_pml4: [u64; 512];
+            static mut boot_pdpt: [u64; 512];
+        }
+        if addr + len <= 1 << 32 {
+            return;
+        }
+        assert!(addr >= 1 << 32, "a framebuffer across the 4 GiB line");
+        let (first, last) = (addr & !(MIB2 - 1), (addr + len - 1) & !(MIB2 - 1));
+        assert!(last >> 30 <= (first >> 30) + 1 && first >> 39 == last >> 39, "framebuffer too large");
+        // SAFETY: at boot, on the only CPU; the tables are in the identity map.
+        unsafe {
+            let index = first >> 39;
+            let pdpt = if index == 0 {
+                (&raw mut boot_pdpt).cast::<u64>()
+            } else {
+                (&raw mut boot_pml4).cast::<u64>().add(index).write((&raw mut HIGH_PDPT) as u64 | PRESENT | WRITABLE);
+                (&raw mut HIGH_PDPT).cast::<u64>()
+            };
+            let mut next = 0;
+            for page in (first..=last).step_by(MIB2) {
+                let entry = pdpt.add(page >> 30 & 511);
+                if entry.read() & PRESENT == 0 {
+                    let pd = (&raw mut HIGH_PDS).cast::<Table>().add(next);
+                    next += 1;
+                    entry.write(pd as u64 | PRESENT | WRITABLE);
+                }
+                let pd = (entry.read() & ADDRESS) as *mut u64;
+                pd.add(page >> 21 & 511).write(page as u64 | PRESENT | WRITABLE | PAGE_SIZE);
+            }
+            asm!("mov {0}, cr3", "mov cr3, {0}", out(reg) _, options(nostack));
+        }
     }
 
     /// The entry for a page of the heap.

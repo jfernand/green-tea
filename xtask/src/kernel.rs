@@ -10,6 +10,7 @@ use crate::{on_path, workspace_root};
 use std::collections::VecDeque;
 use std::fs;
 use std::io::Write;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitCode, Stdio};
 use std::ptr;
@@ -22,6 +23,7 @@ pub mod capture;
 pub const USAGE: &str = "\
 usage: cargo xtask kernel [--kernel <name>]... [--target riscv64|aarch64|x86_64]...
                           [--release] [--headless] [--screenshot] [--jobs <n>]
+                          [--board qemu|pc]
 
 Builds the bare-metal kernels and boots each in QEMU on every architecture it supports,
 one window apiece, all at once. Close the windows to finish. The kernels' serial output
@@ -113,7 +115,23 @@ counts as four.
   --release     build with optimizations
   --headless    no windows: quit each QEMU as soon as its kernel finishes
   --jobs <n>    at most this many virtual CPUs at once
-  --screenshot  save the final screen to target/kernel/<kernel>-<arch>.png";
+  --screenshot  save the final screen to target/kernel/<kernel>-<arch>.png
+  --board pc    build for a physical x86_64 PC instead of QEMU's machine, and test it in
+                QEMU with UEFI firmware. Copy target/kernel/pc/<kernel>-x86_64/EFI to a
+                FAT USB stick to boot it. No virtio, so no disk kernel";
+
+/// What the kernels are built for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Board {
+    /// The machine QEMU emulates for each architecture.
+    Qemu,
+    /// A physical x86_64 PC, booted by GRUB from UEFI.
+    Pc,
+}
+
+/// UEFI firmware for QEMU, from Debian and Ubuntu's `ovmf` package.
+const OVMF_CODE: &str = "/usr/share/OVMF/OVMF_CODE_4M.fd";
+const OVMF_VARS: &str = "/usr/share/OVMF/OVMF_VARS_4M.fd";
 
 struct Kernel {
     name: &'static str,
@@ -257,6 +275,7 @@ struct Options {
     release: bool,
     headless: bool,
     screenshot: bool,
+    board: Board,
     /// How many virtual CPUs may run at once, if `--jobs` said.
     limit: Option<usize>,
 }
@@ -285,7 +304,7 @@ pub fn main(args: &[String]) -> ExitCode {
         }
         v
     });
-    if let Err(problems) = preflight(&arches) {
+    if let Err(problems) = preflight(&arches, options.board) {
         eprintln!("missing prerequisites:");
         for p in problems {
             eprintln!("  - {p}");
@@ -296,15 +315,24 @@ pub fn main(args: &[String]) -> ExitCode {
     let profile = if options.release { "release" } else { "debug" };
     for job in builds(&options.jobs) {
         eprintln!("=== build {} {} {profile}", job.kernel.package, job.arch.name);
-        if !build(job, options.release) {
+        if !build(job, options.release, options.board) {
             return ExitCode::FAILURE;
         }
     }
 
     let out_dir = target_dir().join("kernel");
-    if let Err(e) = fs::create_dir_all(&out_dir) {
+    if let Err(e) = fs::create_dir_all(out_dir.join("pc")) {
         eprintln!("can't create {}: {e}", out_dir.display());
         return ExitCode::FAILURE;
+    }
+    if options.board == Board::Pc {
+        for job in &options.jobs {
+            let elf = target_dir().join(job.arch.triple).join(profile).join(job.kernel.package);
+            if let Err(e) = make_esp(job, &elf, &out_dir) {
+                eprintln!("can't make the boot files of {}: {e}", job.label());
+                return ExitCode::FAILURE;
+            }
+        }
     }
     let mut queue: VecDeque<Job> = options.jobs.drain(..).collect();
     let mut runs = Vec::new();
@@ -350,7 +378,7 @@ fn builds(jobs: &[Job]) -> Vec<&Job> {
 }
 
 fn parse(args: &[String]) -> Result<Options, String> {
-    let mut options = Options { jobs: Vec::new(), release: false, headless: false, screenshot: false, limit: None };
+    let mut options = Options { jobs: Vec::new(), release: false, headless: false, screenshot: false, board: Board::Qemu, limit: None };
     let mut kernels: Vec<&'static Kernel> = Vec::new();
     let mut arches: Vec<&'static Arch> = Vec::new();
     let mut args = args.iter();
@@ -359,6 +387,14 @@ fn parse(args: &[String]) -> Result<Options, String> {
             "--release" => options.release = true,
             "--headless" => options.headless = true,
             "--screenshot" => options.screenshot = true,
+            "--board" => {
+                options.board = match args.next().map(String::as_str) {
+                    Some("qemu") => Board::Qemu,
+                    Some("pc") => Board::Pc,
+                    Some(other) => return Err(format!("unknown board {other}; known: qemu, pc")),
+                    None => return Err("--board needs a value".into()),
+                };
+            }
             "--jobs" => {
                 let value = args.next().ok_or("--jobs needs a value")?;
                 let limit = value.parse().ok().filter(|n| *n > 0);
@@ -396,10 +432,20 @@ fn parse(args: &[String]) -> Result<Options, String> {
     if kernels.is_empty() {
         kernels = KERNELS.iter().collect();
     }
+    if options.board == Board::Pc {
+        if arches.iter().any(|a| a.name != "x86_64") {
+            return Err("--board pc is for x86_64 only".into());
+        }
+        arches = ARCHES.iter().filter(|a| a.name == "x86_64").collect();
+    }
     if arches.is_empty() {
         arches = ARCHES.iter().collect();
     }
     for kernel in kernels {
+        if options.board == Board::Pc && kernel.disk {
+            eprintln!("note: skipping {} on the pc board, which has no virtio disk", kernel.name);
+            continue;
+        }
         for &arch in &arches {
             if kernel.arches.contains(&arch.name) {
                 options.jobs.push(Job { kernel, arch });
@@ -414,7 +460,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
     Ok(options)
 }
 
-fn preflight(arches: &[&Arch]) -> Result<(), Vec<String>> {
+fn preflight(arches: &[&Arch], board: Board) -> Result<(), Vec<String>> {
     let installed = Command::new("rustup")
         .args(["target", "list", "--installed"])
         .output()
@@ -434,17 +480,56 @@ fn preflight(arches: &[&Arch]) -> Result<(), Vec<String>> {
             problems.push(format!("{} is not on PATH: sudo apt install {package}", arch.qemu));
         }
     }
+    if board == Board::Pc {
+        if !on_path("grub-mkstandalone") {
+            problems.push("grub-mkstandalone is not on PATH: sudo apt install grub-efi-amd64-bin".into());
+        }
+        if !Path::new(OVMF_CODE).exists() {
+            problems.push(format!("no UEFI firmware at {OVMF_CODE}: sudo apt install ovmf"));
+        }
+    }
     if problems.is_empty() { Ok(()) } else { Err(problems) }
 }
 
-fn build(job: &Job, release: bool) -> bool {
+fn build(job: &Job, release: bool, board: Board) -> bool {
     let mut cmd = Command::new(env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
     cmd.current_dir(workspace_root())
         .args(["build", "-p", job.kernel.package, "--target", job.arch.triple]);
     if release {
         cmd.arg("--release");
     }
+    if board == Board::Pc {
+        cmd.args(["--features", "board-pc"]);
+    }
     cmd.status().is_ok_and(|s| s.success())
+}
+
+/// What GRUB runs: load the kernel, tell it which test to run, and boot.
+fn grub_config(test: Option<&str>) -> String {
+    let args = test.map_or(String::new(), |t| format!(" test={t}"));
+    format!("set timeout=0\ninsmod efi_gop\nmultiboot2 /boot/kernel{args}\nboot\n")
+}
+
+/// The directory a job boots from on the pc board: what goes on a UEFI system partition.
+fn esp_dir(job: &Job, out_dir: &Path) -> PathBuf {
+    out_dir.join("pc").join(job.label())
+}
+
+/// Build the UEFI application that boots `elf`: GRUB, with its configuration and the kernel
+/// inside it, at the path firmware looks for on removable media.
+fn make_esp(job: &Job, elf: &Path, out_dir: &Path) -> std::io::Result<()> {
+    let esp = esp_dir(job, out_dir);
+    let boot = esp.join("EFI").join("BOOT");
+    fs::create_dir_all(&boot)?;
+    let config = out_dir.join("pc").join(format!("{}.cfg", job.label()));
+    fs::write(&config, grub_config(job.kernel.test))?;
+    let status = Command::new("grub-mkstandalone")
+        .args(["--format=x86_64-efi", "--modules=multiboot2 normal efi_gop fat part_gpt part_msdos"])
+        .arg(format!("--output={}", boot.join("BOOTX64.EFI").display()))
+        .arg(format!("boot/grub/grub.cfg={}", config.display()))
+        .arg(format!("boot/kernel={}", elf.display()))
+        .status()?;
+    if status.success() { Ok(()) } else { Err(std::io::Error::other("grub-mkstandalone failed")) }
 }
 
 /// Where cargo puts what it builds, which `build.target-dir` in a config file can move.
@@ -525,7 +610,7 @@ pub fn shell(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    if let Err(problems) = preflight(&[arch]) {
+    if let Err(problems) = preflight(&[arch], Board::Qemu) {
         eprintln!("missing prerequisites:");
         for p in problems {
             eprintln!("  - {p}");
@@ -534,7 +619,7 @@ pub fn shell(args: &[String]) -> ExitCode {
     }
     let kernel = KERNELS.iter().find(|k| k.name == "shell").expect("the shell kernel");
     let job = Job { kernel, arch };
-    if !build(&job, release) {
+    if !build(&job, release, Board::Qemu) {
         return ExitCode::FAILURE;
     }
     let profile = if release { "release" } else { "debug" };
@@ -592,29 +677,55 @@ struct Run {
     read: usize,
     /// Echoing starts at the kernel's first line, skipping the firmware's banner.
     seen_kernel: bool,
+    /// A socket to the serial port and what to type at it, once the kernel is up.
+    late_input: Option<(PathBuf, &'static str)>,
     /// Set once: Ok or Err with a one-line description.
     outcome: Option<Result<String, String>>,
     exited: bool,
 }
 
 impl Run {
-    fn start(job: Job, elf: &Path, out_dir: &Path, headless: bool) -> std::io::Result<Run> {
+    fn start(job: Job, elf: &Path, out_dir: &Path, headless: bool, board: Board) -> std::io::Result<Run> {
         let log = out_dir.join(format!("{}.log", job.label()));
         let _ = fs::remove_file(&log);
         let mut cmd = Command::new(job.arch.qemu);
-        cmd.args(job.arch.machine)
-            .args(["-m", "128M", "-device", "ramfb"])
-            .args(["-name", &format!("{} ({})", job.kernel.package, job.arch.name)])
+        match board {
+            Board::Qemu => {
+                cmd.args(job.arch.machine).args(["-m", "128M", "-device", "ramfb"]).arg("-kernel").arg(elf);
+            }
+            // UEFI firmware, which finds GRUB on a FAT drive made from the directory.
+            Board::Pc => {
+                let vars = out_dir.join("pc").join(format!("{}.vars", job.label()));
+                fs::copy(OVMF_VARS, &vars)?;
+                cmd.args(["-machine", "q35", "-cpu", "max", "-m", "512M", "-vga", "std", "-net", "none"])
+                    .arg("-drive")
+                    .arg(format!("if=pflash,format=raw,readonly=on,file={OVMF_CODE}"))
+                    .arg("-drive")
+                    .arg(format!("if=pflash,format=raw,file={}", vars.display()))
+                    .arg("-drive")
+                    .arg(format!("if=none,id=esp,format=raw,readonly=on,file=fat:{}", esp_dir(&job, out_dir).display()))
+                    .args(["-device", "virtio-blk-pci,drive=esp"]);
+            }
+        }
+        cmd.args(["-name", &format!("{} ({})", job.kernel.package, job.arch.name)])
             .args(["-monitor", "stdio"])
-            .arg("-kernel")
-            .arg(elf)
             .stdin(Stdio::piped())
             .stdout(Stdio::null()); // the monitor's echo; errors still go to stderr
+        let mut late_input = None;
         match job.kernel.input {
             None => cmd.arg("-serial").arg(format!("file:{}", log.display())),
             // The serial port's output goes to the log, and its input comes from a file.
             // QEMU hands the UART a byte only when it has room, so nothing is lost if
             // the kernel is slow to start reading.
+            // On the pc board the firmware and GRUB read the serial port too, and would eat
+            // the input. It goes through a socket instead, once the kernel has said hello.
+            Some(input) if board == Board::Pc => {
+                let socket = env::temp_dir().join(format!("green-tea-{}-{}.sock", std::process::id(), job.label()));
+                let _ = fs::remove_file(&socket);
+                let chardev = format!("socket,id=console,path={},server=on,wait=off,logfile={}", socket.display(), log.display());
+                late_input = Some((socket, input));
+                cmd.arg("-chardev").arg(chardev).args(["-serial", "chardev:console"])
+            }
             Some(input) => {
                 let script = out_dir.join(format!("{}.in", job.label()));
                 fs::write(&script, input)?;
@@ -629,7 +740,7 @@ impl Run {
         if job.cpus() > 1 {
             cmd.args(["-smp", &job.cpus().to_string()]);
         }
-        if let Some(test) = job.kernel.test {
+        if let Some(test) = job.kernel.test.filter(|_| board == Board::Qemu) {
             cmd.arg("-fw_cfg").arg(format!("name=opt/green-tea/test,string={test}"));
         }
         if job.kernel.disk {
@@ -646,6 +757,7 @@ impl Run {
             log,
             read: 0,
             seen_kernel: false,
+            late_input,
             outcome: None,
             exited: false,
         })
@@ -656,6 +768,22 @@ impl Run {
             let _ = writeln!(stdin, "{command}");
             let _ = stdin.flush();
         }
+    }
+
+    /// Type the input, from a thread since QEMU takes it only as the UART has room.
+    fn type_late_input(&mut self) {
+        if !self.seen_kernel {
+            return;
+        }
+        let Some((socket, input)) = self.late_input.take() else { return };
+        thread::spawn(move || {
+            if let Ok(mut stream) = UnixStream::connect(&socket) {
+                let _ = stream.write_all(input.as_bytes());
+                // Held open until QEMU exits: closing it could lose what is still queued.
+                let _ = std::io::copy(&mut stream, &mut std::io::sink());
+            }
+            let _ = fs::remove_file(&socket);
+        });
     }
 
     /// Echo new complete lines from the serial log, and look for the verdict.
@@ -720,11 +848,12 @@ fn watch(queue: &mut VecDeque<Job>, runs: &mut Vec<Run>, options: &Options, out_
             busy += job.cpus();
             let job = queue.pop_front().expect("the queue has a front");
             let elf = target_dir().join(job.arch.triple).join(profile).join(job.kernel.package);
-            runs.push(Run::start(job, &elf, out_dir, options.headless)?);
+            runs.push(Run::start(job, &elf, out_dir, options.headless, options.board)?);
         }
         for run in runs.iter_mut().filter(|r| !r.exited) {
             let had_outcome = run.outcome.is_some();
             run.follow();
+            run.type_late_input();
             if !had_outcome && run.outcome.is_some() {
                 if options.screenshot {
                     let png = out_dir.join(format!("{}.png", run.job.label()));
@@ -754,7 +883,7 @@ fn watch(queue: &mut VecDeque<Job>, runs: &mut Vec<Run>, options: &Options, out_
 
 #[cfg(test)]
 mod tests {
-    use super::{disk_image, fits, judge, parse, verdict};
+    use super::{Board, grub_config, disk_image, fits, judge, parse, verdict};
 
     #[test]
     fn the_disk_image_differs_from_sector_to_sector() {
@@ -864,6 +993,36 @@ mod tests {
         let json = r#"{"packages":[],"target_directory":"/a \\ b/\"c\"","version":1}"#;
         assert_eq!(super::json_path(json, "target_directory"), Some(r#"/a \ b/"c""#.into()));
         assert_eq!(super::json_path(r#"{"target_directory":"/a\u00e9"}"#, "target_directory"), None);
+    }
+
+    #[test]
+    fn the_board_defaults_to_qemu() {
+        assert_eq!(parse(&[]).map(|o| o.board).unwrap(), Board::Qemu);
+    }
+
+    #[test]
+    fn the_pc_board_runs_only_x86_64_and_no_disk() {
+        let options = parse(&["--board".to_string(), "pc".to_string()]).unwrap();
+        assert_eq!(options.board, Board::Pc);
+        assert!(options.jobs.iter().all(|j| j.arch.name == "x86_64" && !j.kernel.disk));
+        assert!(options.jobs.iter().any(|j| j.kernel.name == "shell"));
+    }
+
+    #[test]
+    fn the_pc_board_refuses_another_architecture() {
+        let args = ["--board", "pc", "--target", "riscv64"].map(String::from);
+        assert!(parse(&args).is_err());
+    }
+
+    #[test]
+    fn an_unknown_board_is_refused() {
+        assert!(parse(&["--board".to_string(), "sparc".to_string()]).is_err());
+    }
+
+    #[test]
+    fn grub_passes_the_test_on_the_command_line() {
+        assert!(grub_config(Some("slab")).contains("multiboot2 /boot/kernel test=slab\n"));
+        assert!(grub_config(None).contains("multiboot2 /boot/kernel\n"));
     }
 
     #[test]

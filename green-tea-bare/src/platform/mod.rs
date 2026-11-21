@@ -10,7 +10,9 @@
 //! Context switching itself (`Context`, `swap_context`) isn't here: it depends only on
 //! the ISA and its calling convention, not on the machine, and lives in green-tea-arch.
 
+#[cfg(not(feature = "board-pc"))]
 mod qemu;
+#[cfg(not(feature = "board-pc"))]
 pub use qemu::Qemu;
 
 #[cfg(target_arch = "aarch64")]
@@ -20,16 +22,22 @@ mod riscv64;
 #[cfg(target_arch = "x86_64")]
 mod x86_64;
 
-/// The board being built for: QEMU `virt` on riscv64 and aarch64, `q35` on x86_64.
+/// The board being built for: QEMU `virt` on riscv64 and aarch64, and on x86_64 QEMU's
+/// `q35`, or a physical PC with the `board-pc` feature.
 #[cfg(target_arch = "aarch64")]
 pub use aarch64::AarchVirt as Board;
 #[cfg(target_arch = "riscv64")]
 pub use riscv64::RiscvVirt as Board;
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "board-pc"))]
+pub use x86_64::Pc as Board;
+#[cfg(all(target_arch = "x86_64", not(feature = "board-pc")))]
 pub use x86_64::Q35 as Board;
 
 use crate::Framebuffer;
 use green_tea_virtio as virtio;
+
+#[cfg(all(feature = "board-pc", not(target_arch = "x86_64")))]
+compile_error!("the board-pc feature is for x86_64");
 
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64")))]
 compile_error!("green-tea-bare supports riscv64, aarch64 and x86_64 so far");

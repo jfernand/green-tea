@@ -10,6 +10,11 @@ SECTIONS
     . = @BASE@;
     __kernel_start = .;
 
+    /* The pc board only: the header GRUB looks for in the file's first 32 KiB. */
+    .multiboot2 : {
+        KEEP(*(.multiboot2))
+    }
+
     /* x86_64 only: the PVH entry note QEMU looks for. It must stay a note section of its
      * own so the linker gives it a PT_NOTE program header. */
     .note.Xen : {

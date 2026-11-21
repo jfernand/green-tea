@@ -13,9 +13,12 @@ fn main() {
         return; // not a bare-metal target: nothing will link
     }
     let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
+    let pc = env::var_os("CARGO_FEATURE_BOARD_PC").is_some();
     let base = match arch.as_str() {
         "riscv64" => "0x80200000", // where OpenSBI jumps, 2 MiB into RAM
         "aarch64" => "0x40200000", // 2 MiB into RAM, leaving QEMU room for the device tree
+        // UEFI firmware keeps data of its own a few MiB up, where the kernel would overlap it.
+        "x86_64" if pc => "0x2000000", // 32 MiB
         "x86_64" => "0x100000",    // 1 MiB, above the legacy BIOS area
         other => panic!("green-tea-bare has no platform for {other}"),
     };
