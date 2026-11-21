@@ -51,4 +51,17 @@ impl Ns16550Port {
         use green_tea_io::port::inb;
         unsafe { (inb(self.0 + 5) & LSR_DATA_READY != 0).then(|| inb(self.0)) }
     }
+
+    /// Raise the port's interrupt line when a byte arrives. On a PC the line reaches the
+    /// interrupt controller only with the modem control register's OUT2 bit set.
+    pub fn enable_receive_interrupt(&self) {
+        use green_tea_io::port::outb;
+        const DTR_RTS_OUT2: u8 = 0x0b;
+        const RECEIVED: u8 = 1;
+        // SAFETY: this UART's own registers.
+        unsafe {
+            outb(self.0 + 4, DTR_RTS_OUT2);
+            outb(self.0 + 1, RECEIVED);
+        }
+    }
 }

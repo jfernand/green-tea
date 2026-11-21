@@ -40,6 +40,22 @@ fn u64_at(b: &[u8], at: usize) -> Option<u64> {
     Some(u64::from_le_bytes(b.get(at..at + 8)?.try_into().ok()?))
 }
 
+/// An IO APIC, from the MADT.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct IoApicEntry {
+    pub address: u32,
+    /// The global system interrupt of its first input.
+    pub first_gsi: u32,
+}
+
+/// Where a legacy ISA interrupt goes, and how it signals.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IsaRoute {
+    pub gsi: u32,
+    pub active_low: bool,
+    pub level: bool,
+}
+
 /// The root table: where it is, and how wide its pointers are.
 pub struct Acpi<M> {
     memory: M,
@@ -138,6 +154,57 @@ impl<M: Memory> Acpi<M> {
             at += len as usize;
         }
         Some(address)
+    }
+
+    /// Put the machine's IO APICs in `out`, and return how many there are.
+    pub fn io_apics(&self, out: &mut [IoApicEntry]) -> usize {
+        const IO_APIC: u8 = 1;
+        let mut buf = [0u8; MAX_TABLE];
+        let Some(madt) = self.find(b"APIC").and_then(|a| self.table(a, &mut buf)) else { return 0 };
+        let mut count = 0;
+        let mut at = HEADER + 8;
+        while let (Some(&kind), Some(&len)) = (madt.get(at), madt.get(at + 1)) {
+            if len < 2 {
+                break;
+            }
+            if kind == IO_APIC
+                && count < out.len()
+                && let (Some(address), Some(first_gsi)) = (u32_at(madt, at + 4), u32_at(madt, at + 8))
+            {
+                out[count] = IoApicEntry { address, first_gsi };
+                count += 1;
+            }
+            at += len as usize;
+        }
+        count
+    }
+
+    /// Where ISA interrupt `irq` goes: to the same-numbered input, rising edge, unless the
+    /// MADT has an override for it.
+    pub fn isa_route(&self, irq: u8) -> IsaRoute {
+        const OVERRIDE: u8 = 2;
+        const ISA_BUS: u8 = 0;
+        const LOW: u16 = 3; // in the polarity field; 0 and 1 are the bus's default and high
+        const LEVEL: u16 = 3; // in the trigger field
+        let default = IsaRoute { gsi: u32::from(irq), active_low: false, level: false };
+        let mut buf = [0u8; MAX_TABLE];
+        let Some(madt) = self.find(b"APIC").and_then(|a| self.table(a, &mut buf)) else { return default };
+        let mut at = HEADER + 8;
+        while let (Some(&kind), Some(&len)) = (madt.get(at), madt.get(at + 1)) {
+            if len < 2 {
+                break;
+            }
+            if kind == OVERRIDE
+                && madt.get(at + 2) == Some(&ISA_BUS)
+                && madt.get(at + 3) == Some(&irq)
+                && let (Some(gsi), Some(flags)) =
+                    (u32_at(madt, at + 4), madt.get(at + 8..at + 10).map(|f| u16::from_le_bytes([f[0], f[1]])))
+            {
+                return IsaRoute { gsi, active_low: flags & 3 == LOW, level: flags >> 2 & 3 == LEVEL };
+            }
+            at += len as usize;
+        }
+        default
     }
 
     /// PCI segment 0's ECAM window: the address bus 0 would be at, and the buses it covers.
@@ -394,6 +461,43 @@ mod tests {
         fadt[176..184].copy_from_slice(&0xfed0_0000u64.to_le_bytes());
         let fake = with(&[(0x3000, table(b"FACP", &fadt))]);
         assert_eq!(Acpi::new(&fake, &rsdp_v2(0x1000)).unwrap().pm_timer_port(), Some(0x608));
+    }
+
+    fn io_apic(address: u32, first: u32) -> Vec<u8> {
+        let mut e = std::vec![1, 12, 0, 0];
+        e.extend(address.to_le_bytes());
+        e.extend(first.to_le_bytes());
+        e
+    }
+
+    fn isa_override(irq: u8, gsi: u32, flags: u16) -> Vec<u8> {
+        let mut e = std::vec![2, 10, 0, irq];
+        e.extend(gsi.to_le_bytes());
+        e.extend(flags.to_le_bytes());
+        e
+    }
+
+    #[test]
+    fn finds_the_io_apics() {
+        let m = madt(&[lapic(0, 1), io_apic(0xfec0_0000, 0), io_apic(0xfec1_0000, 24)]);
+        let fake = with(&[(0x2000, m)]);
+        let mut out = [IoApicEntry::default(); 4];
+        assert_eq!(Acpi::new(&fake, &rsdp_v2(0x1000)).unwrap().io_apics(&mut out), 2);
+        assert_eq!(out[1], IoApicEntry { address: 0xfec1_0000, first_gsi: 24 });
+    }
+
+    #[test]
+    fn an_isa_interrupt_without_an_override_keeps_its_number() {
+        let fake = with(&[(0x2000, madt(&[lapic(0, 1), isa_override(0, 2, 0)]))]);
+        let route = Acpi::new(&fake, &rsdp_v2(0x1000)).unwrap().isa_route(1);
+        assert_eq!(route, IsaRoute { gsi: 1, active_low: false, level: false });
+    }
+
+    #[test]
+    fn an_override_moves_an_isa_interrupt_and_sets_how_it_signals() {
+        let fake = with(&[(0x2000, madt(&[isa_override(4, 20, 0b1111)]))]);
+        let route = Acpi::new(&fake, &rsdp_v2(0x1000)).unwrap().isa_route(4);
+        assert_eq!(route, IsaRoute { gsi: 20, active_low: true, level: true });
     }
 
     #[test]

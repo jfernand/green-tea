@@ -78,6 +78,16 @@ mod port {
         value
     }
 
+    fn outb(port: u16, value: u8) {
+        // SAFETY: only the controller's own ports, with commands it documents.
+        unsafe { asm!("out dx, al", in("dx") port, in("al") value, options(nomem, nostack)) };
+    }
+
+    /// Wait for the status bit to read `set`. `false` if the controller never gets there.
+    fn wait(bit: u8, set: bool) -> bool {
+        (0..100_000).any(|_| (inb(STATUS) & bit != 0) == set)
+    }
+
     /// The keyboard on the controller.
     pub struct Keyboard(Decoder);
 
@@ -90,6 +100,44 @@ mod port {
     impl Keyboard {
         pub const fn new() -> Keyboard {
             Keyboard(Decoder::new())
+        }
+
+        /// Have the controller raise IRQ 1 for the keyboard and IRQ 12 for a mouse. The mouse's
+        /// is on because its bytes share the one output buffer: one left unread there
+        /// would block the keyboard, and no keyboard interrupt would say so. `false` if there
+        /// is no controller, or it doesn't answer.
+        pub fn enable_interrupts(&mut self) -> bool {
+            const INPUT_FULL: u8 = 1 << 1;
+            const READ_CONFIG: u8 = 0x20;
+            const WRITE_CONFIG: u8 = 0x60;
+            const IRQ1_AND_IRQ12: u8 = 0b11;
+            if inb(STATUS) == 0xff {
+                return false;
+            }
+            // Anything waiting would be taken for the configuration byte.
+            for _ in 0..32 {
+                if inb(STATUS) & OUTPUT_FULL == 0 {
+                    break;
+                }
+                inb(DATA);
+            }
+            if !wait(INPUT_FULL, false) {
+                return false;
+            }
+            outb(STATUS, READ_CONFIG);
+            if !wait(OUTPUT_FULL, true) {
+                return false;
+            }
+            let config = inb(DATA);
+            if !wait(INPUT_FULL, false) {
+                return false;
+            }
+            outb(STATUS, WRITE_CONFIG);
+            if !wait(INPUT_FULL, false) {
+                return false;
+            }
+            outb(DATA, config | IRQ1_AND_IRQ12);
+            true
         }
 
         /// The next character typed, if one has arrived.

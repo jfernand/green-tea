@@ -9,6 +9,7 @@
 //! contrast, burns its whole slice every round. When every task is asleep, the scheduler
 //! idles until the first one is due.
 
+use crate::event::Event;
 use crate::global::Global;
 use crate::platform::{Board, Platform};
 use crate::task::Task;
@@ -20,6 +21,7 @@ use core::ptr;
 struct Runtime {
     queue: RefCell<VecDeque<Task>>, // runnable tasks, in the order they'll next run
     sleeping: RefCell<Vec<(u64, Task)>>, // tasks waiting for a deadline, in no order
+    waiting: RefCell<Vec<(&'static Event, Task)>>, // tasks waiting for an event, in no order
 }
 
 /// The runtime in charge, or null outside `run`.
@@ -40,7 +42,11 @@ pub enum Switch {
 /// # Panics
 /// If called from inside another `run`.
 pub fn run(main: impl FnOnce() + 'static, mut on_switch: impl FnMut(Switch)) {
-    let runtime = Runtime { queue: RefCell::new(VecDeque::new()), sleeping: RefCell::new(Vec::new()) };
+    let runtime = Runtime {
+        queue: RefCell::new(VecDeque::new()),
+        sleeping: RefCell::new(Vec::new()),
+        waiting: RefCell::new(Vec::new()),
+    };
     assert!(RUNTIME.get().is_null(), "run() called inside run()");
     RUNTIME.set(&runtime);
 
@@ -52,9 +58,18 @@ pub fn run(main: impl FnOnce() + 'static, mut on_switch: impl FnMut(Switch)) {
         let next = runtime.queue.borrow_mut().pop_front();
         let Some(mut task) = next else {
             let first_due = runtime.sleeping.borrow().iter().map(|&(due, _)| due).min();
-            let Some(due) = first_due else { break }; // nothing runnable or asleep: done
-            on_switch(Switch::Idle);
-            while Board::ticks() < due {}
+            match first_due {
+                // Every task is waiting for an event: only an interrupt can change that.
+                None if !runtime.waiting.borrow().is_empty() => {
+                    on_switch(Switch::Idle);
+                    Board::wait_for_interrupt();
+                }
+                None => break, // nothing runnable, asleep or waiting: done
+                Some(due) => {
+                    on_switch(Switch::Idle);
+                    while Board::ticks() < due && !runtime.any_event_set() {}
+                }
+            }
             continue;
         };
         on_switch(Switch::To(task.id()));
@@ -62,9 +77,10 @@ pub fn run(main: impl FnOnce() + 'static, mut on_switch: impl FnMut(Switch)) {
         if task.is_done() {
             continue;
         }
-        match task.take_wake_at() {
-            Some(due) => runtime.sleeping.borrow_mut().push((due, task)),
-            None => runtime.queue.borrow_mut().push_back(task),
+        match (task.take_wake_at(), task.take_waits_for()) {
+            (Some(due), _) => runtime.sleeping.borrow_mut().push((due, task)),
+            (None, Some(event)) => runtime.waiting.borrow_mut().push((event, task)),
+            (None, None) => runtime.queue.borrow_mut().push_back(task),
         }
     }
     crate::task::reap(); // every task has finished: their records' stacks go back to the pool
@@ -72,9 +88,11 @@ pub fn run(main: impl FnOnce() + 'static, mut on_switch: impl FnMut(Switch)) {
 }
 
 impl Runtime {
-    /// Move every sleeper that's due to the back of the run queue.
+    /// Move every sleeper that's due, and every waiter whose event is set, to the back of
+    /// the run queue.
     fn wake(&self, now: u64) {
         let mut sleeping = self.sleeping.borrow_mut();
+        let mut waiting = self.waiting.borrow_mut();
         let mut queue = self.queue.borrow_mut();
         let mut i = 0;
         while i < sleeping.len() {
@@ -84,6 +102,18 @@ impl Runtime {
                 i += 1;
             }
         }
+        let mut i = 0;
+        while i < waiting.len() {
+            if waiting[i].0.is_set() {
+                queue.push_back(waiting.swap_remove(i).1);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    fn any_event_set(&self) -> bool {
+        self.waiting.borrow().iter().any(|(event, _)| event.is_set())
     }
 }
 

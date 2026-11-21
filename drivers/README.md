@@ -14,6 +14,7 @@ caller's to say, and green-tea-bare's platforms say it.
 | [`green-tea-pci`](pci) | PCI configuration space through ECAM | x86_64 |
 | [`green-tea-virtio`](virtio) | virtio: negotiation, split virtqueues, the MMIO and PCI transports | all |
 | [`green-tea-virtio-blk`](virtio-blk) | virtio-blk, a disk, over any virtio transport | all |
+| [`green-tea-ioapic`](ioapic) | The IO APIC, which routes device interrupts to a CPU | x86_64 `pc` |
 | [`green-tea-multiboot2`](multiboot2) | The boot information GRUB leaves: memory, framebuffer, command line | x86_64 `pc` |
 | [`green-tea-acpi`](acpi) | ACPI tables: the CPUs, the HPET and the power management timer | x86_64 `pc` |
 | [`green-tea-i8042`](i8042) | A PS/2 keyboard, polled | x86_64 `pc` |
@@ -22,7 +23,7 @@ caller's to say, and green-tea-bare's platforms say it.
 | [`green-tea-io`](io) | not a driver: what they share (`dma_fence`, x86 port I/O) | |
 
 All are `no_std` and are built for the bare-metal targets; the ones with logic worth
-testing (framebuffer, multiboot2, acpi, i8042, nvme, xhci, pci, fw-cfg, virtio, virtio-blk) also run host tests, against fake devices
+testing (framebuffer, multiboot2, acpi, i8042, ioapic, nvme, xhci, pci, fw-cfg, virtio, virtio-blk) also run host tests, against fake devices
 in memory. They assume what green-tea-bare provides: memory mapped one to one, so a
 buffer's address is also the physical address a device needs for DMA. They take no locks:
 where a kernel starts several CPUs, keeping them from using one device at once is the

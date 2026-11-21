@@ -30,10 +30,13 @@ pub use aarch64::AarchVirt as Board;
 pub use riscv64::RiscvVirt as Board;
 #[cfg(all(target_arch = "x86_64", feature = "board-pc"))]
 pub use x86_64::Pc as Board;
+#[cfg(all(target_arch = "x86_64", feature = "board-pc"))]
+pub use x86_64::InterruptCounts;
 #[cfg(all(target_arch = "x86_64", not(feature = "board-pc")))]
 pub use x86_64::Q35 as Board;
 
 use crate::Framebuffer;
+use crate::event::Event;
 use green_tea_virtio as virtio;
 
 #[cfg(all(feature = "board-pc", not(target_arch = "x86_64")))]
@@ -118,6 +121,18 @@ pub trait Platform {
     /// would go unnoticed. On the others it faults, and the fault handler reports it.
     fn ram_end() -> Option<usize> {
         None
+    }
+
+    /// What's signalled when console input may have arrived, on a board where input raises
+    /// interrupts. `None` means the console has to be polled.
+    fn input_event() -> Option<&'static Event> {
+        None
+    }
+
+    /// Stop until an interrupt has been handled. Called by the scheduler, with interrupts
+    /// off, when every task is waiting for an [`Event`]. Interrupts are off again after.
+    fn wait_for_interrupt() {
+        core::hint::spin_loop();
     }
 }
 

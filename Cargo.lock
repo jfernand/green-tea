@@ -114,6 +114,7 @@ dependencies = [
  "green-tea-fw-cfg",
  "green-tea-i8042",
  "green-tea-io",
+ "green-tea-ioapic",
  "green-tea-kmem",
  "green-tea-multiboot2",
  "green-tea-ns16550",
@@ -159,6 +160,10 @@ version = "0.1.0"
 
 [[package]]
 name = "green-tea-io"
+version = "0.1.0"
+
+[[package]]
+name = "green-tea-ioapic"
 version = "0.1.0"
 
 [[package]]
