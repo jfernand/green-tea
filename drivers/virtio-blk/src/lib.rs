@@ -43,6 +43,8 @@ pub enum Error {
     Unaligned,
     /// Past the end of the disk.
     OutOfRange,
+    /// 4 GiB or more: one request's buffer can't be that long.
+    TooLong,
     ReadOnly,
     /// The device said so.
     Io,
@@ -56,6 +58,7 @@ impl fmt::Display for Error {
         f.write_str(match self {
             Error::Unaligned => "not a whole number of sectors",
             Error::OutOfRange => "past the end of the disk",
+            Error::TooLong => "a request must be under 4 GiB",
             Error::ReadOnly => "the disk is read-only",
             Error::Io => "I/O error",
             Error::Unsupported => "the device doesn't support that request",
@@ -154,6 +157,9 @@ impl<T: Transport> Blk<T> {
         if len == 0 || !len.is_multiple_of(SECTOR_SIZE) {
             return Err(Error::Unaligned);
         }
+        if u32::try_from(len).is_err() {
+            return Err(Error::TooLong);
+        }
         let sectors = (len / SECTOR_SIZE) as u64;
         match sector.checked_add(sectors) {
             Some(end) if end <= self.capacity => Ok(()),
@@ -202,6 +208,7 @@ mod tests {
     use super::*;
     use core::cell::Cell;
     use green_tea_virtio::{F_VERSION_1, STATUS_ACKNOWLEDGE, STATUS_DRIVER, STATUS_FAILED, STATUS_FEATURES_OK};
+    use std::vec;
 
     const DESC_F_NEXT: u16 = 1;
     const DESC_F_WRITE: u16 = 2;
@@ -316,5 +323,14 @@ mod tests {
         let disk = FakeDisk::new();
         let mut blk = Blk::new(&disk).unwrap();
         assert_eq!(blk.write(0, &[1; SECTOR_SIZE]), Ok(()));
+    }
+
+    #[test]
+    fn a_read_of_4_gib_is_refused_before_the_device_sees_it() {
+        let disk = FakeDisk { capacity: 1 << 40, ..FakeDisk::new() };
+        let mut blk = Blk::new(&disk).unwrap();
+        let mut buf = vec![0u8; 1 << 32]; // zeroed on demand: never touched, so never resident
+        assert_eq!(blk.read(0, &mut buf), Err(Error::TooLong));
+        assert_eq!(disk.notified.get(), 0, "the device was given a shortened length");
     }
 }

@@ -80,13 +80,26 @@ pub struct Buffer {
 }
 
 impl Buffer {
+    /// A buffer the device reads.
+    ///
+    /// # Panics
+    /// If `data` is 4 GiB or more, which a descriptor's length can't hold.
     pub fn reads<T: ?Sized>(data: &T) -> Buffer {
-        Buffer { address: (data as *const T).cast::<u8>() as u64, length: size_of_val(data) as u32, device_writes: false }
+        Buffer { address: (data as *const T).cast::<u8>() as u64, length: length(size_of_val(data)), device_writes: false }
     }
 
+    /// A buffer the device writes.
+    ///
+    /// # Panics
+    /// If `data` is 4 GiB or more, which a descriptor's length can't hold.
     pub fn writes<T: ?Sized>(data: &mut T) -> Buffer {
-        Buffer { address: (data as *mut T).cast::<u8>() as u64, length: size_of_val(data) as u32, device_writes: true }
+        let length = length(size_of_val(data));
+        Buffer { address: (data as *mut T).cast::<u8>() as u64, length, device_writes: true }
     }
+}
+
+fn length(size: usize) -> u32 {
+    u32::try_from(size).expect("a virtio buffer must be under 4 GiB")
 }
 
 pub struct Queue {
@@ -206,5 +219,32 @@ impl Queue {
             self.free_count += count;
             Some((head, length))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+    use std::vec;
+
+    #[test]
+    fn a_buffer_keeps_its_length() {
+        let data = [0u8; 512];
+        assert_eq!(Buffer::reads(&data).length, 512);
+    }
+
+    #[test]
+    #[should_panic(expected = "4 GiB")]
+    fn a_buffer_of_4_gib_is_refused() {
+        let data = vec![0u8; 1 << 32]; // zeroed on demand: never touched, so never resident
+        let _ = Buffer::reads(data.as_slice());
+    }
+
+    #[test]
+    #[should_panic(expected = "4 GiB")]
+    fn a_device_written_buffer_of_4_gib_is_refused() {
+        let mut data = vec![0u8; 1 << 32];
+        let _ = Buffer::writes(data.as_mut_slice());
     }
 }
