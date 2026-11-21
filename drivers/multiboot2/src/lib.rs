@@ -144,7 +144,7 @@ mod tests {
         out.extend(kind.to_le_bytes());
         out.extend((8 + body.len() as u32).to_le_bytes());
         out.extend(body);
-        while out.len() % 8 != 0 {
+        while !out.len().is_multiple_of(8) {
             out.push(0);
         }
     }

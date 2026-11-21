@@ -246,7 +246,7 @@ impl Platform for Pc {
         }
         if !TEXT_BUSY.swap(true, Ordering::Acquire) {
             // SAFETY: TEXT_BUSY is ours, and `init_screen` is done or hasn't begun.
-            if let Some(text) = unsafe { (*(&raw mut TEXT)).as_mut() } {
+            if let Some(text) = unsafe { (&raw mut TEXT).as_mut() }.and_then(Option::as_mut) {
                 text.put(byte);
             }
             TEXT_BUSY.store(false, Ordering::Release);
@@ -263,7 +263,7 @@ impl Platform for Pc {
             return None;
         }
         // SAFETY: KEYBOARD_BUSY is ours.
-        let byte = unsafe { (*(&raw mut KEYBOARD)).getc() };
+        let byte = unsafe { (&raw mut KEYBOARD).as_mut() }.and_then(Keyboard::getc);
         KEYBOARD_BUSY.store(false, Ordering::Release);
         byte
     }
@@ -308,7 +308,7 @@ impl Platform for Pc {
 
     fn display() -> Result<Framebuffer, &'static str> {
         // SAFETY: only `init` writes it, before this can be called.
-        let screen = unsafe { *(&raw const SCREEN) };
+        let screen = unsafe { (&raw const SCREEN).read() };
         let fb = screen.ok_or("GRUB set up no 32-bit XRGB framebuffer")?;
         crate::println!("framebuffer: {}x{} XRGB8888", fb.width(), fb.height());
         Ok(fb)

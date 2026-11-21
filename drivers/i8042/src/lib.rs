@@ -81,6 +81,12 @@ mod port {
     /// The keyboard on the controller.
     pub struct Keyboard(Decoder);
 
+    impl Default for Keyboard {
+        fn default() -> Keyboard {
+            Keyboard::new()
+        }
+    }
+
     impl Keyboard {
         pub const fn new() -> Keyboard {
             Keyboard(Decoder::new())
