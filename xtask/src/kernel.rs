@@ -635,9 +635,7 @@ impl Run {
             if self.seen_kernel {
                 eprintln!("[{:15}] {line}", self.job.label());
             }
-            if self.outcome.is_none() {
-                self.outcome = verdict(line);
-            }
+            judge(&mut self.outcome, line);
         }
     }
 }
@@ -651,6 +649,18 @@ fn verdict(line: &str) -> Option<Result<String, String>> {
         return Some(Ok(rest.to_string()));
     }
     line.strip_prefix("FAIL: ").map(|rest| Err(rest.to_string()))
+}
+
+/// Take `line` into the run's outcome. The first failure stands, and a failure after a pass
+/// replaces it: a kernel that says PASS and then panics has not passed.
+fn judge(outcome: &mut Option<Result<String, String>>, line: &str) {
+    if !matches!(outcome, Some(Err(_))) {
+        match verdict(line) {
+            Some(Ok(_)) if outcome.is_some() => {}
+            Some(found) => *outcome = Some(found),
+            None => {}
+        }
+    }
 }
 
 /// Whether a machine of `cpus` may start while `busy` virtual CPUs are running. One too
@@ -705,7 +715,7 @@ fn watch(queue: &mut VecDeque<Job>, runs: &mut Vec<Run>, options: &Options, out_
 
 #[cfg(test)]
 mod tests {
-    use super::{disk_image, fits, parse, verdict};
+    use super::{disk_image, fits, judge, parse, verdict};
 
     #[test]
     fn the_disk_image_differs_from_sector_to_sector() {
@@ -733,6 +743,22 @@ mod tests {
     #[test]
     fn other_lines_are_not_a_verdict() {
         assert_eq!(verdict("running 5 workers; expecting 57 switches"), None);
+    }
+
+    #[test]
+    fn a_failure_after_a_pass_fails_the_run() {
+        for (line, why) in [("panic: late", "kernel panicked: late"), ("FAIL: late", "late")] {
+            let mut outcome = None;
+            judge(&mut outcome, "PASS: all done");
+            judge(&mut outcome, line);
+            assert_eq!(outcome, Some(Err(why.to_string())));
+        }
+        // The first failure is the one reported, and a pass doesn't undo it.
+        let mut outcome = None;
+        judge(&mut outcome, "FAIL: first");
+        judge(&mut outcome, "FAIL: second");
+        judge(&mut outcome, "PASS: all done");
+        assert_eq!(outcome, Some(Err("first".to_string())));
     }
 
     #[test]
