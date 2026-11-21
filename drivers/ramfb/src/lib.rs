@@ -16,12 +16,14 @@ const FOURCC_XRGB8888: u32 = u32::from_le_bytes(*b"XR24");
 #[repr(C, align(4096))]
 struct Pixels([u32; WIDTH * HEIGHT]);
 
-/// Zero-initialized, so it lives in .bss. With no paging its address is also the physical
-/// address QEMU needs.
+/// Zero-initialized, so it lives in .bss. Memory is mapped one to one (by an identity map
+/// on riscv64 and x86_64), so its address is also the physical address QEMU needs.
 static mut PIXELS: Pixels = Pixels([0; WIDTH * HEIGHT]);
 
-/// Handle to the configured display. Only one exists, and only `init` makes it.
-#[derive(Clone, Copy)] // just a pointer; single hart, so copies never race
+/// Handle to the configured display: just a pointer to the one set of pixels, which every
+/// copy, and every call to `init`, shares. It takes no lock, so keeping two CPUs from
+/// drawing at once is the caller's job.
+#[derive(Clone, Copy)]
 pub struct Framebuffer {
     pixels: *mut u32,
 }
