@@ -154,13 +154,15 @@ pub fn space(ops: &Ops, subject: &mut dyn Subject) -> Result<Space, &'static str
     Ok(out)
 }
 
-/// Replay `ops` against `subject` `passes` times, and do nothing else: no clock, no
-/// counters. This is the loop whose instructions are counted. `false` if the subject
-/// refused an allocation.
+/// Replay `ops` against `subject`, which should be new or reset, `passes` times, and do
+/// nothing else: no clock, no counters. This is the loop whose instructions are counted, so
+/// the subject is reset only between passes. `false` if the subject refused an allocation.
 #[inline(never)]
 pub fn plain(ops: &Ops, table: &mut Table, subject: &mut dyn Subject, passes: usize) -> bool {
-    for _ in 0..passes {
-        subject.reset();
+    for pass in 0..passes {
+        if pass != 0 {
+            subject.reset();
+        }
         for &op in &ops.ops {
             if !step(op, table, subject) {
                 return false;

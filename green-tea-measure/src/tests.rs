@@ -164,6 +164,7 @@ fn the_three_replays_make_the_same_calls() {
     let mut table = Table::new(&ops);
     let mut subject = subjects::build("first-addr", REGION, ops.total).unwrap();
     let space = replay::space(&ops, &mut *subject).unwrap();
+    subject.reset();
     assert!(replay::plain(&ops, &mut table, &mut *subject, 2));
     assert_eq!(subject.footprint(), space.footprint);
     assert_eq!(subject.searched(), space.searched);
@@ -188,6 +189,50 @@ fn the_three_replays_make_the_same_calls() {
         subject.reset();
         assert!(replay::pass(&ops, &mut table, &mut *subject, true).is_some(), "{name}");
         subject.check().unwrap_or_else(|e| panic!("{name}, after its blocks were written to: {e}"));
+    }
+}
+
+/// A subject that only counts its resets.
+#[derive(Default)]
+struct Resets(usize);
+
+impl subjects::Subject for Resets {
+    fn allocate(&mut self, _size: usize, _align: usize) -> Option<usize> {
+        Some(16)
+    }
+
+    unsafe fn free(&mut self, _addr: usize, _size: usize, _align: usize) {}
+
+    fn used(&self) -> Option<usize> {
+        None
+    }
+
+    fn footprint(&self) -> usize {
+        0
+    }
+
+    fn searched(&self) -> Option<(usize, usize)> {
+        None
+    }
+
+    fn check(&self) -> Result<(), &'static str> {
+        Ok(())
+    }
+
+    fn reset(&mut self) {
+        self.0 += 1;
+    }
+}
+
+/// `plain` is what callgrind counts, so a reset inside it is counted as the allocator's work.
+#[test]
+fn the_counted_loop_resets_only_between_passes() {
+    let ops = Ops::new(&[Event::allocate(0xa0, 10, 8), Event::free(0xa0)]);
+    let mut table = Table::new(&ops);
+    for (passes, resets) in [(1, 0), (3, 2)] {
+        let mut subject = Resets::default();
+        assert!(replay::plain(&ops, &mut table, &mut subject, passes));
+        assert_eq!(subject.0, resets, "{passes} passes");
     }
 }
 
