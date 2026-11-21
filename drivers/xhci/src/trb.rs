@@ -125,9 +125,7 @@ impl Ring {
     fn write(&mut self, at: usize, trb: Trb) {
         // SAFETY: `at` is within the ring. The cycle bit, in `control`, is written last.
         unsafe {
-            let slot = self
-                .trbs
-                .add(at);
+            let slot = self.trbs.add(at);
             write_volatile(&raw mut (*slot).param, trb.param);
             write_volatile(&raw mut (*slot).status, trb.status);
             fence(Ordering::Release);
@@ -138,10 +136,7 @@ impl Ring {
     /// Add a TRB, and return its address. The last slot is always the link.
     pub fn push(&mut self, trb: Trb) -> u64 {
         // SAFETY: within the ring.
-        let address = unsafe {
-            self.trbs
-                .add(self.index)
-        } as u64;
+        let address = unsafe { self.trbs.add(self.index) } as u64;
         self.write(self.index, trb);
         self.index += 1;
         if self.index == self.len - 1 {
@@ -172,19 +167,14 @@ impl EventRing {
     /// What ERDP should say: the next TRB to be read.
     pub fn dequeue_pointer(&self) -> u64 {
         // SAFETY: within the ring.
-        unsafe {
-            self.trbs
-                .add(self.index) as u64
-        }
+        unsafe { self.trbs.add(self.index) as u64 }
     }
 
     /// The next event, if the controller has written one.
-    pub fn next(&mut self) -> Option<Trb> {
+    pub fn pop(&mut self) -> Option<Trb> {
         // SAFETY: within the ring. The cycle bit is read first, and says the rest is there.
         let trb = unsafe {
-            let slot = self
-                .trbs
-                .add(self.index);
+            let slot = self.trbs.add(self.index);
             let control = read_volatile(&raw const (*slot).control);
             if control & CYCLE != self.cycle {
                 return None;
@@ -251,16 +241,12 @@ mod tests {
 
     #[test]
     fn an_event_ring_takes_only_the_current_cycle() {
-        let mut memory = vec![Trb::default(); 2];
+        let mut memory = [Trb::default(); 2];
         memory[0].control = 1 | kind(COMMAND_COMPLETION);
         // SAFETY: two TRBs, which outlive the ring.
         let mut ring = unsafe { EventRing::new(memory.as_ptr(), 2) };
-        assert_eq!(
-            ring.next()
-                .map(|t| t.kind()),
-            Some(COMMAND_COMPLETION)
-        );
-        assert_eq!(ring.next(), None, "the next one isn't written yet");
+        assert_eq!(ring.pop().map(|t| t.kind()), Some(COMMAND_COMPLETION));
+        assert_eq!(ring.pop(), None, "the next one isn't written yet");
     }
 
     #[test]
@@ -269,20 +255,11 @@ mod tests {
         let base = memory.as_mut_ptr();
         // SAFETY: two TRBs, which outlive the ring.
         let mut ring = unsafe { EventRing::new(base, 2) };
-        assert!(
-            ring.next()
-                .is_some()
-                && ring
-                    .next()
-                    .is_some()
-        );
+        assert!(ring.pop().is_some() && ring.pop().is_some());
         assert_eq!(ring.dequeue_pointer(), base as u64);
-        assert_eq!(ring.next(), None, "still the old cycle");
+        assert_eq!(ring.pop(), None, "still the old cycle");
         // SAFETY: as above; the second pass writes cycle 0.
         unsafe { (*base).control = 0 };
-        assert!(
-            ring.next()
-                .is_some()
-        );
+        assert!(ring.pop().is_some());
     }
 }

@@ -28,15 +28,7 @@ impl Decoder {
         if keys.contains(&ROLLOVER) {
             return; // says nothing about which keys are down: keep what we knew
         }
-        for &key in keys
-            .iter()
-            .filter(|&&k| {
-                k != 0
-                    && !self
-                        .held
-                        .contains(&k)
-            })
-        {
+        for &key in keys.iter().filter(|&&k| k != 0 && !self.held.contains(&k)) {
             if let Some(c) = character(report[0], key) {
                 typed(c);
             }
@@ -64,9 +56,7 @@ mod tests {
     fn typed(reports: &[[u8; 8]]) -> Vec<u8> {
         let mut d = Decoder::new();
         let mut out = Vec::new();
-        reports
-            .iter()
-            .for_each(|r| d.feed(r, |c| out.push(c)));
+        reports.iter().for_each(|r| d.feed(r, |c| out.push(c)));
         out
     }
 

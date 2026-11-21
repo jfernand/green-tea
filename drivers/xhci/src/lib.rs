@@ -20,7 +20,7 @@ use trb::{EventRing, Ring, Trb};
 
 /// PCI class code of an xHCI controller: serial bus, USB, xHCI (in the top three bytes of
 /// configuration space's dword at offset 8).
-pub const PCI_CLASS: u32 = 0x0c03_30;
+pub const PCI_CLASS: u32 = 0x000c_0330;
 
 // Capability registers.
 const HCSPARAMS1: usize = 0x04;
@@ -95,9 +95,7 @@ impl Arena {
 
     /// `size` zeroed bytes aligned to `align`, within one 64 KiB page, as rings must be.
     fn alloc(&mut self, size: usize, align: usize) -> Result<usize, &'static str> {
-        let mut at = self
-            .next
-            .next_multiple_of(align);
+        let mut at = self.next.next_multiple_of(align);
         if at / 0x10000 != (at + size - 1) / 0x10000 {
             at = (at + 1).next_multiple_of(0x10000);
         }
@@ -255,30 +253,21 @@ impl Xhci {
 
     /// The next character typed on the keyboard, if one has arrived.
     pub fn poll(&mut self) -> Option<u8> {
-        self.keyboard
-            .as_ref()?;
+        self.keyboard.as_ref()?;
         while let Some(event) = self.next_event() {
             self.on_keyboard_event(event);
         }
-        let keyboard = self
-            .keyboard
-            .as_mut()?;
+        let keyboard = self.keyboard.as_mut()?;
         (keyboard.count > 0).then(|| {
             let c = keyboard.typed[keyboard.head];
-            keyboard.head = (keyboard.head + 1)
-                % keyboard
-                    .typed
-                    .len();
+            keyboard.head = (keyboard.head + 1) % keyboard.typed.len();
             keyboard.count -= 1;
             c
         })
     }
 
     fn on_keyboard_event(&mut self, event: Trb) {
-        let Some(k) = self
-            .keyboard
-            .as_mut()
-        else {
+        let Some(k) = self.keyboard.as_mut() else {
             return;
         };
         if event.kind() != trb::TRANSFER_EVENT || event.slot() != k.slot || event.endpoint() != k.endpoint {
@@ -290,15 +279,13 @@ impl Xhci {
         // SAFETY: the report buffer, which the controller has finished writing.
         let report = unsafe { read_volatile(k.report as *const [u8; REPORT]) };
         let (typed, head, count) = (&mut k.typed, k.head, &mut k.count);
-        k.decoder
-            .feed(&report, |c| {
-                if *count < typed.len() {
-                    typed[(head + *count) % typed.len()] = c;
-                    *count += 1;
-                }
-            });
-        k.ring
-            .push(Trb::normal(k.report as u64, REPORT as u32));
+        k.decoder.feed(&report, |c| {
+            if *count < typed.len() {
+                typed[(head + *count) % typed.len()] = c;
+                *count += 1;
+            }
+        });
+        k.ring.push(Trb::normal(k.report as u64, REPORT as u32));
         let (slot, endpoint) = (k.slot, k.endpoint);
         self.ring_doorbell(slot, endpoint);
     }
@@ -331,23 +318,14 @@ impl Xhci {
     }
 
     fn next_event(&mut self) -> Option<Trb> {
-        let event = self
-            .events
-            .next()?;
-        write64(
-            self.runtime + ERDP,
-            self.events
-                .dequeue_pointer()
-                | ERDP_BUSY,
-        );
+        let event = self.events.pop()?;
+        write64(self.runtime + ERDP, self.events.dequeue_pointer() | ERDP_BUSY);
         Some(event)
     }
 
     /// Run a command and wait for it. Returns the completion event.
     fn command(&mut self, command: Trb) -> Result<Trb, &'static str> {
-        let address = self
-            .commands
-            .push(command);
+        let address = self.commands.push(command);
         self.ring_doorbell(0, 0);
         for _ in 0..WAIT_MS {
             while let Some(event) = self.next_event() {
@@ -391,9 +369,7 @@ impl Xhci {
     /// Bring up the device on a port. `Ok(true)` if it is a keyboard, now being read.
     fn try_port(&mut self, port: u8, arena: &mut Arena) -> Result<bool, &'static str> {
         let speed = (read32(self.port(port)) >> 10 & 0xf) as u8;
-        let slot = self
-            .command(Trb::enable_slot())?
-            .slot();
+        let slot = self.command(Trb::enable_slot())?.slot();
         let output = arena.alloc(32 * self.context_size, 64)?;
         let input = arena.alloc(33 * self.context_size, 64)?;
         let trbs = arena.alloc(TRANSFER_TRBS * size_of::<Trb>(), 64)?;
@@ -553,12 +529,8 @@ mod tests {
         let mut memory = vec![0xffu8; 8192];
         // SAFETY: the vector outlives the arena.
         let mut arena = unsafe { Arena::new(memory.as_mut_ptr(), memory.len()) };
-        let a = arena
-            .alloc(10, 64)
-            .unwrap();
-        let b = arena
-            .alloc(10, 64)
-            .unwrap();
+        let a = arena.alloc(10, 64).unwrap();
+        let b = arena.alloc(10, 64).unwrap();
         assert!(a.is_multiple_of(64) && b.is_multiple_of(64) && b >= a + 10);
         // SAFETY: inside the vector.
         assert_eq!(unsafe { *(a as *const u8) }, 0);
@@ -569,11 +541,7 @@ mod tests {
         let mut memory = vec![0u8; 128];
         // SAFETY: the vector outlives the arena.
         let mut arena = unsafe { Arena::new(memory.as_mut_ptr(), memory.len()) };
-        assert!(
-            arena
-                .alloc(4096, 1)
-                .is_err()
-        );
+        assert!(arena.alloc(4096, 1).is_err());
     }
 
     #[test]
@@ -583,12 +551,8 @@ mod tests {
         // SAFETY: the vector outlives the arena.
         let mut arena = unsafe { Arena::new(memory.as_mut_ptr(), memory.len()) };
         let near = (start + 32).next_multiple_of(0x10000) - 16 - start;
-        arena
-            .alloc(near, 1)
-            .unwrap();
-        let a = arena
-            .alloc(64, 16)
-            .unwrap();
+        arena.alloc(near, 1).unwrap();
+        let a = arena.alloc(64, 16).unwrap();
         assert_eq!(a / 0x10000, (a + 63) / 0x10000);
         assert!(a.is_multiple_of(0x10000), "moved to the next 64 KiB, and no further");
         assert!(a - start <= near + 0x10000);

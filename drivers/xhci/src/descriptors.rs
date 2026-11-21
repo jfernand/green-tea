@@ -63,11 +63,7 @@ pub fn endpoint_interval(speed: u8, b_interval: u8) -> u8 {
     const FULL: u8 = 1;
     const LOW: u8 = 2;
     if speed == FULL || speed == LOW {
-        (b_interval
-            .max(1)
-            .ilog2() as u8
-            + 3)
-        .clamp(3, 10)
+        (b_interval.max(1).ilog2() as u8 + 3).clamp(3, 10)
     } else {
         b_interval.clamp(1, 16) - 1
     }

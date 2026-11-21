@@ -140,7 +140,7 @@ impl<M: Memory> Acpi<M> {
     pub fn ecam(&self) -> Option<(u64, core::ops::RangeInclusive<u8>)> {
         let mut buf = [0u8; MAX_TABLE];
         let mcfg = self.table(self.find(b"MCFG")?, &mut buf)?;
-        mcfg.get(HEADER + 8..)?.chunks_exact(16).find_map(|e| {
+        mcfg.get(HEADER + 8..)?.as_chunks::<16>().0.iter().find_map(|e| {
             let segment = u16::from_le_bytes([e[8], e[9]]);
             (segment == 0 && e[10] <= e[11]).then(|| (u64_at(e, 0).unwrap_or(0), e[10]..=e[11]))
         })
