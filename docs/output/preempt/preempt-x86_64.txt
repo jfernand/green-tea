@@ -22,6 +22,6 @@ ramfb: 640x480 XRGB8888
 running 4 busy workers that never yield (4400 ms of work, 100 ms slices) and one that sleeps 60 ms between steps
 all tasks finished after 181 switches: 44 preemptions, 61 idle waits
 time slices per worker: [6, 10, 14, 18, 71]
-CPU ms per worker:      [513, 920, 1329, 1739, 44]
-PASS: 44 preemptions; every busy worker ran in several slices, and the sleeper used 44 ms of CPU in 70 wakeups
+CPU ms per worker:      [513, 920, 1328, 1737, 43]
+PASS: 44 preemptions; every busy worker ran in several slices, and the sleeper used 43 ms of CPU in 70 wakeups
 halting

@@ -5,10 +5,10 @@
 `green-tea-smr` answers one question about lock-free structures: when may a node that was unlinked be freed? A thread can be reading a node at the moment another unlinks it, so the unlinking thread *retires* the node instead, and a `Reclaim` frees it once no thread can still hold its address. The crate has four of them, `AtOnce`, `Leak`, epochs and hazard pointers, and three structures that use them: a Treiber `Stack`, a Michael-Scott `Queue` and `Rcu`.
 
 #spec(
-  ("Source", [#repo("green-tea-smr/src/"), 6 files, 974 lines without their tests]),
+  ("Source", [#repo("green-tea-smr/src/"), 6 files, 993 lines without their tests]),
   ("Depends on", [`alloc`; `no_std`]),
   ("Used by", [`green-tea-coop` (the `smr` kernel)]),
-  ("Tests", [23 host tests on real threads, the `smr` kernel]),
+  ("Tests", [23 host tests on real threads, a doc test that must not compile, the `smr` kernel]),
 )
 
 #dtable(columns: (auto, 1fr), ("Module", "What it holds"),
@@ -24,7 +24,7 @@
 
 A structure brackets each operation with `enter` and `exit`, reads every shared pointer it will follow with `protect`, and passes each node it unlinks to `retire`:
 
-#srcfile("green-tea-smr/src/lib.rs", lines: ((89, 89), (91, 91), (96, 96), (99, 99), (106, 106), (108, 109),))[```rust
+#srcfile("green-tea-smr/src/lib.rs", lines: ((91, 91), (93, 93), (98, 98), (101, 101), (109, 109), (111, 112),))[```rust
 pub trait Reclaim {
 // …
     fn enter(&mut self);
@@ -41,7 +41,7 @@ pub trait Reclaim {
 
 `protect` takes an `index`, 0 or 1, because a structure may need two nodes at once. `retire` is `unsafe`: the node must have come from `Box::into_raw`, be unreachable to any operation starting now, and be retired once. A retired node is stored as its address and a function that frees it, so one `Reclaim` handles nodes of any type.
 
-`Counts` is what a thread's `Reclaim` has done: `retired`, `freed`, `peak` (the most waiting at once), `operations`, `protected`, `looked` (reads of words belonging to other threads) and `rounds` (epochs advanced, or scans of the hazard pointers). `waiting` is `retired - freed`.
+`Counts` is what a thread's `Reclaim` has done: `retired`, `freed`, `peak` (the most waiting at once, and in counts added together with `+=`, the sum of the threads' peaks, an upper bound), `operations`, `protected`, `looked` (reads of words belonging to other threads) and `rounds` (epochs advanced, or scans of the hazard pointers). `waiting` is `retired - freed`.
 
 None of this knows what a thread is. A caller gives each thread a number below `SLOTS` and takes a `Local` for it from the shared `Epochs` or `Hazards`. `local` panics if the slot is taken. A `Local` that is dropped leaves its unfreed nodes with the shared object, on a push-only list of *orphans*, and they are freed by `free_orphans`, or when the shared object is dropped. `&mut self` on `free_orphans` is the proof that no `Local` is left.
 
@@ -276,7 +276,7 @@ pub fn dequeue<R: Reclaim>(&self, smr: &mut R) -> Option<T> {
 
 Read, copy, update: a value many threads read, and that is never changed in place. A reader follows one pointer. A writer makes a new value from the old one and swings the pointer:
 
-#srcfile("green-tea-smr/src/rcu.rs", lines: ((34, 60),), notes: ((45, [`f` is `Fn`, because a lost race calls it again on the value the winner left.]), (51, [A reader sees the old value whole or the new value whole.]), (54, [The old value waits for the `Reclaim`.]),))[```rust
+#srcfile("green-tea-smr/src/rcu.rs", lines: ((34, 41), (58, 76),), notes: ((58, [`f` is `Fn`, because a lost race calls it again on the value the winner left. `T: Send` is what lets another thread drop the old value.]), (67, [A reader sees the old value whole or the new value whole.]), (70, [The old value waits for the `Reclaim`.]),))[```rust
 pub fn read<R: Reclaim, V>(&self, smr: &mut R, f: impl FnOnce(&T) -> V) -> V {
     smr.enter();
     let current = smr.protect(0, &self.current);
@@ -285,10 +285,11 @@ pub fn read<R: Reclaim, V>(&self, smr: &mut R, f: impl FnOnce(&T) -> V) -> V {
     smr.exit();
     result
 }
-
-/// Replace the value with what `f` makes of it. If another writer gets in first, `f`
-/// is called again on the value that writer left.
-pub fn update<R: Reclaim>(&self, smr: &mut R, f: impl Fn(&T) -> T) {
+// …
+pub fn update<R: Reclaim>(&self, smr: &mut R, f: impl Fn(&T) -> T)
+where
+    T: Send,
+{
     smr.enter();
     loop {
         let old = smr.protect(0, &self.current);
@@ -306,7 +307,7 @@ pub fn update<R: Reclaim>(&self, smr: &mut R, f: impl Fn(&T) -> T) {
 }
 ```]
 
-`Rcu::new` boxes the first value. This is the shape of the Linux kernel's RCU, with `enter` and `exit` where the kernel has `rcu_read_lock` and `rcu_read_unlock`, and `retire` where it has `call_rcu`. The kernel's readers pay less: there, a reader announces nothing.
+`Rcu::new` boxes the first value. `update` requires `T: Send`, because whichever thread frees the old value drops it; a `compile_fail` doc test checks that an `Rcu<Rc<_>>` can't call it. This is the shape of the Linux kernel's RCU, with `enter` and `exit` where the kernel has `rcu_read_lock` and `rcu_read_unlock`, and `retire` where it has `call_rcu`. The kernel's readers pay less: there, a reader announces nothing.
 
 == How it is exercised
 
@@ -355,10 +356,10 @@ The second experiment is what each scheme does when a thread stops:
 ```
 CPU 3 stops in the middle of a pop, and the other three then make 2000 pops and pushes each. when they are done:
   freed by epochs          6000 nodes were retired, 0 freed, and 6000 waited: 192000 bytes of nodes
-  this run: the heap had 291008 bytes more in use, with the lists of them
+  this run: the heap had 290992 bytes more in use, with the lists of them
   freed by hazard pointers 6000 nodes were retired, and at most 96 waited: 3072 bytes of nodes
   this run: 5952 were freed, and 48 waited at the end
-  this run: the heap had 3120 bytes more in use, with the lists of them
+  this run: the heap had 3136 bytes more in use, with the lists of them
 ```
 ]
 
@@ -371,11 +372,11 @@ each CPU pushes 5000 values of its own on one stack, and pops one after each pus
   freed by hazard pointers 20000 values came back, each once; 20000 nodes were retired, and 20000 freed
 CPU 0 replaces a pair of numbers 5000 times, by copying it, while the other three read it:
   every read saw one whole pair, none older than the read before; 5000 old pairs were retired, and 5000 freed
-  this run: 157133 reads; 54 ms
+  this run: 176605 reads; 83 ms
 a queue holds one job, to count the primes below 32768. each CPU takes a job, and splits it in two
 if it covers more than 256 numbers:
   255 jobs ran: 127 were split, and 128 counted 3512 primes; 255 nodes were retired, and 255 freed
-  this run: the CPUs ran 56, 58, 86 and 55 jobs; 63 ms, and one CPU counting alone took 249 ms
+  this run: the CPUs ran 68, 66, 59 and 62 jobs; 112 ms, and one CPU counting alone took 486 ms
 ```
 ]
 
@@ -385,7 +386,5 @@ if it covers more than 256 numbers:
 - Epochs stop freeing while any thread is stopped inside an operation, without bound on the memory held.
 - Orphans are freed only when the owner of the `Epochs` or `Hazards` has exclusive access, so a program whose threads come and go accumulates them.
 - A `read` or `update` whose closure panics never calls `exit`. Under epochs the thread stays announced until its `Local` is dropped, and until then the epoch can't advance.
-- *Defect.* `Counts`' `AddAssign` adds the `peak` fields (`lib.rs:78`). A sum of per-thread peaks is an upper bound on the peak of the sum, and is reported in a field documented as "the most nodes that were retired and not yet freed, at any one time".
-- *Defect.* `Rcu::update` retires a `T` with no `T: Send` bound (`rcu.rs:45`). A retired value left as an orphan is dropped on whichever thread frees the orphans, so an `Rcu<Rc<_>>`, which compiles and runs, can have its `Rc` dropped on a different thread from its other clones. `Stack` and `Queue` don't have the problem, because their nodes never drop a value.
 
 Four answers to when, and what each costs. @crate-lisp is a program whose heap answers it by tracing.

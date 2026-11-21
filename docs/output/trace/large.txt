@@ -1,4 +1,18 @@
+error: --region-kib needs a number of KiB from 1 to 4194304
 
-thread 'main' (750002) panicked at green-tea-fit/src/buddy.rs:52:9:
-a region too large for the table
-note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+usage: green-tea-trace stat <file>
+       green-tea-trace replay <file> [--region-kib <n>] [--shuffle [<hex seed>]]
+       green-tea-trace convert <file> <out> [--text|--binary]
+
+stat:     prints what a trace file holds: its records, the sizes asked for, how long the
+          blocks lived, and the most bytes the program had allocated at once.
+replay:   replays the trace against first fit, next fit and best fit, each with its free
+          list in LIFO and in address order, and against the buddy system and TLSF, and
+          prints what each needed. --region-kib is the region each replay gets (default:
+          the power of two at or above four times the trace's peak of live bytes, and at
+          least 512). --shuffle also replays the trace with its sizes and lifetimes dealt
+          out at random; a seed, in hexadecimal, goes after the file.
+convert:  writes the trace in the other form, or in the one asked for.
+
+A file is in the text form or the binary form; the first bytes say which. `-` is the
+standard input, and for convert's <out> the standard output.

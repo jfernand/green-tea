@@ -13,8 +13,8 @@ fw_cfg files:
   0x002a  28672 vgaroms/vgabios-ramfb.bin
 ramfb: 640x480 XRGB8888
 running 4 busy workers that never yield (4400 ms of work, 100 ms slices) and one that sleeps 60 ms between steps
-all tasks finished after 181 switches: 44 preemptions, 61 idle waits
-time slices per worker: [6, 10, 14, 18, 71]
-CPU ms per worker:      [502, 902, 1303, 1705, 28]
-PASS: 44 preemptions; every busy worker ran in several slices, and the sleeper used 28 ms of CPU in 70 wakeups
+all tasks finished after 183 switches: 48 preemptions, 59 idle waits
+time slices per worker: [6, 11, 15, 20, 71]
+CPU ms per worker:      [553, 1026, 1431, 1905, 70]
+PASS: 48 preemptions; every busy worker ran in several slices, and the sleeper used 70 ms of CPU in 70 wakeups
 halting

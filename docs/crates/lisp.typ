@@ -5,10 +5,10 @@
 `green-tea-lisp` is a small Lisp and six heaps to run it on. The language has integers, symbols, pairs, `nil` and `#t`, the forms `quote`, `if`, `define` and `lambda`, lexical closures, tail calls and thirteen primitives. The interpreter never sees memory: it reaches its objects through the `Heap` trait, and a reference-counting heap, a mark-sweep heap, a mark-compact heap, a copying heap, a generational heap and an incremental heap all run it unchanged. (`MarkHeap` is two of the six, by a parameter.)
 
 #spec(
-  ("Source", [#repo("green-tea-lisp/src/"), 11 files, 3,600 lines without their tests; 9 programs in #repo("green-tea-lisp/programs/"); 4 examples, 804 lines]),
+  ("Source", [#repo("green-tea-lisp/src/"), 11 files, 3,658 lines without their tests; 9 programs in #repo("green-tea-lisp/programs/"); 4 examples, 804 lines]),
   ("Depends on", [`alloc`; `no_std`]),
   ("Used by", [`green-tea-coop` (the `lisp`, `gc`, `gen` and `incremental` kernels), `green-tea-measure`]),
-  ("Tests", [161 host tests, the examples `heaps`, `generations`, `incremental` and `store_cost`, four kernels]),
+  ("Tests", [165 host tests, the examples `heaps`, `generations`, `incremental` and `store_cost`, four kernels]),
 )
 
 #dtable(columns: (auto, 1fr), ("Module", "What it holds"),
@@ -31,7 +31,7 @@
 
 A `Value` is one 64-bit word, and its low three bits are a tag:
 
-#srcfile("green-tea-lisp/src/lib.rs", lines: ((87, 87), (89, 95), (112, 113), (116, 118), (128, 130),))[```rust
+#srcfile("green-tea-lisp/src/lib.rs", lines: ((89, 89), (91, 97), (114, 115), (121, 123), (133, 135),))[```rust
 pub struct Value(u64);
 // …
 const TAG_BITS: u32 = 3;
@@ -71,7 +71,7 @@ const TAG_CONST: u64 = 4;
 
 === The `Heap` trait
 
-#srcfile("green-tea-lisp/src/lib.rs", lines: ((216, 216), (218, 218), (224, 224), (227, 227), (230, 230), (233, 233), (238, 238), (241, 241), (244, 244), (248, 248), (250, 250), (253, 256),))[```rust
+#srcfile("green-tea-lisp/src/lib.rs", lines: ((221, 221), (223, 223), (229, 229), (232, 232), (235, 235), (238, 238), (243, 243), (246, 246), (249, 249), (253, 253), (255, 255), (258, 261),))[```rust
 pub trait Heap {
 // …
     fn push(&mut self, v: Value);
@@ -108,55 +108,51 @@ The heap keeps the *root stack*, the values the interpreter is holding. `alloc` 
 
 `read` turns text into objects, directly on the root stack. `Text` is a position in the source, `Text::new` makes one, and `more` says whether anything but blanks and `;` comments is left. A list is read by pushing each element, then `nil`, and allocating one pair per element, last first, because `alloc` pops a `car` and a `cdr` and pushes the pair that is the next `cdr`:
 
-#srcfile("green-tea-lisp/src/read.rs", lines: ((51, 95),), notes: ((52, [`MAX_NESTING` is 32, because the reader recurses.]), (69, [The list exists only on the root stack until here, so a collection during any nested `alloc` sees all of it.]), (75, [`'x` is read as `(quote x)`.]),), size: 6.3pt)[```rust
+#srcfile("green-tea-lisp/src/read.rs", lines: ((59, 59), (63, 99),), notes: ((71, [`at_dot` tells a `.` standing alone from a symbol that starts with one, such as `...`.]), (80, [The value after the dot takes the place of `nil` as the last `cdr`.]), (92, [A proper list ends in `nil`.]), (95, [The list exists only on the root stack until here, so a collection during any nested `alloc` sees all of it.]),), size: 6.3pt)[```rust
 fn read_nested(&mut self, text: &mut Text, nesting: usize) -> Result<(), Error> {
-    if nesting > MAX_NESTING {
-        return Err(Error::Syntax("lists nested too deeply"));
-    }
+// …
     match text.peek().ok_or(Error::Syntax("the text ended inside an expression"))? {
         b'(' => {
             text.at += 1;
-            let mut elements = 0;
+            let (mut elements, mut dotted) = (0, false);
             loop {
                 match text.peek() {
                     None => return Err(Error::Syntax("a list without its )")),
                     Some(b')') => break,
+                    Some(b'.') if text.at_dot() => {
+                        if elements == 0 {
+                            return Err(Error::Syntax("a . with no element before it"));
+                        }
+                        text.at += 1;
+                        if matches!(text.peek(), None | Some(b')')) {
+                            return Err(Error::Syntax("a . with nothing after it"));
+                        }
+                        // What follows the dot is the last pair's `cdr`, in place of `nil`.
+                        self.read_nested(text, nesting + 1)?;
+                        if text.peek() != Some(b')') {
+                            return Err(Error::Syntax("more than one value after a ."));
+                        }
+                        dotted = true;
+                        break;
+                    }
                     Some(_) => self.read_nested(text, nesting + 1)?,
                 }
                 elements += 1;
             }
             text.at += 1;
-            self.heap.push(Value::NIL);
+            if !dotted {
+                self.heap.push(Value::NIL);
+            }
             for _ in 0..elements {
                 self.heap.alloc(Kind::Pair)?;
             }
             Ok(())
         }
-        b')' => Err(Error::Syntax("a ) with no list open")),
-        b'\'' => {
-            text.at += 1;
-            self.heap.push(Value::sym(QUOTE));
-            self.read_nested(text, nesting + 1)?;
-            self.heap.push(Value::NIL);
-            self.heap.alloc(Kind::Pair)?;
-            self.heap.alloc(Kind::Pair)?; // (quote x)
-            Ok(())
-        }
-        _ => {
-            let start = text.at;
-            while text.bytes.get(text.at).is_some_and(|&b| !b.is_ascii_whitespace() && !b"()';".contains(&b)) {
-                text.at += 1;
-            }
-            let atom = core::str::from_utf8(&text.bytes[start..text.at]).map_err(|_| Error::Syntax("not UTF-8"))?;
-            let atom = self.atom(atom);
-            self.heap.push(atom);
-            Ok(())
-        }
-    }
-}
 ```]
 
-`atom` reads `nil`, `#t`, then an `i64`, and anything else is a symbol, interned by the interpreter. There is no syntax for a dotted pair.
+`read_nested` refuses a nesting deeper than `MAX_NESTING`, 32, because it recurses, and reads `'x` as `(quote x)`. A `.` in a list makes the next value the `cdr` of the last pair, so `(1 2 . 3)` is two pairs ending in 3. A `.` with no element before it, nothing after it, or more than one value after it is a `Syntax` error.
+
+`atom` reads `nil`, `#t`, then an `i64`, and anything else is a symbol, interned by the interpreter. An integer outside the 61 bits of a value, `Value::MIN_INT` to `Value::MAX_INT`, is a `Syntax` error.
 
 == The evaluator
 
@@ -235,7 +231,7 @@ fn eval_at(&mut self, base: usize) -> Result<(), Error> {
 
 === `apply`
 
-#srcfile("green-tea-lisp/src/eval.rs", lines: ((276, 312),), notes: ((288, [The callee's environment is built in a root slot.]), (292, [The closure is read again from its slot on every round, because the `alloc` below may have moved it.]), (306, [Body and environment replace the caller's: no root slot and no Rust frame is left behind.]),))[```rust
+#srcfile("green-tea-lisp/src/eval.rs", lines: ((277, 313),), notes: ((289, [The callee's environment is built in a root slot.]), (293, [The closure is read again from its slot on every round, because the `alloc` below may have moved it.]), (307, [Body and environment replace the caller's: no root slot and no Rust frame is left behind.]),))[```rust
 fn apply(&mut self, base: usize, arguments: usize) -> Result<Applied, Error> {
     let function = base + 2;
     let closure = match self.heap.root(function).decode() {
@@ -277,7 +273,7 @@ fn apply(&mut self, base: usize, arguments: usize) -> Result<Applied, Error> {
 
 `define` always binds in the global environment, in the chain in root slot 0, and overwrites an existing binding with `set_field`. A variable is looked up in the local chain, then the global one, and finally as the name of a primitive, which is how `(define car ...)` can shadow one. The thirteen primitives are `car`, `cdr`, `cons`, `set-car!`, `set-cdr!`, `+`, `-`, `*`, `remainder`, `<`, `=`, `eq?` and `null?`. `eq?` compares words, so it is identity for objects.
 
-`Error` has `Syntax`, `Unbound`, `NotAFunction`, `NotAPair`, `NotANumber`, `Arguments`, `DivisionByZero`, `TooDeep` and `HeapFull`.
+An `if` may leave out its second branch and not its first: `(if #t)` is a `Syntax` error. `Error` has `Syntax`, `Unbound`, `NotAFunction`, `NotAPair`, `NotANumber`, `Arguments`, `DivisionByZero`, `TooDeep` and `HeapFull`.
 
 == The printer
 
@@ -421,7 +417,7 @@ The heaps are measured with nine programs, each a file that `include_str!` puts 
 
 #srcfile("green-tea-lisp/programs/queue.lisp", lines: ((1, 14),))[```lisp
 ; A queue: a pair whose car is the first pair of a list and whose cdr is the last. Five
-; hundred numbers go through it, with never more than eight waiting, and are added up as they
+; hundred numbers go through it, with never more than nine waiting, and are added up as they
 ; come out. The pair that is the queue lives for the whole run, and is written all the time.
 (define (enqueue q x)
   ((lambda (cell)
@@ -572,7 +568,7 @@ the programs that make cycles, in a heap of 1024 words:
 
 A tracing heap frees nothing when a reference is dropped. When it has no room it *collects*: it starts from the root stack, follows every reference it finds, and keeps what it reached. All four implement `Collect`:
 
-#srcfile("green-tea-lisp/src/gc.rs", lines: ((68, 68), (70, 70), (72, 72), (75, 75), (80, 80), (83, 84),))[```rust
+#srcfile("green-tea-lisp/src/gc.rs", lines: ((69, 69), (71, 71), (73, 73), (76, 76), (81, 81), (84, 85),))[```rust
 pub trait Collect: Heap {
 // …
     fn collect(&mut self);
@@ -587,7 +583,7 @@ pub trait Collect: Heap {
 }
 ```]
 
-`set_stress` collects at every allocation (`IncHeap` starts a cycle at each one that finds none in progress), so a reference the interpreter kept where the heap can't see it goes wrong at the first allocation and not at a rare one. `set_clock` gives the heap a clock in ticks of any kind. `gc::Counts` holds `collections`, `traced`, `traced_words`, `roots`, `walked`, `moved_words`, `largest_traced`, `largest_work`, `deepest`, `overflows`, `rescans`, `pause_total` and `pause_longest`, and `work` is objects traced plus walked. The free function `reachable` counts the objects the root stack reaches, through the interface alone: right after a collection that is all a heap should hold.
+`set_stress` collects at every allocation (`IncHeap` starts a cycle at each one that finds none in progress), so a reference the interpreter kept where the heap can't see it goes wrong at the first allocation and not at a rare one. `set_clock` gives the heap a clock in ticks of any kind. `gc::Counts` holds `collections`, `traced`, `traced_words`, `roots`, `walked`, `moved_words`, `largest_traced`, `largest_work`, `deepest`, `overflows`, `rescans`, `pause_total` and `pause_longest`, and `work` is objects traced plus walked. The free function `reachable` counts the objects the root stack reaches, through the interface alone: right after a collection that is all a heap should hold. `walked` counts the objects passed over by the phases that go through the whole heap: one for each object at each sweep and at each search after the mark stack overflowed, and three at each compaction.
 
 == Mark-sweep and mark-compact: `MarkHeap`
 
@@ -782,12 +778,12 @@ One collection, timed on the host, shows what each heap's work depends on. Copyi
 #output(title: "the same run; the last column is a time, and varies from run to run")[
 ```
   heap             live  garbage   traced   walked  words moved  microseconds
-  mark-sweep       1000   100000     1000   101000            0           273
-  mark-compact     1000   100000     1000   303000         3000           367
+  mark-sweep       1000   100000     1000   101000            0           267
+  mark-compact     1000   100000     1000   303000         3000           351
   copying          1000   100000     1000        0         3000            14
-  mark-sweep     100000     1000   100000   101000            0           753
-  mark-compact   100000     1000   100000   303000       300000          1349
-  copying        100000     1000   100000        0       300000           722
+  mark-sweep     100000     1000   100000   101000            0           804
+  mark-compact   100000     1000   100000   303000       300000          1520
+  copying        100000     1000   100000        0       300000           644
 ```
 ]
 
@@ -805,7 +801,7 @@ The old space starts at word 1 and grows up. The *nursery* is at the top of the 
 
 A *minor collection* copies what can be reached in the nursery to the end of the old space, with Cheney's scan. It doesn't trace the old space. It starts from the root stack and the *remembered set*, the old objects that may hold a reference to a nursery object:
 
-#srcfile("green-tea-lisp/src/generational.rs", lines: ((263, 269), (274, 306),), notes: ((276, [With `Barrier::Every` the set can name nursery objects. The scan reaches those if they are live.]), (283, [Only fields that refer into the nursery are rewritten.]), (292, [Cheney's scan over the copies.]), (306, [Everything is in the old space now, so no old object refers to the nursery, and the set can be emptied.]),))[```rust
+#srcfile("green-tea-lisp/src/generational.rs", lines: ((265, 271), (276, 308),), notes: ((278, [With `Barrier::Every` the set can name nursery objects. The scan reaches those if they are live.]), (285, [Only fields that refer into the nursery are rewritten.]), (294, [Cheney's scan over the copies.]), (308, [Everything is in the old space now, so no old object refers to the nursery, and the set can be emptied.]),))[```rust
 let to = self.old_top;
 let mut next = to;
 self.counts.roots += self.roots.len() as u64;
@@ -855,7 +851,7 @@ A *major collection* runs after a minor one that leaves the old space with more 
 
 An object can come to hold a reference to a younger one in one way only, a store after it was made. So `set_field` has a barrier, and `alloc` has none:
 
-#srcfile("green-tea-lisp/src/generational.rs", lines: ((567, 594),), notes: ((575, [`Barrier::Filter` is David Ungar's: three tests, and a header bit so that an object is remembered once.]), (590, [`Barrier::Every` is Appel's: test nothing and record every store. The minor collection sorts it out.]),))[```rust
+#srcfile("green-tea-lisp/src/generational.rs", lines: ((569, 596),), notes: ((577, [`Barrier::Filter` is David Ungar's: three tests, and a header bit so that an object is remembered once.]), (592, [`Barrier::Every` is Appel's: test nothing and record every store. The minor collection sorts it out.]),))[```rust
 fn set_field(&mut self, obj: Obj, i: usize, v: Value) {
     let at = self.live(obj);
     assert!(i < self.kind_at(at).fields(), "no such field");
@@ -911,7 +907,7 @@ the pair (1 . 2), made in the nursery and stored in an old pair; after a minor c
 ```
 ]
 
-The other methods report. `generations` returns the `Generations` counters; `is_young`, `old_words`, `nursery_words` and `remembered` describe the layout; `minor` and `major` run a collection directly; and `check` verifies that both areas are objects end to end, every reference names an object, and every old object that refers to the nursery is in the remembered set. `Generations` counts `minor`, `major`, `promoted`, `promoted_words`, `largest_minor`, `minor_roots`, `marked`, `largest_major`, `old_freed`, `deepest`, `stores`, `stores_old`, `old_to_young`, `recorded`, `remembered_most`, `remembered_read`, `remembered_scanned`, `remembered_found`, and the minor and major pause totals and longest.
+The other methods report. `generations` returns the `Generations` counters, whose `stores_old` and `old_to_young` only `Barrier::Filter` counts: `Barrier::Every` tests nothing and leaves them at 0; `is_young`, `old_words`, `nursery_words` and `remembered` describe the layout; `minor` and `major` run a collection directly; and `check` verifies that both areas are objects end to end, every reference names an object, and every old object that refers to the nursery is in the remembered set. `Generations` counts `minor`, `major`, `promoted`, `promoted_words`, `largest_minor`, `minor_roots`, `marked`, `largest_major`, `old_freed`, `deepest`, `stores`, `stores_old`, `old_to_young`, `recorded`, `remembered_most`, `remembered_read`, `remembered_scanned`, `remembered_found`, and the minor and major pause totals and longest.
 
 === What generations buy
 
@@ -952,15 +948,15 @@ the write barrier, in 4096 words with a nursery of 256:
 ```
 ]]
 
-A minor collection doesn't depend on the size of the old space. With 100,000 objects kept, it takes tens of nanoseconds, and a collection of the whole heap more than a millisecond:
+A minor collection doesn't depend on the size of the old space. With 100,000 objects kept, it took 129 nanoseconds in this run, and a collection of the whole heap more than a millisecond:
 
 #output(title: "the same run; the last column is a time", size: 6.5pt)[
 ```
 one collection with a list that is kept and a nursery of 1024 words of garbage, run 1; the last column is a time:
   kept objects  collection          traced   walked  words moved  nanoseconds
-        100000  minor                    0        0            0           64
-        100000  minor and major     100000   300000            0      1238014
-        100000  copying             100000        0       300000      1483291
+        100000  minor                    0        0            0          129
+        100000  minor and major     100000   300000            0      1190707
+        100000  copying             100000        0       300000      1623463
 ```
 ]
 
@@ -968,14 +964,14 @@ The example `store_cost` counts what the barrier costs in instructions, under `v
 
 #output(title: "valgrind --tool=callgrind target/release/examples/store_cost store <case> <count>; instructions")[
 ```
-plain 0 389494
-plain 1000000 48389584
-old-integer 0 390121
-old-integer 1000000 61390238
-old-young 0 390279
-old-young 1000000 69390716
-every-old-young 0 390298
-every-old-young 1000000 62460954
+plain 0 388842
+plain 1000000 48388946
+old-integer 0 389483
+old-integer 1000000 61389586
+old-young 0 389627
+old-young 1000000 69390078
+every-old-young 0 389660
+every-old-young 1000000 62460327
 ```
 ]
 
@@ -989,7 +985,7 @@ In the three colours of Dijkstra and his colleagues, an object is *white* if unm
 
 `shade` is the primitive: a white object turns grey. The barrier is in `set_field`:
 
-#srcfile("green-tea-lisp/src/incremental.rs", lines: ((683, 698),), notes: ((692, [`Barrier::Insertion` (Dijkstra's) shades the object being stored.]), (693, [`Barrier::Deletion` (Yuasa's, a snapshot at the beginning) shades the object being overwritten.]),))[```rust
+#srcfile("green-tea-lisp/src/incremental.rs", lines: ((701, 716),), notes: ((710, [`Barrier::Insertion` (Dijkstra's) shades the object being stored.]), (711, [`Barrier::Deletion` (Yuasa's, a snapshot at the beginning) shades the object being overwritten.]),))[```rust
 fn set_field(&mut self, obj: Obj, i: usize, v: Value) {
     let at = self.live(obj);
     assert!(i < self.kind_at(at).fields(), "no such field");
@@ -1037,7 +1033,7 @@ The root stack has no barrier, because `push`, `pop` and `set_root` are plain st
 
 `Birth` is the colour of an object allocated during marking, set by `born`. Only the insertion barrier has the choice. A `White` newborn that dies is freed by the cycle it was born in, and one that lives must be found by a rescan. A `Black` newborn has its fields shaded, since they came off the root stack. During the sweep, an object at an address the sweep hasn't reached is born marked, or the sweep would free it:
 
-#srcfile("green-tea-lisp/src/incremental.rs", lines: ((653, 664),))[```rust
+#srcfile("green-tea-lisp/src/incremental.rs", lines: ((671, 682),))[```rust
 let marked = match self.phase {
     Phase::Idle => false,
     Phase::Mark => self.barrier != Barrier::Insertion || self.birth == Birth::Black,
@@ -1056,10 +1052,10 @@ if marked && self.phase == Phase::Mark && self.barrier == Barrier::Insertion {
 
 `work` runs units until a budget or a time slice is spent:
 
-#srcfile("green-tea-lisp/src/incremental.rs", lines: ((457, 483),), notes: ((468, [An overflow of the mark stack, handled one object per unit by `search_one`, which can be left and resumed.]), (471, [The insertion barrier's rescan of the roots. A scan is never cut short, so a step can go over its budget by the number of root slots.]), (477, [The sweep, one object per unit.]),))[```rust
+#srcfile("green-tea-lisp/src/incremental.rs", lines: ((458, 484),), notes: ((469, [An overflow of the mark stack, handled one object per unit by `search_one`, which can be left and resumed.]), (472, [The insertion barrier's rescan of the roots. A scan is never cut short, so a step can go over its budget by the number of root slots.]), (478, [The sweep, one object per unit.]),))[```rust
 while self.phase != Phase::Idle && units < budget {
-    if let (Some(slice), Some(clock), Some(started)) = (slice, self.clock, started)
-        && clock().wrapping_sub(started) >= slice
+    if let (Some((ticks, started)), Some(clock)) = (slice, self.clock)
+        && clock().wrapping_sub(started) >= ticks
     {
         break;
     }
@@ -1090,9 +1086,10 @@ while self.phase != Phase::Idle && units < budget {
 
 A cycle starts when `alloc` finds room for fewer than a *reserve* of objects, set by `reserving`, by default one object for every eight words. If `alloc` finds no room at all, it finishes the cycle on the spot and, if that freed nothing of the size, runs another: a *stall*, the pause this heap exists to avoid.
 
-#srcfile("green-tea-lisp/src/incremental.rs", lines: ((554, 567),))[```rust
+#srcfile("green-tea-lisp/src/incremental.rs", lines: ((569, 584),))[```rust
 fn stall(&mut self, fields: usize) -> Option<usize> {
     self.steps.stalls += 1;
+    let started = self.now();
     let mut units = 0;
     if self.phase != Phase::Idle {
         units += self.work(u64::MAX, None, false);
@@ -1103,11 +1100,12 @@ fn stall(&mut self, fields: usize) -> Option<usize> {
         at = self.take(fields);
     }
     self.steps.largest_stall = self.steps.largest_stall.max(units);
+    self.paused(started);
     at
 }
 ```]
 
-`set_audit` checks each cycle, when marking ends, against a walk from the root stack that ignores the marks, and counts `floating` garbage (marked and unreachable) and `lost` objects (reachable and unmarked). `set_strict` panics at the first lost object, before the sweep frees it. `is_allocated` says whether an index is an allocated object. `steps` returns the `Steps`: `steps`, `units`, `largest`, `stalls`, `largest_stall`, `scans`, `rescans`, `most_roots`, `stores`, `barriers`, `shaded`, `born_marked`, `floating`, `largest_floating`, `lost`, and `pauses`, a histogram of `PAUSE_BUCKETS` (24) powers of two.
+`set_audit` checks each cycle, when marking ends, against a walk from the root stack that ignores the marks, and counts `floating` garbage (marked and unreachable) and `lost` objects (reachable and unmarked). `set_strict` panics at the first lost object, before the sweep frees it. `is_allocated` says whether an index is an allocated object. `steps` returns the `Steps`: `steps`, `units`, `largest`, `stalls`, `largest_stall`, `scans`, `rescans`, `most_roots`, `stores`, `barriers`, `shaded`, `born_marked`, `floating`, `largest_floating`, `lost`, and `pauses`, a histogram of how long the steps took, in `PAUSE_BUCKETS` (24) powers of two. A stall isn't a step and isn't in the histogram; it counts as one pause in `pause_total` and `pause_longest`.
 
 === What it buys
 
@@ -1168,7 +1166,7 @@ The tests are in four files: `tests` for the language and `RcHeap`, `gc_tests` f
 
 #output(title: "cargo test -p green-tea-lisp")[
 ```
-test result: ok. 161 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 165 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 ]
 
@@ -1182,19 +1180,12 @@ PASS: five programs on three heaps that trace: 160 collections traced 25698 obje
 
 == Limits
 
-- The language has no strings, floats, macros, `let`, variadic functions or dotted-pair syntax. `define` always binds globally, and the names of the special forms can't be rebound.
+- The language has no strings, floats, macros, `let` or variadic functions. `define` always binds globally, and the names of the special forms can't be rebound.
 - Calls that aren't in tail position nest at most 32 deep, and lists at most 33 deep in the text.
 - `Obj` is 32 bits, so a heap holds at most $2^32$ words.
 - The sweeping heaps and `RcHeap` keep one free list per object size and never split or merge, so a heap can be full of pairs' words and refuse a closure.
 - `Freeing::Recursive` uses Rust stack in proportion to the longest chain that dies: 288 bytes a pair in the `lisp` kernel.
 - A `GenHeap` given a nursery smaller than an object can't allocate at all: a heap of 4,096 words with a nursery of 2 returned `HeapFull` on `(cons 1 2)`.
-- *Defect.* `lib.rs:9-12` says two heaps can take the place of `RcHeap`, naming `MarkHeap` and `Semispace`. `GenHeap` and `IncHeap` implement the same trait, and the comment predates them.
-- *Defect.* `programs/queue.lisp:2-3` says never more than eight numbers wait. `feed` enqueues before it dequeues, so nine do: the same program with a counter reports 9.
-- *Defect.* The reader wraps integers that don't fit in 61 bits without an error (`read.rs:101-102`, `lib.rs:117`). `1152921504606846976`, which is $2^60$, reads as $-2^60$.
-- *Defect.* `(if #t)`, an `if` with no branches, evaluates to `nil` where a short form is otherwise a `Syntax` error (`eval.rs:258`).
-- *Defect.* `print` writes a pair `(1 . 2)` and the three-element list read from the text `(1 . 2)`, whose middle element is the symbol `.`, identically (`print.rs:51`, `read.rs:97-106`). The printer's output for an improper list doesn't read back as the same value.
-- *Defect.* `Generations::stores_old` and `old_to_young` are counted only by `Barrier::Filter` (`generational.rs:578-582`). Under `Barrier::Every` they stay 0, though their documentation is unconditional: one old-to-young store reports `stores_old: 0`.
-- *Defect.* `Steps::pauses` is documented as how long the steps took (`incremental.rs:133-135`), and also receives the `work` calls of a stall, which aren't steps. A run with 0 steps and 9 stalls had 9 pauses recorded. A stall that runs two `work` calls records two pauses, so `pause_longest` understates it.
-- *Defect.* `gc::Counts::walked` is documented as one object per sweep and three per compaction (`gc.rs:29-30`). It also includes the objects passed over when a mark stack overflows (`mark.rs:188`).
+- A `.` is a syntax error only where a list element could start. Outside a list, and right after a dot, the reader takes it for a symbol: `'.` is that symbol, and `'(1 . .)` is a pair whose `cdr` is that symbol.
 
 One language, six heaps, and the numbers to compare them. @crate-io starts the drivers.

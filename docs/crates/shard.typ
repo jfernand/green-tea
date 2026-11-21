@@ -357,14 +357,14 @@ each CPU makes 20000 allocations and frees, of 1 to 512 bytes, holding up to 96:
   a cache for each CPU, as in the smp test:  80128 operations, and the lock was taken 2680 times
     the heap behind the lock made 21440 allocations and frees
     when the work ended the caches held 528 blocks, of 105984 bytes in all
-  this run: 654 of those waited for another CPU; 216 ms
+  this run: 736 of those waited for another CPU; 310 ms
   a heap of pages for each CPU:              80128 operations, no lock, and 0 frees of another CPU's block
     the CPUs took 56 pages of 16384 bytes from the arena, and gave back 16
     a page's free list ran out 1015 times in 40064 allocations
     when the work ended the CPUs held no blocks, and their heaps held 40 pages, of 655360 bytes in all
-  this run: at most 42 pages held at once; 5 pushes and pops of the arena's stack tried again; 224 ms
+  this run: at most 42 pages held at once; 7 pushes and pops of the arena's stack tried again; 270 ms
   the same, with heaps that keep no empty page: the CPUs took 4120 pages and gave back 4120
-  this run: at most 41 pages held at once; 156 pushes and pops of the arena's stack tried again; 265 ms
+  this run: at most 41 pages held at once; 176 pushes and pops of the arena's stack tried again; 378 ms
 ```
 ]
 
@@ -376,16 +376,16 @@ each CPU allocates 48 blocks and leaves them for the other three to free, 200 ti
   a cache for each CPU:          38400 allocations and as many frees, and the lock was taken 1992 times
     the heap behind the lock made 15936 allocations and frees
     when the work ended the caches held 384 blocks, of 72448 bytes in all
-  this run: 574 of those waited for another CPU; 193 ms
+  this run: 600 of those waited for another CPU; 334 ms
   a heap of pages for each CPU:  38400 allocations and as many frees, no lock, and 38400 frees of another CPU's block
     when every CPU had collected its pages, 38400 blocks had come back to the CPU that allocated them, and 0 were out
     the heaps then held 40 pages, of 655360 bytes in all
-  this run: 132 of the compare-and-swaps were tried again; the owners took their pages' lists 833 times
-  this run: the CPUs took 40 pages, and held 40 when the rounds ended; 193 ms
+  this run: 135 of the compare-and-swaps were tried again; the owners took their pages' lists 832 times
+  this run: the CPUs took 40 pages, and held 40 when the rounds ended; 285 ms
 ```
 ]
 
-All 38,400 blocks went home through `thread_free`, 132 CAS attempts failed, and the owners took their lists 833 times.
+All 38,400 blocks went home through `thread_free`, 135 CAS attempts failed, and the owners took their lists 832 times.
 
 == Limits
 

@@ -11,9 +11,9 @@
   docid: "ISSS-TR-0506",
   running: "green-tea — a technical report",
   abstract: [
-    green-tea is a Rust workspace of 26 crates and about 35,000 lines. It starts from a
+    green-tea is a Rust workspace of 31 crates and about 39,650 lines. It starts from a
     context switch under Linux and ends with bare-metal kernels for riscv64, aarch64 and
-    x86_64 in QEMU, with pool, free-list, buddy, TLSF, slab, region and lock-free
+    x86_64 in QEMU, a board for physical PCs, with pool, free-list, buddy, TLSF, slab, region and lock-free
     allocators, a small Lisp on reference-counted and tracing heaps, safe memory
     reclamation, device drivers, and tools that record and replay allocation traces.
 
@@ -51,15 +51,20 @@
 #include "crates/smr.typ"
 #include "crates/lisp.typ"
 
-#part("Drivers", [One crate per device, for the machines QEMU emulates.])
+#part("Drivers", [One crate per device, for QEMU's machines and a physical PC.])
 #include "crates/io.typ"
 #include "crates/ns16550.typ"
 #include "crates/pl011.typ"
 #include "crates/fw-cfg.typ"
+#include "crates/framebuffer.typ"
 #include "crates/ramfb.typ"
 #include "crates/pci.typ"
 #include "crates/virtio.typ"
 #include "crates/virtio-blk.typ"
+#include "crates/multiboot2.typ"
+#include "crates/acpi.typ"
+#include "crates/i8042.typ"
+#include "crates/xhci.typ"
 
 #part("Kernels", [The shared bare-metal layer, and the three kernels built on it.])
 #include "crates/bare.typ"

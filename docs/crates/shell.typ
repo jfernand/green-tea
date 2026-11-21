@@ -5,7 +5,7 @@
 `green-tea-shell` is a kernel with a shell on the serial console. It is one task that reads a line, runs it as a command, and repeats, and it never stops allocating, which makes it the workspace's source of a real allocation trace. It can take each command's memory from the heap or from an arena, record every allocation and free, replay the recording against each allocator, and write it out as a trace file.
 
 #spec(
-  ("Source", [#repo("green-tea-shell/src/"), 6 files, 1,672 lines]),
+  ("Source", [#repo("green-tea-shell/src/"), 6 files, 1,773 lines]),
   ("Depends on", [`green-tea-bare` (@crate-bare), `green-tea-region` (@crate-region)]),
   ("Used by", [nothing: it is a binary. `cargo xtask trace` reads what it writes (@crate-xtask)]),
   ("Tests", [the `shell`, `trace`, `harden`, `region`, `gtt` and `resident` kernels, which type at it]),
@@ -59,22 +59,22 @@ pot = a small one
 > mem
 commands run: 10, now from the arena
 heap:     65952 of 4194288 bytes used; 1 free blocks, the largest 4128336 bytes
-arena:      296 of 65536 bytes used, peak 1307
+arena:      296 of 65536 bytes used, peak 1373
 > heap
-0x803d8008       48 bytes allocated
-0x803d8038    65552 bytes allocated
-0x803e8048       80 bytes allocated
-0x803e8098       32 bytes allocated
-0x803e80b8       32 bytes allocated
-0x803e80d8      208 bytes allocated
-0x803e81a8  4128336 bytes free
+0x803f6008       48 bytes allocated
+0x803f6038    65552 bytes allocated
+0x80406048       80 bytes allocated
+0x80406098       32 bytes allocated
+0x804060b8       32 bytes allocated
+0x804060d8      208 bytes allocated
+0x804061a8  4128336 bytes free
 > map
-.text    0x80200000..0x8027b9c2    506306 bytes
-.rodata  0x8027b9d0..0x8028e273     75939 bytes
-.data    0x8028eed0..0x8028efa0       208 bytes
-.bss     0x8028f000..0x803c8000   1282048 bytes
-.stack   0x803c8000..0x803d8000     65536 bytes
-.heap    0x803d8000..0x807d8000   4194304 bytes
+.text    0x80200000..0x8027cfde    511966 bytes
+.rodata  0x8027cfe0..0x8028fdd3     77299 bytes
+.data    0x80290a30..0x80290b00       208 bytes
+.bss     0x80291000..0x803e6000   1396736 bytes
+.stack   0x803e6000..0x803f6000     65536 bytes
+.heap    0x803f6000..0x807f6000   4194304 bytes
 .stacks  0x80800000..0x80a00000   2097152 bytes
 ```
 ]
@@ -85,7 +85,7 @@ The block of 65,552 bytes is the arena: 64 KiB and its two tags.
 
 `kmain` boots, blanks the display, and runs one task. The task's loop is the whole shell:
 
-#srcfile("green-tea-shell/src/main.rs", lines: ((111, 118),))[```rust
+#srcfile("green-tea-shell/src/main.rs", lines: ((114, 121),))[```rust
 let mut line = [0u8; LINE_MAX];
 loop {
     print!("> ");
@@ -98,7 +98,7 @@ loop {
 
 `read_line` echoes what it reads into a buffer of `LINE_MAX` (120) bytes. Backspace works, bytes that aren't printable are ignored, and typing past the end does nothing:
 
-#srcfile("green-tea-shell/src/main.rs", lines: ((123, 143),))[```rust
+#srcfile("green-tea-shell/src/main.rs", lines: ((126, 146),))[```rust
 fn read_line(line: &mut [u8]) -> usize {
     let mut len = 0;
     loop {
@@ -124,7 +124,7 @@ fn read_line(line: &mut [u8]) -> usize {
 
 `Shell::line` handles the commands that run whole commands or need the shell mutably (`repeat`, `test`, `trace`, `session`, `replay`, `harden`, `regions`, `pages`), and passes the rest to `command`, where the source of memory is chosen:
 
-#srcfile("green-tea-shell/src/main.rs", lines: ((181, 202),), notes: ((184, [`Global` here is `alloc::alloc::Global`, the heap.]), (187, [An arena gets all of a command's memory back by moving one pointer.]),))[```rust
+#srcfile("green-tea-shell/src/main.rs", lines: ((183, 204),), notes: ((186, [`Global` here is `alloc::alloc::Global`, the heap.]), (189, [An arena gets all of a command's memory back by moving one pointer.]),))[```rust
 fn command(&mut self, text: &str) -> Next {
     self.commands += 1;
     let next = match self.source {
@@ -151,7 +151,7 @@ fn command(&mut self, text: &str) -> Next {
 
 `execute` is generic over the `Allocator`, so the same code runs both ways. It makes three allocations of its own before it looks at the command: a copy of the line, the list of words, and a buffer for what it prints.
 
-#srcfile("green-tea-shell/src/main.rs", lines: ((333, 344),), notes: ((333, [`Copy`: both the global allocator and `&Arena` are.]),))[```rust
+#srcfile("green-tea-shell/src/main.rs", lines: ((428, 439),), notes: ((428, [`Copy`: both the global allocator and `&Arena` are.]),))[```rust
 fn execute<A: Allocator + Copy>(text: &str, memory: A, shell: &Shell) -> Next {
     let mut line = Vec::new_in(memory);
     line.extend_from_slice(text.as_bytes());
@@ -172,12 +172,23 @@ Variables outlive the command that sets them, so they are always on the heap, wh
 
 #output(title: "typed at the shell")[
 ```
-ran `echo a b c` 100 times from the heap: 300 heap allocations, 300 frees, heap +0 bytes; arena peak 1307 bytes
-ran `echo a b c` 100 times from the arena: 0 heap allocations, 0 frees, heap +0 bytes; arena peak 1307 bytes
+ran `echo a b c` 100 times from the heap: 300 heap allocations, 300 frees, heap +0 bytes; arena peak 1373 bytes
+ran `echo a b c` 100 times from the arena: 0 heap allocations, 0 frees, heap +0 bytes; arena peak 1373 bytes
 ```
 ]
 
-`test` is the same measurement with a verdict. It runs a fixed `echo` 1,000 times from each source, and fails if the heap didn't get every byte back, if the arena touched the heap, or if any earlier line wasn't a command, which is how a garbled byte on the serial port shows up:
+`repeat` runs one ordinary command at a time. The eight commands in `WHOLE_LINES`, which `line` handles around a command's memory, are refused, and `repeat 1 halt` halts:
+
+#output(title: "typed at the shell")[
+```
+> repeat 2 repeat 2 echo x
+`repeat` runs one command at a time, and can't run `repeat`
+> repeat 1 halt
+halting
+```
+]
+
+`test` is the same measurement with a verdict. It runs a fixed `echo` 1,000 times from each source, and fails if the heap didn't get every byte back, if the arena touched the heap, or if any earlier line wasn't a command, which is how a garbled byte on the serial port shows up. It then checks four behaviours of the shell itself: an arena of no bytes takes nothing from the heap (`empty_arena`), `repeat` halts and refuses to nest (`repeats`), a second `trace on` starts a clean recording (`trace_twice`), and `regions` leaves a recording and the variables alone (`regions_refuse`):
 
 #output(title: "cargo xtask kernel --kernel shell --target riscv64")[
 ```
@@ -190,10 +201,11 @@ PASS: 1000 commands made 8000 heap allocations and freed them all, or none from 
 
 == The trace recording
 
-`trace on` asks `green-tea-bare`'s heap to record into a buffer of `TRACE_EVENTS` (65,536) events, a mebibyte, taken from the heap *before* the recording starts:
+`trace on` asks `green-tea-bare`'s heap to record into a buffer of `TRACE_EVENTS` (65,536) events, a mebibyte, taken from the heap *before* the recording starts. A recording already under way is stopped first, and its buffer freed, so that the free isn't in the new trace:
 
-#srcfile("green-tea-shell/src/main.rs", lines: ((233, 243),), notes: ((239, [The runtime allocates its list of sleepers the first time a task sleeps, which is whenever the console first has nothing to read. Sleeping here keeps that allocation out of the trace, so that a trace doesn't depend on timing.]), (240, [What the heap has counted so far. `replay` later checks the trace against the heap's own count.]),))[```rust
+#srcfile("green-tea-shell/src/main.rs", lines: ((257, 268),), notes: ((264, [The runtime allocates its list of sleepers the first time a task sleeps, which is whenever the console first has nothing to read. Sleeping here keeps that allocation out of the trace, so that a trace doesn't depend on timing.]), (265, [What the heap has counted so far. `replay` later checks the trace against the heap's own count.]),))[```rust
 "on" => {
+    drop(heap::stop_recording()); // one under way: its buffer's free isn't in the new one
     self.trace = None; // frees the last trace's buffer
     let buffer = alloc::vec![Default::default(); replay::TRACE_EVENTS].into_boxed_slice();
     // The runtime allocates its list of sleeping tasks the first time a task
@@ -201,7 +213,7 @@ PASS: 1000 commands made 8000 heap allocations and freed them all, or none from 
     // now, so that it isn't sometimes in the trace and sometimes not.
     green_tea_bare::task::sleep_ms(1);
     self.counted = heap::with(|fit| (fit.stats().allocations, fit.stats().frees));
-    drop(heap::record(buffer));
+    heap::record(buffer);
     println!("recording the heap's allocations and frees, up to {} of them", replay::TRACE_EVENTS);
 }
 ```]
@@ -301,7 +313,7 @@ struct Session<'s> {
 
 The script with both regions is a few lines. The command's region is reset after each command:
 
-#srcfile("green-tea-shell/src/region.rs", lines: ((361, 368),))[```rust
+#srcfile("green-tea-shell/src/region.rs", lines: ((366, 373),))[```rust
 fn in_two_regions() -> (Ending, Regions) {
     let session_region = Region::new(CHUNK);
     let mut command_region = Region::new(CHUNK);
@@ -324,6 +336,19 @@ the command's region: 1970 resets, 1 chunk of 4096 bytes taken from the heap, at
 the session's region: 15 chunks of 4096 bytes, 57693 bytes in use at the end in 1780 blocks
 the variables: 74 set at the end, in 6609 of those bytes; the most ever set at once needed 10650
 PASS: 1970 commands asked the heap for 10316 blocks, 2996 with an arena, and 16 with two regions, which held 61440 bytes at the end for 6609 of variables
+```
+]
+
+`regions` needs the recorder and a session with no variables, and otherwise refuses, leaving both as they were:
+
+#output(title: "typed at the shell")[
+```
+> regions
+`regions` runs with no variables: `unset` the ones in `vars` first
+> trace on
+recording the heap's allocations and frees, up to 65536 of them
+> regions
+`regions` needs the recorder: a recording is under way, `trace off` first
 ```
 ]
 
@@ -458,35 +483,6 @@ The binary form is 3.75 times smaller than the text.
 
 == Limits
 
-- *`repeat` ignores what its command returns.* `repeat 1 halt` doesn't halt (`main.rs:214`), and reports that it ran:
-
-#output(title: "typed at the shell")[
-```
-> repeat 1 halt
-ran `halt` 1 times from the arena: 0 heap allocations, 0 frees, heap +0 bytes; arena peak 1307 bytes
-> repeat 2 repeat 2 echo x
-ran `repeat 2 echo x` 2 times from the arena: 0 heap allocations, 0 frees, heap +0 bytes; arena peak 1307 bytes
-```
-]
-
-- `repeat` can't nest, as the second line shows: the inner `repeat` is an unknown command, and its error is swallowed by the quiet flag. Each counts in `unknown`, so a later `test` then fails.
-- *A second `trace on` puts a stray event in the trace.* `drop(heap::record(buffer))` (`main.rs:241`) frees the old buffer after the new recording has begun, so the trace starts with a free of a block it never saw allocated:
-
-#output(title: "typed at the shell")[
-```
-> trace on
-> trace on
-> trace off
-recorded 1 events, and dropped 0
-> trace dump
-gtt 1
-f 803e81b0
-end 1 e469ec02924c8720
-```
-]
-
-- `regions` discards any recording in progress and all the variables, without saying so (`region.rs:251-252`).
-- The comment at `main.rs:10` calls the heap "green-tea-bare's first-fit allocator", and says each block is found by a search. The heap is TLSF.
 - Variables are a list searched from the front, and the session's region never reuses the memory of a changed or unset variable.
 - A line is at most 120 bytes, and input is polled.
 - `pages` on aarch64 reports only that there is no paging. The `resident` kernel doesn't run there.

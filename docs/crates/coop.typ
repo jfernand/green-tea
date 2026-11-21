@@ -2,24 +2,25 @@
 
 = green-tea-coop <crate-coop>
 
-`green-tea-coop` is one kernel binary that holds eighteen kernels: a demo of cooperative tasks on the `ramfb` display, and seventeen tests. Each test exercises a crate of the workspace on the bare machine, prints what it measured, and ends with a line that starts `PASS:` or `FAIL:`, which is what `cargo xtask kernel` looks for.
+`green-tea-coop` is one kernel binary that holds eighteen kernels: a demo of cooperative tasks on the display, and seventeen tests. Each test exercises a crate of the workspace on the bare machine, prints what it measured, and ends with a line that starts `PASS:` or `FAIL:`, which is what `cargo xtask kernel` looks for.
 
 #spec(
-  ("Source", [#repo("green-tea-coop/src/"), 14 files, 5,951 lines]),
+  ("Source", [#repo("green-tea-coop/src/"), 14 files, 6,050 lines]),
   ("Depends on", [`green-tea-bare` (@crate-bare), `green-tea-lisp` (@crate-lisp), `green-tea-shard` (@crate-shard), `green-tea-smr` (@crate-smr)]),
   ("Used by", [nothing: it is a binary, run by `cargo xtask kernel` (@crate-xtask)]),
   ("Tests", [it is the tests. All recordings below are from riscv64 unless they say otherwise]),
 )
 
-The choice of kernel is made outside the binary. `xtask` passes the name in a `fw_cfg` file, `opt/green-tea/test`, and `kmain` matches it:
+The choice of kernel is made outside the binary. `xtask` passes the name in a `fw_cfg` file, `opt/green-tea/test`, or on the `pc` board as `test=` on GRUB's command line. `Board::test_name` reads it, and `kmain` matches it:
 
-#srcfile("green-tea-coop/src/main.rs", lines: ((48, 58), (70, 74),), notes: ((50, [No such file means the demo.]), (70, [A name the binary doesn't know is a panic, which `xtask` reports as a failure.]),))[```rust
+#srcfile("green-tea-coop/src/main.rs", lines: ((54, 65), (77, 81),), notes: ((58, [No name means the demo.]), (60, [The `pc` board has no virtio, so `disk` isn't compiled for it.]), (77, [A name the binary doesn't know is a panic, which `xtask` reports as a failure.]),))[```rust
     let fb = boot("green-tea-coop");
     let mut test = [0u8; 16];
-    let len = Board::fw_cfg().read_file("opt/green-tea/test", &mut test).unwrap_or(0);
+    let len = Board::test_name(&mut test);
     match &test[..len] {
         b"" => demo(fb),
         b"overflow" => overflow_test(fb),
+        #[cfg(not(feature = "board-pc"))]
         b"disk" => disk_test(fb),
         b"memmap" => memmap_test(fb),
         b"pool" => pool_test(fb),
@@ -36,7 +37,7 @@ The choice of kernel is made outside the binary. `xtask` passes the name in a `f
 #dtable(columns: (auto, auto, 1fr), ("Kernel", "File", "What it exercises"),
   [`coop`], [`main.rs`], [tasks that yield, drawn],
   [`overflow`], [`main.rs`], [guard pages (riscv64, x86_64)],
-  [`disk`], [`main.rs`], [the virtio-blk driver],
+  [`disk`], [`main.rs`], [the virtio-blk driver (not on `pc`)],
   [`memmap`], [`main.rs`], [the linker script],
   [`pool`], [`main.rs`], [`green-tea-pool`, and the stack pool],
   [`fit`], [`fit.rs`], [`Fit`, and the kernel's heap],
@@ -60,7 +61,7 @@ Each of the thirteen files after `main.rs` has one public function, `test`, whic
 
 Five workers each grow a bar, one step per turn, and yield. The scheduler's hook moves the highlight to the task about to run and waits 150 ms, so that the switches can be watched. Worker 0 spawns worker 4 during its third turn:
 
-#srcfile("green-tea-coop/src/main.rs", lines: ((125, 137),), notes: ((128, [The only way a task gives up the CPU here.]),))[```rust
+#srcfile("green-tea-coop/src/main.rs", lines: ((132, 144),), notes: ((135, [The only way a task gives up the CPU here.]),))[```rust
 fn worker(mut painter: Painter, column: usize) {
     for turn in 1..=TURNS[column] {
         if turn > 1 {
@@ -90,7 +91,7 @@ PASS: 57 switches, as expected
 
 A task recurses with a frame of 256 bytes, well under a page, so that it can't skip the guard:
 
-#srcfile("green-tea-coop/src/main.rs", lines: ((185, 193),))[```rust
+#srcfile("green-tea-coop/src/main.rs", lines: ((192, 200),))[```rust
 #[inline(never)]
 fn recurse(depth: u64) -> u64 {
     DEPTH.set(depth);
@@ -115,7 +116,7 @@ PASS: overflowed after 26 frames, into the task's guard page at 0x80a05ff0
 
 `xtask` attaches a 64-sector image in which every byte is a function of where it is, so a sector read from the wrong place doesn't match:
 
-#srcfile("green-tea-coop/src/main.rs", lines: ((202, 204),))[```rust
+#srcfile("green-tea-coop/src/main.rs", lines: ((210, 212),))[```rust
 fn pattern(sector: u64, offset: usize) -> u8 {
     (sector as u8).wrapping_mul(31) ^ (offset as u8) ^ (offset >> 8) as u8
 }
@@ -136,7 +137,7 @@ PASS: read 64 sectors over virtio-PCI, and wrote one back
 
 `memmap_test` prints each section (the output is in @crate-bare), and `check_memmap` verifies that each starts on its alignment, that they are in order without overlap, and that the ones the script sizes have that size. Then eight *witnesses*, one address of each kind, must be where they belong:
 
-#srcfile("green-tea-coop/src/main.rs", lines: ((344, 353),))[```rust
+#srcfile("green-tea-coop/src/main.rs", lines: ((357, 366),))[```rust
 let witnesses = [
     ("a function", memmap_test as fn(Framebuffer) as usize, ".text", 1),
     ("a constant static", &raw const CONSTANT as usize, ".rodata", 1),
@@ -152,13 +153,13 @@ let witnesses = [
 #output(title: "cargo xtask kernel --kernel memmap --target riscv64")[
 ```
   address    in       what
-  0x802114da .text    a function
-  0x802f48c0 .rodata  a constant static
-  0x80318c48 .data    an initialised static
-  0x80319040 .bss     a zeroed static
-  0x8045efef .stack   a local of kmain's
-  0x80464010 .heap    a Box<u64>
-  0x80465000 .heap    a Box<Page>
+  0x802950ea .text    a function
+  0x803058b0 .rodata  a constant static
+  0x8031bd98 .data    an initialised static
+  0x8031da78 .bss     a zeroed static
+  0x8047cfef .stack   a local of kmain's
+  0x80482010 .heap    a Box<u64>
+  0x80483000 .heap    a Box<Page>
   0x80a04f46 .stacks  a local of a task's
 PASS: 7 sections in order and aligned; 8 addresses where they should be
 ```
@@ -168,7 +169,7 @@ PASS: 7 sections in order and aligned; 8 addresses where they should be
 
 The same takes and gives go to both of `green-tea-pool`'s pools (@crate-pool). A slot given back twice breaks `give`'s contract on purpose:
 
-#srcfile("green-tea-coop/src/main.rs", lines: ((451, 454),))[```rust
+#srcfile("green-tea-coop/src/main.rs", lines: ((464, 467),))[```rust
 let slot = base + 7 * POOL_SLOT;
 let _ = unsafe { pool.give(slot) };
 let second_give = unsafe { pool.give(slot) };
@@ -198,12 +199,12 @@ The free list has no way to notice a second give, and then hands slot 7 to two c
 #output(title: "cargo xtask kernel --kernel fit --target riscv64")[
 ```
 after free(a), a's block:
-  0x80464018  0x0000000000000030
-  0x80464020  0x0000000080464078
-  0x80464028  0x0000000000000000
-  0x80464030  0x6161616161616161
-  0x80464038  0x0000000000000000
-  0x80464040  0x0000000000000030
+  0x80482018  0x0000000000000030
+  0x80482020  0x0000000080482078
+  0x80482028  0x0000000000000000
+  0x80482030  0x6161616161616161
+  0x80482038  0x0000000000000000
+  0x80482040  0x0000000000000030
 a request for 64 bytes, which takes a block of 80:
   first fit  looked at 2 free blocks: (64) 32 80 (176) 32 (96) 32 (3568)
   next fit   looked at 1 free blocks: (64) 32 (256) 32 (96) 32 80 (3488)
@@ -259,10 +260,10 @@ let ticks = Board::ticks() - start;
 #output(title: "cargo xtask kernel --kernel tlsf --target riscv64")[
 ```
   holes  allocator               looked at  walked past  microseconds
-   1000  first fit, by address        1001         1000        337.4
-   1000  best fit, by address         1001         1000        377.9
-   1000  buddy system                    5            0          5.5
-   1000  TLSF                            1            0          4.8
+   1000  first fit, by address        1001         1000       1114.8
+   1000  best fit, by address         1001         1000       1510.3
+   1000  buddy system                    5            0         19.4
+   1000  TLSF                            1            0         18.7
 ```
 ]
 
@@ -281,7 +282,7 @@ a slab is a page: 19 buffers, a record of 40 bytes at the end, and 104 bytes to 
   all 40 freed                  0       0     3       0          57         0     3       4081
   40 objects again              2       1     0      40          57         0     3       4081
   all freed, and reaped         0       0     0       0          57        57     0       4084
-the kernel's cache of task records: a record is 472 bytes, a buffer 480, and a slab holds 8
+the kernel's cache of task records: a record is 488 bytes, a buffer 496, and a slab holds 8
 1000 tasks, one after another, every one with its locals at 0x80a09f2e:
   1001 records allocated, 8 constructed, in 1 slab; 8 stacks taken from the pool
 ```
@@ -341,7 +342,7 @@ With one block kept in 64, 12,288 live bytes would fill 4 pages and hold 256.
 
 The kernel starts the other three CPUs (QEMU is given `-smp 4`), and all four do the same work. First, an addition without a lock and with one:
 
-#srcfile("green-tea-coop/src/smp.rs", lines: ((94, 101),), notes: ((98, [A load and a store, as `counter += 1` compiles to. Another CPU's store can come between them, and is then overwritten.]),))[```rust
+#srcfile("green-tea-coop/src/smp.rs", lines: ((180, 187),), notes: ((184, [A load and a store, as `counter += 1` compiles to. Another CPU's store can come between them, and is then overwritten.]),))[```rust
 cpus::run(|_| {
     for _ in 0..ADDS {
         // A load and a store, as `counter += 1` compiles to. Another CPU's store can
@@ -357,12 +358,12 @@ cpus::run(|_| {
 4 CPUs are running: the one that booted, and 3 it started
 each CPU adds 1 to a counter 1000000 times:
   with a lock: the counter is 4000000, and the lock was taken 4000000 times
-  this run: without a lock the counter is 1633268; with one, 3932592 acquisitions waited
+  this run: without a lock the counter is 1878532; with one, 3898024 acquisitions waited
 each CPU makes 20000 allocations and frees, of 1 to 512 bytes, holding up to 96:
   the kernel's heap, behind its lock:  80128 operations, and the lock was taken 80128 times
-  this run: 63397 of those waited for another CPU; 303 ms
+  this run: 64003 of those waited for another CPU; 522 ms
   a cache for each CPU:                80128 operations, and the lock was taken 2680 times
-  this run: 795 of those waited for another CPU; 234 ms
+  this run: 754 of those waited for another CPU; 337 ms
 ```
 ]
 
@@ -566,8 +567,8 @@ fn on_tick() {
 ```
   a time, not a count: whole                   59 cycles,    59 steps of at most  922 units,  0 stalls of at most    0 units
   a time, not a count: 4 units an allocation   58 cycles, 14798 steps of at most   14 units,  0 stalls of at most    0 units
-  a time, not a count:   4562 ticks, 4551 found by an allocation, after 41 us on average and 358 us at most
-PASS: 212 cycles in 61497 steps of at most 28 units lost nothing; then 9200 ticks of the timer
+  a time, not a count:   6747 ticks, 6610 found by an allocation, after 66 us on average and 579 us at most
+PASS: 212 cycles in 61497 steps of at most 28 units lost nothing; then 13505 ticks of the timer
 ```
 ]
 
@@ -595,8 +596,8 @@ The other task then allocates, and is handed memory that belongs to the first:
 
 #output(title: "cargo xtask kernel --kernel safety --target riscv64")[
 ```
-  logger: frees the line, then writes 0x80464068 to its first word
-  clerk:  a record at 0x80464020 holding 1000, and one at 0x80464070 holding 2000
+  logger: frees the line, then writes 0x80482068 to its first word
+  clerk:  a record at 0x80482020 holding 1000, and one at 0x80482070 holding 2000
   logger: fills its buffer with the letter a
   clerk:  its records now hold 1000 and 0x6161616161616161
 the clerk's second record is inside the logger's buffer: true
@@ -610,8 +611,6 @@ the clerk's second record is inside the logger's buffer: true
 - `overflow` and `pages` print `FAIL` on aarch64, which has neither guard pages nor paging, and `xtask` doesn't run them there.
 - `smp`, `shard` and `smr` need four CPUs, and fail with a message on any other number.
 - Lines marked `this run:` or `a time, not a count:` differ between runs, and no verdict depends on them, except that `incremental` needs a tick to be seen.
-- On aarch64 a fault in any of these kernels on the boot CPU produces no report, because only `incremental`'s last stage installs the vectors there (@bare-limits).
-- The comment at `main.rs:439` says the heap never frees ("Never freed: the heap doesn't"). The heap is TLSF and does free, so the two `Box::leak`s it explains are leaks by choice.
-- The file's opening comment (`main.rs:5`) says "no interrupts, one CPU". That is true of the demo, and not of `incremental` or the SMP tests in the same binary.
+- `disk` isn't built for the `pc` board, which has no virtio (@bare-limits).
 
 Eighteen kernels, one binary, and a line that says `PASS`. @crate-preempt takes the `yield_now` away.

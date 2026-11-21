@@ -1,0 +1,20 @@
+=== build green-tea-shell x86_64 debug
+[shell-x86_64   ] green-tea-shell on x86_64 (pc)
+[shell-x86_64   ] framebuffer: 1280x800 XRGB8888
+[shell-x86_64   ] type `help` for the commands
+[shell-x86_64   ] > 
+[shell-x86_64   ] > echo hello from the serial port
+[shell-x86_64   ] hello from the serial port
+[shell-x86_64   ] > test
+[shell-x86_64   ] 1000 commands from the heap:  8000 heap allocations, heap +0 bytes afterwards
+[shell-x86_64   ] 1000 commands from the arena: 0 heap allocations; arena peak 368 bytes, 0 in use
+[shell-x86_64   ] `repeat` runs one command at a time, and can't run `repeat`
+[shell-x86_64   ] recording the heap's allocations and frees, up to 65536 of them
+[shell-x86_64   ] recording the heap's allocations and frees, up to 65536 of them
+[shell-x86_64   ] `regions` runs with no variables: `unset` the ones in `vars` first
+[shell-x86_64   ] `regions` needs the recorder: a recording is under way, `trace off` first
+[shell-x86_64   ] PASS: 1000 commands made 8000 heap allocations and freed them all, or none from an arena that peaked at 368
+
+=== summary
+ok    shell-x86_64    1000 commands made 8000 heap allocations and freed them all, or none from an arena that peaked at 368
+serial logs: <work>/target/kernel

@@ -7,13 +7,13 @@
 #spec(
   ("Source", [#repo("drivers/ns16550/src/lib.rs"), 54 lines]),
   ("Depends on", [`green-tea-io`, on `x86_64` only]),
-  ("Used by", [`green-tea-bare` (the `riscv64` and `x86_64` boards)]),
+  ("Used by", [`green-tea-bare` (the `riscv64`, `q35` and `pc` boards)]),
   ("Tests", [no host tests; every kernel on `riscv64` and `x86_64` prints through it, and the `shell` kernel reads through it]),
 )
 
 #dtable(columns: (auto, auto, 1fr), ("Type", "Reaches the registers by", "Used at"),
   [`Ns16550Mmio(pub usize)`], [volatile byte accesses], [`0x1000_0000` on `riscv64` `virt`],
-  [`Ns16550Port(pub u16)`], [`inb` and `outb`; `x86_64` only], [`0x3f8` (COM1) on `q35`],
+  [`Ns16550Port(pub u16)`], [`inb` and `outb`; `x86_64` only], [`0x3f8` (COM1) on `q35` and `pc`],
 )
 
 Both types have the same two methods: `putc` waits for room and writes a byte, and `getc` returns `Some(byte)` if one has arrived and `None` if not.
@@ -36,7 +36,7 @@ impl Ns16550Mmio {
     }
 ```]
 
-`Ns16550Port` has the same logic with `inb(self.0 + 5)` and `outb(self.0, byte)`. The driver writes no divisor, line format or FIFO control register, because QEMU's UART works without them.
+`Ns16550Port` has the same logic with `inb(self.0 + 5)` and `outb(self.0, byte)`. The driver writes no divisor, line format or FIFO control register, because QEMU's UART works without them. The `pc` board, which can't count on that, programs them itself in `init_serial` (115200 baud, 8N1, FIFOs on) after checking that a UART answers at COM1.
 
 == Exercised by
 
@@ -64,7 +64,7 @@ hello from the serial port
 
 == Limits
 
-- No initialization: on hardware whose firmware left the UART unconfigured, the baud rate and line format would be wrong.
+- No initialization in the driver: a board on hardware has to set the baud rate and line format, as `pc` does.
 - No interrupts. A task waiting for input polls, and a byte that overruns the receiver while nobody polls is lost.
 - `getc` ignores the line status error bits (overrun, parity, framing).
 - `putc` can spin forever if the transmitter never empties.

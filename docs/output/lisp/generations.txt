@@ -95,58 +95,58 @@ the smallest heap each program computes its value in, in words:
   closure            237      474              241
 1000000 stores into one pair, run 1; the last two columns are times, and vary from run to run:
   heap                         the pair  the value            recorded  ns for each store  ns for the next minor collection
-  copying, no barrier                    an integer                  0              2.6                                 -
-  two generations, filter      young     an integer                  0              3.2                               182
-  two generations, filter      old       an integer                  0              3.1                                79
-  two generations, filter      old       an old reference            0              3.5                                28
-  two generations, filter      old       a young reference           1              3.8                               162
-  two generations, every store young     an integer            1000000              3.8                            503137
-  two generations, every store old       an integer            1000000              3.8                           3367969
-  two generations, every store old       an old reference      1000000              3.7                           3373921
-  two generations, every store old       a young reference     1000000              3.8                           3492720
+  copying, no barrier                    an integer                  0              3.3                                 -
+  two generations, filter      young     an integer                  0              4.1                               468
+  two generations, filter      old       an integer                  0              4.2                                94
+  two generations, filter      old       an old reference            0              4.6                                36
+  two generations, filter      old       a young reference           1              5.1                               240
+  two generations, every store young     an integer            1000000              5.0                            693018
+  two generations, every store old       an integer            1000000              5.5                           4225913
+  two generations, every store old       an old reference      1000000              4.8                           4386042
+  two generations, every store old       a young reference     1000000              4.7                           4417445
 1000000 stores into one pair, run 2; the last two columns are times, and vary from run to run:
   heap                         the pair  the value            recorded  ns for each store  ns for the next minor collection
-  copying, no barrier                    an integer                  0              2.5                                 -
-  two generations, filter      young     an integer                  0              3.1                               265
-  two generations, filter      old       an integer                  0              3.1                                61
-  two generations, filter      old       an old reference            0              3.4                                42
-  two generations, filter      old       a young reference           1              3.8                                81
-  two generations, every store young     an integer            1000000              3.8                            490878
-  two generations, every store old       an integer            1000000              3.8                           3466911
-  two generations, every store old       an old reference      1000000              3.7                           3370452
-  two generations, every store old       a young reference     1000000              3.8                           3475733
+  copying, no barrier                    an integer                  0              3.1                                 -
+  two generations, filter      young     an integer                  0              3.9                               168
+  two generations, filter      old       an integer                  0              3.9                                78
+  two generations, filter      old       an old reference            0              4.3                               148
+  two generations, filter      old       a young reference           1              5.0                               426
+  two generations, every store young     an integer            1000000              5.0                            623973
+  two generations, every store old       an integer            1000000              5.1                           4707840
+  two generations, every store old       an old reference      1000000              4.8                           4239501
+  two generations, every store old       a young reference     1000000              6.2                           4758804
 1000000 stores into one pair, run 3; the last two columns are times, and vary from run to run:
   heap                         the pair  the value            recorded  ns for each store  ns for the next minor collection
-  copying, no barrier                    an integer                  0              2.5                                 -
-  two generations, filter      young     an integer                  0              3.1                                78
-  two generations, filter      old       an integer                  0              3.1                                65
-  two generations, filter      old       an old reference            0              3.4                                36
-  two generations, filter      old       a young reference           1              3.9                               142
-  two generations, every store young     an integer            1000000              3.8                            478271
-  two generations, every store old       an integer            1000000              3.9                           3475412
-  two generations, every store old       an old reference      1000000              3.8                           3507148
-  two generations, every store old       a young reference     1000000              4.1                           3876210
+  copying, no barrier                    an integer                  0              2.6                                 -
+  two generations, filter      young     an integer                  0              3.4                               478
+  two generations, filter      old       an integer                  0              3.5                               145
+  two generations, filter      old       an old reference            0              3.5                                30
+  two generations, filter      old       a young reference           1              4.1                               238
+  two generations, every store young     an integer            1000000              4.2                            544858
+  two generations, every store old       an integer            1000000              4.1                           3557579
+  two generations, every store old       an old reference      1000000              4.3                           4084987
+  two generations, every store old       a young reference     1000000              4.6                           5090438
 one collection with a list that is kept and a nursery of 1024 words of garbage, run 1; the last column is a time:
   kept objects  collection          traced   walked  words moved  nanoseconds
-          1000  minor                    0        0            0           70
-          1000  minor and major       1000     3000            0        13852
-          1000  copying               1000        0         3000         7287
-        100000  minor                    0        0            0           64
-        100000  minor and major     100000   300000            0      1238014
-        100000  copying             100000        0       300000      1483291
+          1000  minor                    0        0            0           93
+          1000  minor and major       1000     3000            0        11622
+          1000  copying               1000        0         3000         6903
+        100000  minor                    0        0            0          129
+        100000  minor and major     100000   300000            0      1190707
+        100000  copying             100000        0       300000      1623463
 one collection with a list that is kept and a nursery of 1024 words of garbage, run 2; the last column is a time:
   kept objects  collection          traced   walked  words moved  nanoseconds
-          1000  minor                    0        0            0           52
-          1000  minor and major       1000     3000            0        11346
-          1000  copying               1000        0         3000         6522
-        100000  minor                    0        0            0           52
-        100000  minor and major     100000   300000            0      1263487
-        100000  copying             100000        0       300000       683529
+          1000  minor                    0        0            0           90
+          1000  minor and major       1000     3000            0        10727
+          1000  copying               1000        0         3000         6558
+        100000  minor                    0        0            0           55
+        100000  minor and major     100000   300000            0      1074728
+        100000  copying             100000        0       300000       630741
 one collection with a list that is kept and a nursery of 1024 words of garbage, run 3; the last column is a time:
   kept objects  collection          traced   walked  words moved  nanoseconds
-          1000  minor                    0        0            0           51
-          1000  minor and major       1000     3000            0        11135
-          1000  copying               1000        0         3000         6684
-        100000  minor                    0        0            0           64
-        100000  minor and major     100000   300000            0      1351153
-        100000  copying             100000        0       300000       693979
+          1000  minor                    0        0            0           88
+          1000  minor and major       1000     3000            0        11116
+          1000  copying               1000        0         3000         6923
+        100000  minor                    0        0            0          129
+        100000  minor and major     100000   300000            0      1139089
+        100000  copying             100000        0       300000       686630

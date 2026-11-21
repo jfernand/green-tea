@@ -4,7 +4,7 @@
 #import "isss-template.typ": *
 
 // Every listing is from this commit. check-snippets.py compares them with it.
-#let pinned = "7898396"
+#let pinned = "59e8c91"
 #let repo-url = "https://github.com/jfernand/green-tea"
 #let repo(path) = link(repo-url + "/blob/" + pinned + "/" + path, raw(path))
 

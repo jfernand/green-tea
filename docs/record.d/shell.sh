@@ -15,7 +15,7 @@ typed() {
 typed qemu-system-riscv64 "$CARGO_TARGET_DIR/riscv64gc-unknown-none-elf/debug/green-tea-shell" typed-riscv64.txt \
     help 'echo hello' 'set tea green' 'set pot a small one' 'echo $tea $pot $nothing' vars 'unset pot' vars \
     mem heap map 'use heap' 'repeat 100 echo a b c' 'use arena' 'repeat 100 echo a b c' 'no such command' \
-    'repeat 1 halt' 'repeat 2 repeat 2 echo x' pages 'pages nonsense' 'trace nonsense' 'trace off' replay \
-    'trace on' 'trace on' 'trace off' 'trace dump' halt
+    'repeat 2 repeat 2 echo x' pages 'pages nonsense' 'trace nonsense' 'trace off' replay regions \
+    'trace on' regions 'trace on' 'trace off' 'trace dump' 'repeat 1 halt'
 typed qemu-system-aarch64 "$CARGO_TARGET_DIR/aarch64-unknown-none/debug/green-tea-shell" typed-aarch64.txt \
     pages halt

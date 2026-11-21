@@ -23,3 +23,4 @@ echo "shell 20483 0000000000000000" > wrong.pins
 "$M" lisp run fib mark-sweep 2000 >> "$OUT/lisp-run.txt"
 "$M" lisp run fib counting 2000 >> "$OUT/lisp-run.txt"
 "$M" lisp instructions > "$OUT/lisp-instructions.txt"
+"$M" space shell.gtt --only buddy --region-kib 5000000 > "$OUT/region-large.txt" 2>&1 || true

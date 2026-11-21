@@ -1,11 +1,11 @@
-shell: 20483 events, 10316 allocations of 656120 bytes in all, 14902 bytes live at the peak; checksum f137558e1fe4dcb2
+shell: 20483 events, 10316 allocations of 656120 bytes in all, 14902 bytes live at the peak; checksum d48aa9507ec3677c
 20 passes with the clock read around every event, and 20 with it read around the pass; one pass made first and thrown away
 every block is written to when it is allocated: its first byte, its last, and one in each page between
-the machine's load average when this began: 2.90 2.93 4.21
-reading the clock twice with nothing between: median 17 ns, 99% 26 ns, 99.9% 26 ns, most 278 ns
+the machine's load average when this began: 3.20 5.61 7.57
+reading the clock twice with nothing between: median 23 ns, 99% 31 ns, 99.9% 33 ns, most 11890 ns
 nanoseconds for each event:
   allocator       mean  median     90%     99%   99.9%        most    whole pass: least  median    most  pages mapped
-  tlsf            35.3      33      50      64      75        3502                18.04   18.46   20.78             1
-  pools           25.7      23      34      42      51        3938                 7.68    7.93    9.05             0
-the machine's load average when this ended: 2.90 2.93 4.21
-FAIL: 1 pages were mapped during timed passes: those passes timed the operating system too
+  tlsf            45.5      43      64      83     102       25588                23.39   24.48   27.11             0
+  pools           34.3      31      45      56      69        5947                10.96   11.42   13.47             0
+the machine's load average when this ended: 3.20 5.61 7.57
+PASS: no page was mapped during a timed pass

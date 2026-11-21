@@ -1,1 +1,1 @@
-FAIL: shell is not the trace that was measured: wrong.pins pins 20483 records with checksum 0000000000000000, and this file has 20483 with f137558e1fe4dcb2
+FAIL: shell is not the trace that was measured: wrong.pins pins 20483 records with checksum 0000000000000000, and this file has 20483 with d48aa9507ec3677c

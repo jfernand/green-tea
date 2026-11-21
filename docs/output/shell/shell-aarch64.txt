@@ -19,5 +19,10 @@ hello from the serial port
 > test
 1000 commands from the heap:  8000 heap allocations, heap +0 bytes afterwards
 1000 commands from the arena: 0 heap allocations; arena peak 368 bytes, 0 in use
+`repeat` runs one command at a time, and can't run `repeat`
+recording the heap's allocations and frees, up to 65536 of them
+recording the heap's allocations and frees, up to 65536 of them
+`regions` runs with no variables: `unset` the ones in `vars` first
+`regions` needs the recorder: a recording is under way, `trace off` first
 PASS: 1000 commands made 8000 heap allocations and freed them all, or none from an arena that peaked at 368
 > 

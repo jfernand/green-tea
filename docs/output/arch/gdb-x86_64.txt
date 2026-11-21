@@ -1,21 +1,21 @@
 --- the context of a fresh task (rsi): rsp r15 r14 r13 r12 rbx rbp
-0x55555564da40:	0x00007ffff7fb9fe8	0x000055555564da40
-0x55555564da50:	0x00005555555ea3f0	0x0000000000000000
-0x55555564da60:	0x0000000000000000	0x0000000000000000
-0x55555564da70:	0x0000000000000000
+0x555555657130:	0x00007ffff7fb9fe8	0x0000555555657130
+0x555555657140:	0x00005555555eaed0	0x0000000000000000
+0x555555657150:	0x0000000000000000	0x0000000000000000
+0x555555657160:	0x0000000000000000
 --- the slot rsp points to
-0x7ffff7fb9fe8:	0x5555555fa893 <bootstrap_entry>
+0x7ffff7fb9fe8:	0x5555555fb651 <bootstrap_entry>
 --- r14
-0x55555564da50:	0x5555555ea3f0 <_RNvNtCs4znrrNFW9Hp_12green_tea_v24task10task_entry>
-0x00005555555fa893 in bootstrap_entry ()
---- after 15 instructions
-=> 0x5555555fa893 <bootstrap_entry>:	mov    rdi,r15
+0x555555657140:	0x5555555eaed0 <_RNvNtCs4znrrNFW9Hp_12green_tea_v24task10task_entry>
+0x00005555555fb651 in bootstrap_entry ()
+--- after 19 instructions
+=> 0x5555555fb651 <bootstrap_entry>:	mov    rdi,r15
 rsp mod 16 = 0
-green_tea_v2::task::task_entry (arg=0x0) at green-tea-v2/src/task.rs:85
-85	extern "C" fn task_entry(arg: *mut ()) -> ! {
+green_tea_v2::task::task_entry (arg=0x0) at green-tea-v2/src/task.rs:101
+101	extern "C" fn task_entry(arg: *mut ()) -> ! {
 Warning: the current language does not match this frame.
 --- after 3 more
-=> 0x5555555ea3f0 <_RNvNtCs4znrrNFW9Hp_12green_tea_v24task10task_entry>:	sub    rsp,0x78
+=> 0x5555555eaed0 <_RNvNtCs4znrrNFW9Hp_12green_tea_v24task10task_entry>:	sub    rsp,0xa8
 rsp mod 16 = 8
 rdi == r15: 1
-0x7ffff7fb9fe8:	0x5555555fa89d <bootstrap_entry+10>
+0x7ffff7fb9fe8:	0x5555555fb65b <bootstrap_entry+10>

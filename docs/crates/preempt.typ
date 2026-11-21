@@ -2,7 +2,7 @@
 
 = green-tea-preempt <crate-preempt>
 
-`green-tea-preempt` is a kernel whose tasks never yield. A timer interrupt ends each task's time slice, and the handler switches to the next task with the same `yield_now` that the cooperative kernel's tasks call themselves. It runs on all three boards, and the `ramfb` display shows each time slice as a band of shading in a worker's bar.
+`green-tea-preempt` is a kernel whose tasks never yield. A timer interrupt ends each task's time slice, and the handler switches to the next task with the same `yield_now` that the cooperative kernel's tasks call themselves. It runs on all three architectures, and the display shows each time slice as a band of shading in a worker's bar.
 
 #spec(
   ("Source", [#repo("green-tea-preempt/src/main.rs"), 233 lines]),
@@ -133,23 +133,23 @@ The kernel judges itself. Each busy worker must have run in at least two slices,
 #output(title: "cargo xtask kernel --kernel preempt --target riscv64")[
 ```
 running 4 busy workers that never yield (4400 ms of work, 100 ms slices) and one that sleeps 60 ms between steps
-all tasks finished after 181 switches: 44 preemptions, 61 idle waits
-time slices per worker: [6, 10, 14, 18, 71]
-CPU ms per worker:      [502, 902, 1302, 1715, 59]
-PASS: 44 preemptions; every busy worker ran in several slices, and the sleeper used 59 ms of CPU in 70 wakeups
+all tasks finished after 182 switches: 47 preemptions, 59 idle waits
+time slices per worker: [6, 11, 15, 19, 71]
+CPU ms per worker:      [580, 1014, 1447, 1906, 158]
+PASS: 47 preemptions; every busy worker ran in several slices, and the sleeper used 158 ms of CPU in 70 wakeups
 ```
 ]
 
-The counts add up. The four busy workers took 6, 10, 14 and 18 slices, and all but the last of each ended in a preemption: 5 + 9 + 13 + 17 = 44. The 181 switches are those 48 slices, the sleeper's 71, one for the main task, and 61 idle waits. The sleeper's 71 is one resume per step, and one more to finish.
+The counts add up. The four busy workers took 6, 11, 15 and 19 slices, and all but the last of each ended in a preemption: 5 + 10 + 14 + 18 = 47. The 182 switches are those 51 slices, the sleeper's 71, one for the main task, and 59 idle waits. The sleeper's 71 is one resume per step, and one more to finish.
 
-aarch64 and x86_64 report the same switches, preemptions and idle waits. Only the times differ:
+A worker's work is timed by the clock, so how many slices it needs depends on how fast QEMU ran it, and the counts differ between runs and boards. The verdict doesn't depend on them:
 
 #output(title: "cargo xtask kernel --kernel preempt --target aarch64, then x86_64")[
 ```
-CPU ms per worker:      [502, 902, 1303, 1705, 28]
-PASS: 44 preemptions; every busy worker ran in several slices, and the sleeper used 28 ms of CPU in 70 wakeups
-CPU ms per worker:      [513, 920, 1329, 1739, 44]
-PASS: 44 preemptions; every busy worker ran in several slices, and the sleeper used 44 ms of CPU in 70 wakeups
+CPU ms per worker:      [553, 1026, 1431, 1905, 70]
+PASS: 48 preemptions; every busy worker ran in several slices, and the sleeper used 70 ms of CPU in 70 wakeups
+CPU ms per worker:      [513, 920, 1328, 1737, 43]
+PASS: 44 preemptions; every busy worker ran in several slices, and the sleeper used 43 ms of CPU in 70 wakeups
 ```
 ]
 
@@ -160,6 +160,5 @@ PASS: 44 preemptions; every busy worker ran in several slices, and the sleeper u
 - A task is preempted only while its interrupts are on. One that loops inside `without_interrupts` keeps the CPU for good.
 - The main task is started by `run` with interrupts off, and isn't preemptible. It only spawns the first four workers.
 - With nothing runnable the scheduler spins (`runtime.rs:57` in `green-tea-bare`) instead of waiting for an interrupt.
-- On aarch64, `init_timer` is also what installs the boot CPU's exception vectors, so a fault before line 135 isn't reported (@bare-limits).
 
 A timer, a short handler, and one rule about interrupts. @crate-shell goes back to one task, and gives it a keyboard.

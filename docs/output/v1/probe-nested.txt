@@ -1,4 +1,6 @@
 outer task: before the inner run
 inner task
 outer task: after the inner run
-exit status 139
+outer task: resumed
+main: returned
+exit status 0

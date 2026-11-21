@@ -1,1 +1,1 @@
-description = "Project automation: cargo xtask test runs green-tea-v2 across targets."
+description = "Project automation: runs green-tea-v2 across targets, boots the bare-metal kernels in QEMU, and records heap traces."

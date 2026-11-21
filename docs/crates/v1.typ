@@ -5,10 +5,10 @@
 `green-tea-v1` runs cooperative tasks on one thread, on x86_64 under Linux. A task is a closure with a 32 KiB stack of its own, a function in assembly switches between stacks, and a round-robin loop decides who runs next. All its state is in two global variables, which is the main difference from @crate-v2.
 
 #spec(
-  ("Source", [#repo("green-tea-v1/src/"), 161 lines of Rust without their tests, 32 of assembly, and two demos]),
-  ("Depends on", [`libc`, `tracing`, `tracing-subscriber`, `test-log`]),
+  ("Source", [#repo("green-tea-v1/src/"), 186 lines of Rust without their tests, 32 of assembly, and two demos]),
+  ("Depends on", [`libc`, `tracing`, `tracing-subscriber`; `test-log` for the tests]),
   ("Used by", [nothing; it is kept to compare with `green-tea-v2`]),
-  ("Tests", [3 host tests, the `coop-2-v1` and `coop-n-v1` binaries]),
+  ("Tests", [6 host tests, the `coop-2-v1` and `coop-n-v1` binaries]),
 )
 
 #dtable(columns: (auto, 1fr), ("Item", "What it is"),
@@ -16,19 +16,19 @@
   [`context::swap_context`], [Assembly: saves the current registers into `from`, loads those in `to`, returns on the new stack],
   [`context::Task`], [A stack, a `Context`, the closure, and a public `done` flag],
   [`context::spawn`], [Builds a boxed `Task` whose first switch starts the closure],
-  [`context::yield_now`], [Switches from the current task to the scheduler],
-  [`context::run`], [Runs a set of tasks round-robin until all are done],
+  [`context::yield_now`], [Switches from the current task to the scheduler. Panics outside a task],
+  [`context::run`], [Runs a set of tasks round-robin until all are done. A task may call it],
   [`context::MAIN`], [`static mut`: the scheduler's saved registers],
   [`context::CURRENT`], [`static mut`: a pointer to the running task],
 )
 
-The `stack` module is private. Its `Stack` type has `new` and `top`, and unmaps itself on drop.
+The `stack` module is private. Its `Stack` type has `new`, which panics if the kernel refuses the mapping, and `top`, and unmaps itself on drop.
 
 == `stack`: a mapping with a guard page
 
 A stack is an anonymous mapping with one inaccessible page at its low end. A task that runs off the bottom of its stack faults there instead of overwriting the neighbouring mapping:
 
-#srcfile("green-tea-v1/src/stack.rs", lines: ((11, 11), (14, 14), (17, 26), (28, 37), (39, 41),), notes: ((14, [One page more than requested: the guard.]), (21, [The whole range starts inaccessible.]), (30, [Everything above the guard becomes readable and writable.]), (40, [The address one past the highest byte. Stacks grow down, so this is where a push starts.]),))[```rust
+#srcfile("green-tea-v1/src/stack.rs", lines: ((16, 16), (19, 19), (22, 36), (39, 53), (55, 57),), notes: ((19, [One page more than requested: the guard.]), (26, [The whole range starts inaccessible.]), (33, [`mmap` reports failure with `MAP_FAILED`, which is `(void*)-1` and not null.]), (41, [Everything above the guard becomes readable and writable.]), (47, [`errno` is read before `munmap` can change it.]), (56, [The address one past the highest byte. Stacks grow down, so this is where a push starts.]),))[```rust
 pub(crate) fn new(size: usize) -> Stack {
 // …
     let len = guard + size;
@@ -42,15 +42,25 @@ pub(crate) fn new(size: usize) -> Stack {
             -1,
             0,
         )
-    } as *mut u8;
+    };
+    // mmap signals failure with MAP_FAILED, which is (void*)-1, not null.
+    if base == MAP_FAILED {
+        panic!("mmap of a {len}-byte stack failed: {}", io::Error::last_os_error());
+    }
+    let base = base as *mut u8;
 // …
-    unsafe {
+    let rc = unsafe {
         libc::mprotect(
             base.add(guard) as *mut libc::c_void,
             size,
             PROT_READ | PROT_WRITE,
         )
     };
+    if rc != 0 {
+        let err = io::Error::last_os_error(); // before munmap can overwrite errno
+        unsafe { libc::munmap(base as *mut libc::c_void, len) };
+        panic!("mprotect of a {size}-byte stack failed: {err}");
+    }
 
     Stack { base, len }
 }
@@ -60,11 +70,11 @@ pub(crate) fn top(&self) -> *const u8 {
 }
 ```]
 
-Neither `mmap` nor `mprotect` has its result checked. @crate-v2 checks both.
+Both system calls are checked, and a failure panics with the error from the OS. The test `a_failed_mapping_panics` asks for $2^60$ bytes, more than any x86_64 address space holds.
 
 == `context`: priming and switching
 
-`Context` is `repr(C)` because the assembly addresses its fields by offset, from `0x00` for `rsp` to `0x30` for `rbp`. `swap_context` stores the current registers through its first argument, loads new ones through its second, and executes `ret`. The file `context.s` is the same as `green-tea-arch/src/x86_64.s` but for the words of one comment, and @crate-arch walks it register by register.
+`Context` is `repr(C)` because the assembly addresses its fields by offset, from `0x00` for `rsp` to `0x30` for `rbp`. `swap_context` stores the current registers through its first argument, loads new ones through its second, and executes `ret`. The file `context.s` is `green-tea-arch/src/x86_64.s` without the floating-point control state, and @crate-arch walks that file register by register.
 
 A task that has never run has no saved registers, so `spawn` writes the ones its first switch will load:
 
@@ -127,18 +137,20 @@ extern "C" fn task_entry(task: *mut Task) -> ! {
 
 == The scheduler
 
-`yield_now` is one call, and always goes to `MAIN`:
+`yield_now` checks that a task is running, and always goes to `MAIN`:
 
-#srcfile("green-tea-v1/src/context.rs", lines: ((81, 83),))[```rust
+#srcfile("green-tea-v1/src/context.rs", lines: ((85, 88),))[```rust
 pub fn yield_now() {
+    assert!(unsafe { !CURRENT.is_null() }, "yield_now called outside a task");
     unsafe { swap_context(&raw mut (*CURRENT).context, &raw const MAIN) };
 }
 ```]
 
-`run` holds the tasks in a `VecDeque`. It takes the one at the front, records it in `CURRENT`, and switches to it. Control comes back when the task yields or finishes. A finished task is dropped, which unmaps its stack; that is safe here because the code is on the thread's own stack by then.
+`run` holds the tasks in a `VecDeque`. It takes the one at the front, records it in `CURRENT`, and switches to it. Control comes back when the task yields or finishes. A finished task is dropped, which unmaps its stack; that is safe here because the code is on the thread's own stack by then. On entry `run` keeps the `MAIN` and `CURRENT` it found, and on the way out it puts them back, so a task can call `run` and yield afterwards.
 
-#srcfile("green-tea-v1/src/context.rs", lines: ((87, 101),), notes: ((94, [The scheduler's registers go into `MAIN`, where `yield_now` and `task_entry` find them.]),))[```rust
+#srcfile("green-tea-v1/src/context.rs", lines: ((94, 110),), notes: ((95, [What an enclosing `run` needs back, kept on this stack.]), (102, [The scheduler's registers go into `MAIN`, where `yield_now` and `task_entry` find them.]), (103, [Back in the scheduler, which is the outer task, or no task at all.]), (109, [The outer scheduler's registers, for the outer task's next `yield_now`.]),))[```rust
 pub fn run(tasks: impl IntoIterator<Item = Box<Task>>) {
+    let (outer_main, outer_current) = unsafe { ((&raw const MAIN).read(), CURRENT) };
     let mut queue: VecDeque<Box<Task>> = tasks
         .into_iter()
         .collect();
@@ -146,14 +158,28 @@ pub fn run(tasks: impl IntoIterator<Item = Box<Task>>) {
         unsafe {
             CURRENT = &raw mut *task;
             swap_context(&raw mut MAIN, &raw const task.context);
-            CURRENT = core::ptr::null_mut();
+            CURRENT = outer_current;
         }
         if !task.done {
             queue.push_back(task);
         }
     }
+    unsafe { (&raw mut MAIN).write(outer_main) };
 }
 ```]
+
+A small program outside the crate has a task call `run` and then yield:
+
+#output(title: "a task that calls run, then yields")[
+```
+outer task: before the inner run
+inner task
+outer task: after the inner run
+outer task: resumed
+main: returned
+exit status 0
+```
+]
 
 == Demos and tests
 
@@ -172,33 +198,20 @@ main: all tasks finished
 
 The counter task runs a fourth time to leave its loop, after `words` has finished. Each task's `println!` runs on its own 32 KiB stack.
 
-The three tests cover the stack and the switch. `test_stack_creation` maps a stack. `test_swap_context` primes a task by hand and checks that its closure ran. `test_multiple_yields` enters a worker with its own pair of contexts and checks that it logged 1, 2, 3 and 100, in that order, across four switches back.
+The six tests cover the stack, the switch and the scheduler. `test_stack_creation` maps a stack, and `a_failed_mapping_panics` is the failure above. `test_swap_context` primes a task by hand and checks that its closure ran. `test_multiple_yields` enters a worker with its own pair of contexts and checks that it logged 1, 2, 3 and 100, in that order, across four switches back. `yield_outside_a_task_panics` is the check in `yield_now`. `a_nested_run_leaves_the_outer_task_able_to_yield` runs in a child process of its own, because `MAIN` and `CURRENT` are process-wide and the harness runs tests on several threads.
 
 #output(title: "cargo test -p green-tea-v1 -- --test-threads=1")[
 ```
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 ]
 
 == Limits
 
-- It builds only for x86_64: `lib.rs` includes `context.s` with no `cfg`, and the assembler rejects it on other targets. The comment in `stack.rs` about 16 KiB pages on Apple Silicon comes from a platform this crate can't target natively.
-- A failed `mmap` or `mprotect` goes unnoticed, and the next write to the stack faults at a meaningless address.
+- It builds only for x86_64: `lib.rs` includes `context.s` with no `cfg`, and the assembler rejects it on other targets.
 - `MAIN` and `CURRENT` are `static mut`, so two threads can't run tasks at the same time.
-- `yield_now` outside a task dereferences a null `CURRENT`. A task that calls `run` overwrites `MAIN`, and the inner `run` leaves `CURRENT` null when it returns, so the task's next `yield_now` dereferences the null too. Both end in a segmentation fault (139 is 128 + `SIGSEGV`), recorded from a small program outside the crate:
-
-#output(title: "a task that calls run, then yields")[
-```
-outer task: before the inner run
-inner task
-outer task: after the inner run
-exit status 139
-```
-]
-
+- A panic in a task aborts the process, with exit status 134: `bootstrap_entry` has no unwind information, so the search for a handler reaches the end of the stack. @crate-v2 carries the panic back to the resumer.
 - A task can't spawn another: `spawn` returns a `Box<Task>`, and the queue is a local of `run`.
 - A task dropped before it finishes doesn't run the destructors of the locals on its stack.
-- `test-log` is a normal dependency in `Cargo.toml`, though only the tests use it.
-- The comment on `ret` in `context.s` says the return address "was put there by `call`". On a task's first switch `spawn` put it there.
 
 Fifteen instructions and a queue. @crate-arch takes the switch to three architectures.

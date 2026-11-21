@@ -2,13 +2,13 @@
 
 = green-tea-fw-cfg <crate-fw-cfg>
 
-`green-tea-fw-cfg` drives QEMU's firmware configuration device, fw_cfg: a list of numbered items, some fixed and some named files like `etc/ramfb`. A driver selects an item and reads its bytes from a data register, or writes to it with a DMA request. Every kernel uses it at boot to find the display, and `green-tea-coop` to learn which test to run.
+`green-tea-fw-cfg` drives QEMU's firmware configuration device, fw_cfg: a list of numbered items, some fixed and some named files like `etc/ramfb`. A driver selects an item and reads its bytes from a data register, or writes to it with a DMA request. Every kernel on QEMU's boards uses it at boot to find the display, and to learn which test to run. The `pc` board has no fw_cfg.
 
 #spec(
-  ("Source", [#repo("drivers/fw-cfg/src/lib.rs"), 202 lines]),
+  ("Source", [#repo("drivers/fw-cfg/src/lib.rs"), 245 lines]),
   ("Depends on", [`green-tea-io`]),
   ("Used by", [`green-tea-ramfb`, `green-tea-bare`]),
-  ("Tests", [no host tests; every kernel boots through it, on all three architectures]),
+  ("Tests", [2 host tests, against a fake port; every kernel on QEMU's boards boots through it, on all three architectures]),
 )
 
 #dtable(columns: (auto, 1fr), ("Item", "What it is"),
@@ -31,11 +31,11 @@ The protocol is the same on every machine, and the registers differ in where the
 )
 
 
-`IoPorts::select` is the odd one out: it writes the key with `outw` unswapped, as the port selector is little-endian. The `x86_64` board also uses `IoPorts` directly, in `start_cpu`, to read item 5, the number of CPUs QEMU was started with.
+`IoPorts::select` is the odd one out: it writes the key with `outw` unswapped, as the port selector is little-endian. The `q35` board also uses `IoPorts` directly: `start_cpu` reads item 5, the number of CPUs QEMU was started with, and `ram_end` reads item 3, the size of RAM.
 
 == Probing
 
-`probe` selects item 0 and compares its four bytes with `QEMU`, then selects item 1, the feature bitmap, and requires bit 1 (`ID_DMA`). The bitmap is one of the few little-endian items. Each failure returns a message, and `green-tea-bare`'s `boot` panics with it, since a kernel can't turn on its display without DMA.
+`probe` selects item 0 and compares its four bytes with `QEMU`, then selects item 1, the feature bitmap, and requires bit 1 (`ID_DMA`). The bitmap is one of the few little-endian items. Each failure returns a message, and `green-tea-bare`'s `boot` panics with it, since a kernel on these boards can't turn on its display without DMA.
 
 == The file directory
 
@@ -60,11 +60,12 @@ Writing an item needs the DMA interface. The request is a 16-byte structure in g
   ("key", "bits 31–16", 8), ("unused", "bits 15–5", 4), ("WRITE", "bit 4", 2), ("SELECT", "bit 3", 2), ("unused", "bits 2–1", 2), ("ERROR", "bit 0", 2),
 )
 
-#srcfile("drivers/fw-cfg/src/lib.rs", lines: ((133, 153),), notes: ((139, [The request is on this function's stack. Memory is mapped one to one, so its address is also the physical address QEMU needs.]), (140, [The request and the data have to be in memory before the register write that starts the transfer.]), (145, [Volatile, because QEMU writes this field and nothing in the program does.]),))[```rust
+#srcfile("drivers/fw-cfg/src/lib.rs", lines: ((133, 154),), notes: ((140, [The request is on this function's stack. Memory is mapped one to one, so its address is also the physical address QEMU needs.]), (141, [The request and the data have to be in memory before the register write that starts the transfer.]), (134, [A length that doesn't fit the request's 32 bits is refused before the device hears of it.]), (146, [Volatile, because QEMU writes this field and nothing in the program does.]),))[```rust
 pub fn dma_write(&self, key: u16, data: &[u8]) -> Result<(), &'static str> {
+    let length = u32::try_from(data.len()).map_err(|_| "fw_cfg DMA write of 4 GiB or more")?;
     let mut access = DmaAccess {
         control: ((u32::from(key) << 16) | DMA_SELECT | DMA_WRITE).to_be(),
-        length: (data.len() as u32).to_be(),
+        length: length.to_be(),
         address: (data.as_ptr() as u64).to_be(),
     };
     let address = &raw mut access as u64;
@@ -88,7 +89,7 @@ QEMU reads the request, does the write, and clears `control`, leaving only the e
 
 == Exercised by
 
-`boot` calls `probe`, prints the directory with `for_each_file`, and `green-tea-ramfb` finds `etc/ramfb` with `find_file` and writes it with `dma_write`. `green-tea-coop` then calls `read_file` on `opt/green-tea/test`, a file `cargo xtask kernel` creates with `-fw_cfg`. Its size is the length of the test name: 4 bytes, for `disk`.
+On QEMU's boards, `boot` reaches the `Qemu` trait's `ramfb_display`, which calls `probe`, prints the directory with `for_each_file`, and has `green-tea-ramfb` find `etc/ramfb` with `find_file` and write it with `dma_write`. `green-tea-coop` then asks the board for the test name, and `fw_cfg_test_name` calls `read_file` on `opt/green-tea/test`, a file `cargo xtask kernel` creates with `-fw_cfg`. Its size is the length of the test name: 4 bytes, for `disk`. Two host tests drive `dma_write` against a fake port: one write reaches the device, and a 4 GiB slice is refused without starting a transfer.
 
 #output(title: "cargo xtask kernel --kernel disk --target riscv64 --headless")[
 ```
@@ -112,8 +113,8 @@ The selectors depend on the machine: `etc/ramfb` is `0x0026` on `x86_64`, where 
 == Limits
 
 - Only DMA *writes*. Reads go through the data register one byte at a time.
-- `dma_write` spins with no timeout, and casts the length to `u32` without a check (line 136), so a slice of 4 GiB or more is silently cut.
+- `dma_write` spins with no timeout.
 - `read_file` truncates to the buffer without saying so: a result equal to `buf.len()` doesn't tell a complete read from a cut one.
 - Every lookup rereads the directory from the start.
 
-A numbered list with a DMA door. @crate-ramfb goes through that door once.
+A numbered list with a DMA door. @crate-ramfb goes through that door once, and @crate-framebuffer draws on what it sets up.

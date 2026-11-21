@@ -11,6 +11,8 @@
                	stp	d10, d11, [x0, #0x78]
                	stp	d12, d13, [x0, #0x88]
                	stp	d14, d15, [x0, #0x98]
+               	mrs	x2, FPCR
+               	str	x2, [x0, #0xa8]
                	ldr	x2, [x1]
                	mov	sp, x2
                	ldp	x19, x20, [x1, #0x8]
@@ -23,6 +25,8 @@
                	ldp	d10, d11, [x1, #0x78]
                	ldp	d12, d13, [x1, #0x88]
                	ldp	d14, d15, [x1, #0x98]
+               	ldr	x2, [x1, #0xa8]
+               	msr	FPCR, x2
                	ret
 <bootstrap_entry>:
                	mov	x0, x19

@@ -21,4 +21,4 @@ fw_cfg files:
   0x0032  28672 vgaroms/vgabios-ramfb.bin
 ramfb: 640x480 XRGB8888
 overflowing a 16 KiB task stack
-PASS: overflowed after 26 frames, into the task's guard page at 0x805ff8
+PASS: overflowed after 26 frames, into the task's guard page at 0xa05ff8

@@ -1,0 +1,19 @@
+[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01HBdsDxe: loading Boot0001 "UEFI Misc Device" from PciRoot(0x0)/Pci(0x3,0x0)
+BdsDxe: starting Boot0001 "UEFI Misc Device" from PciRoot(0x0)/Pci(0x3,0x0)
+usb: keyboard on port 5
+green-tea-shell on x86_64 (pc)
+framebuffer: 1280x800 XRGB8888
+type `help` for the commands
+> 
+> echo hello from the serial port
+hello from the serial port
+> test
+1000 commands from the heap:  8000 heap allocations, heap +0 bytes afterwards
+1000 commands from the arena: 0 heap allocations; arena peak 368 bytes, 0 in use
+`repeat` runs one command at a time, and can't run `repeat`
+recording the heap's allocations and frees, up to 65536 of them
+recording the heap's allocations and frees, up to 65536 of them
+`regions` runs with no variables: `unset` the ones in `vars` first
+`regions` needs the recorder: a recording is under way, `trace off` first
+PASS: 1000 commands made 8000 heap allocations and freed them all, or none from an arena that peaked at 368
+> 

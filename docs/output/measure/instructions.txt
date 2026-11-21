@@ -1,18 +1,18 @@
-shell: 20483 events, 10316 allocations of 656120 bytes in all, 14902 bytes live at the peak; checksum f137558e1fe4dcb2
-instructions in the replay loop, counted by callgrind; with no allocator the loop is 441116, 21.54 for each event
+shell: 20483 events, 10316 allocations of 656120 bytes in all, 14902 bytes live at the peak; checksum d48aa9507ec3677c
+instructions in the replay loop, counted by callgrind; with no allocator the loop is 441114, 21.54 for each event
   allocator    instructions  less the loop's  per event
-  bump               637121           196005       9.57
-  first-lifo        2603858          2162742     105.59
-  first-addr        3217974          2776858     135.57
-  next-lifo         2553851          2112735     103.15
-  next-addr         5893880          5452764     266.21
-  best-lifo         3332471          2891355     141.16
-  best-addr         3700204          3259088     159.11
-  buddy             2350726          1909610      93.23
-  tlsf              3111389          2670273     130.37
-  hardened         32437852         31996736    1562.11
-  pools             1456048          1014932      49.55
-  slabs             4180005          3738889     182.54
-  caches            1558617          1117501      54.56
-  shards            2162441          1721325      84.04
-PASS: the loop with no allocator was counted twice, and was 441116 instructions both times
+  bump               637118           196004       9.57
+  first-lifo        2603777          2162663     105.58
+  first-addr        3217893          2776779     135.57
+  next-lifo         2553770          2112656     103.14
+  next-addr         5893799          5452685     266.21
+  best-lifo         3332390          2891276     141.15
+  best-addr         3700123          3259009     159.11
+  buddy             2350520          1909406      93.22
+  tlsf              3107355          2666241     130.17
+  hardened         32437644         31996530    1562.10
+  pools             1451000          1009886      49.30
+  slabs             4153300          3712186     181.23
+  caches            1554117          1113003      54.34
+  shards            2152948          1711834      83.57
+PASS: the loop with no allocator was counted twice, and was 441114 instructions both times

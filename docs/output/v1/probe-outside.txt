@@ -1,2 +1,6 @@
 calling yield_now outside a task
-exit status 139
+
+thread 'main' (1672619) panicked at <work>/src/green-tea-v1/src/context.rs:86:5:
+yield_now called outside a task
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+exit status 101

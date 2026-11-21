@@ -27,8 +27,8 @@ echo --- the slot rsp points to\n
 x/a *(unsigned long *)$rsi
 echo --- r14\n
 x/a $rsi+0x10
-stepi 15
-echo --- after 15 instructions\n
+stepi 19
+echo --- after 19 instructions\n
 x/i $pc
 printf "rsp mod 16 = %d\n", (unsigned long)$rsp & 15
 stepi 3
@@ -63,8 +63,8 @@ echo --- x30, at offset 96\n
 x/a $x1+96
 echo --- x21, at offset 24\n
 x/a $x1+24
-stepi 25
-echo --- after 25 instructions\n
+stepi 29
+echo --- after 29 instructions\n
 x/i $pc
 printf "sp mod 16 = %d\n", (unsigned long)$sp & 15
 stepi 2
@@ -87,8 +87,8 @@ echo --- ra, at offset 8\n
 x/a $a1+8
 echo --- s2, at offset 32\n
 x/a $a1+32
-stepi 53
-echo --- after 53 instructions\n
+stepi 57
+echo --- after 57 instructions\n
 x/i $pc
 printf "sp mod 16 = %d\n", (unsigned long)$sp & 15
 stepi 2

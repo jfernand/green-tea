@@ -23,15 +23,16 @@ ramfb: 640x480 XRGB8888
 4 CPUs are running: the one that booted, and 3 it started
 each CPU adds 1 to a counter 1000000 times:
   with a lock: the counter is 4000000, and the lock was taken 4000000 times
-  this run: without a lock the counter is 1838200; with one, 2495212 acquisitions waited
+  this run: without a lock the counter is 1302133; with one, 1039922 acquisitions waited
 each CPU makes 20000 allocations and frees, of 1 to 512 bytes, holding up to 96:
   the kernel's heap, behind its lock:  80128 operations, and the lock was taken 80128 times
-  this run: 59344 of those waited for another CPU; 250 ms
+  this run: 56825 of those waited for another CPU; 433 ms
   a cache for each CPU:                80128 operations, and the lock was taken 2680 times
     1373 times to fill a cache with 8 blocks, and 1307 times to take 8 back
     when the work ended the CPUs held no blocks, and their caches held 528, of 105984 bytes in all
-  this run: 798 of those waited for another CPU; 151 ms
+  this run: 666 of those waited for another CPU; 270 ms
   the same, with a depot of 4 batches:  80128 operations, and the lock was taken 2680 times
-  this run: 158 of those waited; 137 ms; the depot served 1181 of the 1373 fills, and the heap made 2440 allocations and frees
+  this run: 153 of those waited; 234 ms; the depot served 1201 of the 1373 fills, and the heap made 2120 allocations and frees
+each CPU took 20000 page faults, all at once, and came back from each with its own registers
 PASS: 4 CPUs made 80128 allocations and frees each way: the heap's lock was taken 80128 times, and the lock behind a cache per CPU 2680 times
 halting

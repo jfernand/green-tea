@@ -38,7 +38,7 @@ pub fn enable(&self) {
 }
 ```]
 
-`putc` spins on `FR_TXFF`, bit 5 of `FR`, and `getc` tests `FR_RXFE`, bit 4. The `aarch64` board calls `enable` in its `init`, before the first `println!`. `getc` reads the data register as 32 bits and casts it to `u8`.
+QEMU resets `CR` to `0x300`, with TXE and RXE set and UARTEN clear, and sends bytes regardless. The hardware needs all three, so `enable` sets them. `putc` spins on `FR_TXFF`, bit 5 of `FR`, and `getc` tests `FR_RXFE`, bit 4. The `aarch64` board calls `enable` in its `init`, before the first `println!`. `getc` reads the data register as 32 bits and casts it to `u8`.
 
 == Exercised by
 
@@ -59,6 +59,5 @@ hello from the serial port
 - `enable` sets no baud rate or line format, and changes `CR` with the UART running.
 - `getc`'s cast discards the data register's error flags, in bits 8 to 11.
 - No interrupts, and `putc` can spin forever.
-- The comment on `enable` (lines 21 and 22) says QEMU's UART starts turned on. QEMU 8.2.2 resets `CR` to `0x300`: TXE and RXE set, UARTEN clear. The kernel's `enable` sets UARTEN at boot (`aarch64.rs:89`), and QEMU 8.2.2 doesn't check the bit either.
 
 Three registers and a console. @crate-fw-cfg is the first device here that does DMA.

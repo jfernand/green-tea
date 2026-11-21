@@ -2,6 +2,7 @@ error: unknown kernel nosuch; known: coop, preempt, overflow, disk, memmap, pool
 
 usage: cargo xtask kernel [--kernel <name>]... [--target riscv64|aarch64|x86_64]...
                           [--release] [--headless] [--screenshot] [--jobs <n>]
+                          [--board qemu|pc]
 
 Builds the bare-metal kernels and boots each in QEMU on every architecture it supports,
 one window apiece, all at once. Close the windows to finish. The kernels' serial output
@@ -92,4 +93,8 @@ counts as four.
   --target      only these architectures (default: all three)
   --release     build with optimizations
   --headless    no windows: quit each QEMU as soon as its kernel finishes
+  --jobs <n>    at most this many virtual CPUs at once
   --screenshot  save the final screen to target/kernel/<kernel>-<arch>.png
+  --board pc    build for a physical x86_64 PC instead of QEMU's machine, and test it in
+                QEMU with UEFI firmware. Copy target/kernel/pc/<kernel>-x86_64/EFI to a
+                FAT USB stick to boot it. No virtio, so no disk kernel

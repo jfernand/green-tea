@@ -2,20 +2,20 @@
 
 = green-tea-bare <crate-bare>
 
-`green-tea-bare` is what every kernel in the workspace stands on. It boots three QEMU boards (`virt` on riscv64 and aarch64, `q35` on x86_64), hides each behind one trait, and provides a heap, page frames, task stacks, a console, a screen, cooperative tasks, a round-robin scheduler, and a way to start the other CPUs. A kernel is a `#![no_std] #![no_main]` binary that defines `kmain` and calls in.
+`green-tea-bare` is what every kernel in the workspace stands on. It boots four boards, three of them QEMU machines (`virt` on riscv64 and aarch64, `q35` on x86_64) and the fourth a PC booted by GRUB (`pc`, on x86_64, chosen at build time), hides each behind one trait, and provides a heap, page frames, task stacks, a console, a screen, cooperative tasks, a round-robin scheduler, and a way to start the other CPUs. A kernel is a `#![no_std] #![no_main]` binary that defines `kmain` and calls in.
 
 #spec(
-  ("Source", [#repo("green-tea-bare/src/"), 17 files, 3,506 lines; #repo("green-tea-bare/linker.ld"), #repo("green-tea-bare/build.rs")]),
-  ("Depends on", [`green-tea-arch`, `-pool`, `-fit`, `-kmem`, `-smp`, and the drivers `io`, `fw-cfg`, `ramfb`, `pci`, `virtio`, `virtio-blk`, with `ns16550` (riscv64, x86_64) or `pl011` (aarch64)]),
+  ("Source", [#repo("green-tea-bare/src/"), 20 files, 4,226 lines; #repo("green-tea-bare/linker.ld"), #repo("green-tea-bare/build.rs")]),
+  ("Depends on", [`green-tea-arch`, `-pool`, `-fit`, `-kmem`, `-smp`, and the drivers `io`, `fw-cfg`, `framebuffer`, `ramfb`, `pci`, `virtio`, `virtio-blk`, with `ns16550` (riscv64, x86_64) or `pl011` (aarch64), and on x86_64 `acpi`, `i8042`, `multiboot2` and `xhci`]),
   ("Used by", [`green-tea-coop`, `green-tea-preempt`, `green-tea-shell`]),
   ("Tests", [none of its own (`test = false`): it builds only for the three bare-metal targets. The kernels of @crate-coop, @crate-preempt and @crate-shell exercise it]),
 )
 
 #dtable(columns: (auto, 1fr), ("Module", "What it holds"),
-  [crate root], [`boot`, `delay_ms`, the panic handler, and re-exports: `Board`, `Platform`, `TimerInterrupt`, `Global`, `fit`, `fw_cfg`, `pci`, `pool`, `ramfb`, `smp`, `virtio`, `virtio_blk`],
-  [`platform`], [the two traits; `aarch64`, `riscv64` and `x86_64`, one per board],
+  [crate root], [`boot`, `delay_ms`, the panic handler, and re-exports: `Board`, `Platform`, `TimerInterrupt`, `VirtioBus`, `Qemu` (not on `pc`), `Framebuffer`, `Global`, `fit`, `fw_cfg`, `pci`, `pool`, `ramfb`, `smp`, `virtio`, `virtio_blk`],
+  [`platform`], [the traits `Platform`, `VirtioBus` and `TimerInterrupt`; `qemu`, with the trait `Qemu`; `aarch64`, `riscv64`, and `x86_64` with its boards `q35` and `pc`],
   [`memory`], [`Section`, `sections`, `section_of`, `kernel`],
-  [`heap`], [the global allocator, `NAME`, `align_up`, `Recording`, `record`, `stop_recording`, `with`, `used`, `capacity`, `lock_counts`],
+  [`heap`], [the global allocator, `NAME`, `align_up`, `Recording`, `record`, `stop_recording`, `is_recording`, `with`, `used`, `capacity`, `lock_counts`],
   [`pages`], [demand paging: `PAGE`, `Stats`, `Step`, `PointsTo`, `walk`, `heap_range`, `stats`, `fault`, `map_all`, `is_mapped`, `mapped_in`, `for_each_run`, `release`, `trim`],
   [`kmem`], [page frames and slab caches: `REGION`, `PAGES`, `TABLE_PAGES`, `region`, `with_frames`, `KernelCache`],
   [`stack`], [the stack pool: `PAGE`, `STACK_SIZE`, `SLOT`, `REGION`, `SLOTS`, `Stack`, `region_start`, `free_slots`, `guard_pages`, `guard_slot`, `on_overflow`, `overflowed`],
@@ -29,26 +29,16 @@
 
 == Boot
 
-`boot` is the first call of every `kmain`. It initialises the board, prints the banner that `cargo xtask kernel` waits for, lists QEMU's `fw_cfg` files, and turns on the display:
+`boot` is the first call of every `kmain`. It initialises the board, prints the banner that `cargo xtask kernel` waits for, and asks the board for its display:
 
-#srcfile("green-tea-bare/src/lib.rs", lines: ((62, 79),), notes: ((63, [Per board: paging on riscv64 and x86_64, the UART on aarch64.]), (68, [Every kernel panics here on a machine without QEMU's fw_cfg device, and at line 75 without `-device ramfb`.]),))[```rust
+#srcfile("green-tea-bare/src/lib.rs", lines: ((65, 72),), notes: ((66, [Per board: paging on riscv64 and x86_64, the UART and the exception vectors on aarch64.]), (68, [On QEMU's boards, `ramfb` through `fw_cfg`. On `pc`, the framebuffer GRUB set up. A board with no display it can use panics on the next line but one.]),))[```rust
 pub fn boot(kernel: &str) -> Framebuffer {
     Board::init();
     println!("{kernel} on {}", Board::NAME);
-
-    let fw_cfg = Board::fw_cfg();
-    if let Err(e) = fw_cfg.probe() {
-        panic!("{e}");
-    }
-    println!("fw_cfg files:");
-    fw_cfg.for_each_file(|f| println!("  {:#06x} {:6} {}", f.select, f.size, f.name()));
-
-    let fb = match Framebuffer::init(&fw_cfg) {
+    match Board::display() {
         Ok(fb) => fb,
         Err(e) => panic!("{e}"),
-    };
-    println!("ramfb: {WIDTH}x{HEIGHT} XRGB8888");
-    fb
+    }
 }
 ```]
 
@@ -119,9 +109,9 @@ _start:
 
 === x86_64
 
-QEMU boots the ELF through *PVH*: it finds a 32-bit entry point in a Xen ELF note and jumps there in protected mode with paging off. The note is six words of assembly:
+QEMU boots the ELF through *PVH*: it finds a 32-bit entry point in a Xen ELF note and jumps there in protected mode with paging off. That is how `q35` boots; the `pc` board enters the same `_start` from GRUB (@bare-pc). The note is six words of assembly:
 
-#srcfile("green-tea-bare/src/platform/x86_64.rs", lines: ((45, 53),))[```rust
+#srcfile("green-tea-bare/src/platform/x86_64/q35.rs", lines: ((21, 29),))[```rust
 .section .note.Xen, "a", @note
 .balign 4
 .long 4
@@ -133,9 +123,9 @@ QEMU boots the ELF through *PVH*: it finds a 32-bit entry point in a Xen ELF not
 .balign 4
 ```]
 
-`_start` then does what a bootloader would. It zeroes `.bss`, builds an identity map of the first 4 GiB out of 2,048 pages of 2 MiB, and enters long mode:
+`_start`, in #repo("green-tea-bare/src/platform/x86_64/mod.rs"), is shared by both boards. It keeps what a Multiboot2 loader left in `eax` and `ebx`, then does what a bootloader would. It zeroes `.bss`, builds an identity map of the first 4 GiB out of 2,048 pages of 2 MiB, and enters long mode:
 
-#srcfile("green-tea-bare/src/platform/x86_64.rs", lines: ((84, 117),), notes: ((84, [`0x83`: present, writable, page size. No cache-disable bit, on device memory either.]), (102, [With `EFER.LME` set, turning paging on is what enters long mode.]), (105, [The far jump reloads `CS` with a 64-bit code segment.]),))[```rust
+#srcfile("green-tea-bare/src/platform/x86_64/mod.rs", lines: ((84, 117),), notes: ((84, [`0x83`: present, writable, page size. No cache-disable bit, on device memory either.]), (102, [With `EFER.LME` set, turning paging on is what enters long mode.]), (105, [The far jump reloads `CS` with a 64-bit code segment.]),))[```rust
     mov $0x83, %eax
     xor %ecx, %ecx
 2:  mov %eax, boot_pds(,%ecx,8)
@@ -176,12 +166,14 @@ The x86_64 target is soft-float, so neither `swap_context` nor the interrupt ent
 
 == The linker script and the memory map
 
-One script, #repo("green-tea-bare/linker.ld"), lays out every kernel. `build.rs` fills in its one variable, the load address, and hands the result to the kernels through Cargo's `links` metadata, since a library's build script can't add linker arguments to the binaries that depend on it. Each kernel's own `build.rs` passes `-T` with the path from `DEP_GREEN_TEA_BARE_LINKER_SCRIPT`.
+One script, #repo("green-tea-bare/linker.ld"), lays out every kernel. `build.rs` fills in its one variable, the load address, which on x86_64 depends on the board, and hands the result to the kernels through Cargo's `links` metadata, since a library's build script can't add linker arguments to the binaries that depend on it. Each kernel's own `build.rs` passes `-T` with the path from `DEP_GREEN_TEA_BARE_LINKER_SCRIPT`. The same script checks `GREEN_TEA_MAX_CPUS` (@bare-smp).
 
-#srcfile("green-tea-bare/build.rs", lines: ((16, 21),))[```rust
+#srcfile("green-tea-bare/build.rs", lines: ((24, 31),))[```rust
 let base = match arch.as_str() {
     "riscv64" => "0x80200000", // where OpenSBI jumps, 2 MiB into RAM
     "aarch64" => "0x40200000", // 2 MiB into RAM, leaving QEMU room for the device tree
+    // UEFI firmware keeps data of its own a few MiB up, where the kernel would overlap it.
+    "x86_64" if pc => "0x2000000", // 32 MiB
     "x86_64" => "0x100000",    // 1 MiB, above the legacy BIOS area
     other => panic!("green-tea-bare has no platform for {other}"),
 };
@@ -189,7 +181,7 @@ let base = match arch.as_str() {
 
 After `.text`, `.rodata`, `.data` and `.bss` come three reserved regions:
 
-#srcfile("green-tea-bare/linker.ld", lines: ((50, 70),))[```text
+#srcfile("green-tea-bare/linker.ld", lines: ((55, 75),))[```text
 .stack (NOLOAD) : ALIGN(4096) {
     __stack_bottom = .;
     . += 64K;
@@ -238,34 +230,34 @@ The `memmap` kernel prints the result and checks it from inside. On riscv64:
 ```
 kernel: 0x80200000..0x80c00000, 10240 KiB
   section      start        end      bytes    align
-  .text    0x80200000 0x802ec4ce    967886        2
-  .rodata  0x802ec4d0 0x80317b53    177795       16
-  .data    0x80318c30 0x80318d30       256       16
-  .bss     0x80319000 0x80454000   1290240       16
-  .stack   0x80454000 0x80464000     65536     4096
-  .heap    0x80464000 0x80864000   4194304     4096
-  (gap)                            1687552
+  .text    0x80200000 0x802eefbc    978876        2
+  .rodata  0x802eefc0 0x8031ac6b    179371       16
+  .data    0x8031bd70 0x8031be70       256       16
+  .bss     0x8031c000 0x80472000   1400832       16
+  .stack   0x80472000 0x80482000     65536     4096
+  .heap    0x80482000 0x80882000   4194304     4096
+  (gap)                            1564672
   .stacks  0x80a00000 0x80c00000   2097152  2097152
 PASS: 7 sections in order and aligned; 8 addresses where they should be
 ```
 ]
 
-The 1,687,552-byte gap is the alignment of `.stacks` to 2 MiB. The load addresses differ by board, and so do the sizes:
+The 1,564,672-byte gap is the alignment of `.stacks` to 2 MiB. The load addresses differ by board, and so do the sizes:
 
 #output(title: "cargo xtask kernel --kernel memmap --target aarch64, then x86_64")[
 ```
 kernel: 0x40200000..0x40c00000, 10240 KiB
-  .heap    0x404cf000 0x408cf000   4194304     4096
+  .heap    0x404d4000 0x408d4000   4194304     4096
   .stacks  0x40a00000 0x40c00000   2097152  2097152
-kernel: 0x100000..0xa00000, 9216 KiB
-  .heap    0x003f6000 0x007f6000   4194304     4096
-  .stacks  0x00800000 0x00a00000   2097152  2097152
+kernel: 0x100000..0xc00000, 11264 KiB
+  .heap    0x00419000 0x00819000   4194304     4096
+  .stacks  0x00a00000 0x00c00000   2097152  2097152
 ```
 ]
 
 == The `Platform` trait
 
-Each build targets one machine, so nothing here is dynamic. `Board` is a type alias chosen by `cfg`: `RiscvVirt`, `AarchVirt` or `Q35`. What the trait buys is a checked contract: a kernel that needs timer interrupts says `B: TimerInterrupt`, and a board without them would fail to compile with that message.
+Each build targets one machine, so nothing here is dynamic. `Board` is a type alias chosen by `cfg`: `RiscvVirt`, `AarchVirt`, or on x86_64 `Q35`, unless the `board-pc` feature picks `Pc`. What the trait buys is a checked contract: a kernel that needs timer interrupts says `B: TimerInterrupt`, and a board without them would fail to compile with that message.
 
 #dtable(columns: (auto, 1fr), ("Item", "What a board provides"),
   [`NAME`], [the architecture, for the banner],
@@ -277,13 +269,16 @@ Each build targets one machine, so nothing here is dynamic. `Board` is a type al
   [`ticks`, `ticks_per_ms`], [a free-running counter],
   [`halt`], [stop for good],
   [`cpu`, `start_cpu`], [this CPU's number, and starting another (defaults: CPU 0, and an error)],
-  [`FwCfg`, `FW_CFG`, `fw_cfg`], [how to reach QEMU's fw_cfg],
-  [`for_each_virtio`, `find_virtio`], [the virtio devices on the board],
+  [`display`], [turn on the screen and return its `Framebuffer`, or an error],
+  [`test_name`], [the test this boot should run; none means the kernel's demo],
+  [`ram_end`], [the end of RAM, on a board where an access past it would go unnoticed (default `None`)],
 )
 
-The three implementations, side by side:
+`Platform` doesn't mention QEMU. What only some boards have is in two traits of its own, so that code needing them says so in its bounds. `VirtioBus`, with `for_each_virtio` and `find_virtio`, is implemented by the three QEMU boards, and the `disk` kernel requires it. `Qemu`, in the module `qemu`, is how those boards reach the device QEMU passes files through. It has an associated type `FwCfg`, a constant `FW_CFG` and a method `fw_cfg`, and provides `ramfb_display` and `fw_cfg_test_name`, which those boards' `display` and `test_name` call. The module isn't compiled on `pc`.
 
-#dtable(columns: (auto, 1fr, 1fr, 1fr), ("", "riscv64", "aarch64", "x86_64"),
+The three QEMU implementations, side by side:
+
+#dtable(columns: (auto, 1fr, 1fr, 1fr), ("", "riscv64", "aarch64", "x86_64 (q35)"),
   [Load address], [`0x80200000`], [`0x40200000`], [`0x100000`],
   [Entered], [S-mode, from OpenSBI], [EL1, from QEMU], [32-bit, PVH],
   [Serial], [16550 at `0x1000_0000`], [PL011 at `0x0900_0000`], [16550 at port `0x3f8`],
@@ -292,13 +287,13 @@ The three implementations, side by side:
   [Paging], [Sv39], [none: MMU off], [4-level, from `_start`],
   [Guard pages], [yes], [no], [yes],
   [Demand paging], [yes], [no], [yes],
-  [Other CPUs], [SBI HSM], [PSCI `CPU_ON`], [INIT and STARTUP],
+  [Other CPUs], [SBI HSM], [PSCI `CPU_ON`], [INIT and two STARTUPs],
   [CPU number], [`tp`], [`MPIDR_EL1` low byte], [local APIC id],
   [fw_cfg], [MMIO `0x1010_0000`], [MMIO `0x0902_0000`], [I/O ports],
   [virtio], [8 MMIO slots], [32 MMIO slots], [PCI, ECAM at `0xb000_0000`],
 )
 
-Every address in that table is written in the source. Nothing reads a device tree or ACPI table, so a kernel runs on these three QEMU machines and no others.
+Every address in that table is written in the source, and these three boards read no device tree or ACPI table, so each runs on its QEMU machine and no other. The `pc` board looks up the same facts instead (@bare-pc).
 
 == Interrupts and timers
 
@@ -310,7 +305,7 @@ The contract that makes preemption possible is that a handler runs *on the inter
 
 The timer belongs to M-mode, so S-mode asks OpenSBI for a deadline with the SBI TIME extension and takes a supervisor timer interrupt when it passes. One entry, `green_tea_trap_entry`, takes interrupts and faults. A fault may be a stack overflow, with `sp` in a guard page, where pushing a frame would fault forever, so the first instructions tell them apart using nothing but `sscratch` and `t0`:
 
-#srcfile("green-tea-bare/src/platform/riscv64.rs", lines: ((230, 233), (238, 238), (252, 253), (267, 268),), notes: ((232, [`scause`'s top bit is set for an interrupt, so a non-negative value is a fault, handled at label 9 on a stack of its own.]), (238, [`TrapFrame` is 544 bytes: 32 integer registers, `sepc`, `sstatus`, `fcsr`, padding, 32 FP registers.]),))[```rust
+#srcfile("green-tea-bare/src/platform/riscv64.rs", lines: ((242, 245), (250, 250), (264, 265), (279, 280),), notes: ((244, [`scause`'s top bit is set for an interrupt, so a non-negative value is a fault, handled at label 9 on a stack of its own.]), (250, [`TrapFrame` is 544 bytes: 32 integer registers, `sepc`, `sstatus`, `fcsr`, padding, 32 FP registers.]),))[```rust
 csrw sscratch, t0
 csrr t0, scause
 bgez t0, 9f
@@ -329,7 +324,7 @@ sret
 
 Sixteen vectors of `0x80` bytes each save `x0` and `x1`, load their own index, and join a common path that pushes an 800-byte `Frame`, including all of `q0`–`q31`. Index 5 is an IRQ at the current level. The handler acknowledges the GIC and ends the interrupt *before* calling `on_tick`, since `on_tick` may switch tasks and the GIC sends nothing else of that priority until the end of interrupt:
 
-#srcfile("green-tea-bare/src/platform/aarch64.rs", lines: ((318, 338),))[```rust
+#srcfile("green-tea-bare/src/platform/aarch64.rs", lines: ((332, 352),))[```rust
 extern "C" fn green_tea_exception(kind: u64, frame: &Frame) {
     if kind == VECTOR_IRQ {
         let iar = unsafe { read_volatile(GICC_IAR as *const u32) };
@@ -353,29 +348,26 @@ extern "C" fn green_tea_exception(kind: u64, frame: &Frame) {
     }
 ```]
 
-The vectors are installed in one place on the boot CPU, `init_timer`, and `init` doesn't call it:
+The boot CPU installs the vectors in `init`, before anything else can fault:
 
-#srcfile("green-tea-bare/src/platform/aarch64.rs", lines: ((88, 90), (351, 355),), notes: ((89, [All of `init` on this board.]), (355, [The only write to `VBAR_EL1` on the boot CPU.]),))[```rust
+#srcfile("green-tea-bare/src/platform/aarch64.rs", lines: ((89, 92),), notes: ((90, [`VBAR_EL1`: from here on a fault on this CPU reaches `green_tea_exception` and is reported.]),))[```rust
 fn init() {
+    unsafe { asm!("msr vbar_el1, {}", "isb", in(reg) &raw const green_tea_vectors) };
     Pl011(0x0900_0000).enable();
 }
-// …
-fn init_timer(on_tick: fn()) {
-    ON_TICK.set(Some(on_tick));
-    Self::set_deadline(u64::MAX);
-    unsafe {
-        asm!("msr vbar_el1, {}", "isb", in(reg) &raw const green_tea_vectors);
 ```]
 
-A started CPU installs them in `green_tea_secondary`. The consequence is in @bare-limits.
+A started CPU does the same in `green_tea_secondary`.
 
 === x86_64
 
-`init` builds a GDT with a TSS, an IDT with stubs for all 32 exceptions, and masks the legacy PIC after moving it to vectors `0x20`–`0x2f`. Exceptions run on IST1, a 16 KiB fault stack, because an overflow faults with `rsp` in a guard page. The timer runs on the interrupted stack, through vector `0x30`.
+`traps::init` builds a GDT with one TSS per CPU, an IDT with stubs for all 32 exceptions, and masks the legacy PIC after moving it to vectors `0x20`–`0x2f`. Exceptions run on IST1, a 16 KiB fault stack that each CPU has to itself, because an overflow faults with `rsp` in a guard page. The timer runs on the interrupted stack, through vector `0x30`, and the local APIC's spurious interrupt has an entry of its own at `0xff` that returns at once.
 
-The local APIC timer counts at a rate of its own, which `init_timer` measures against the HPET over 10 ms. It can't take back an interrupt it has raised, so a tick can be stale, or a little early from the conversion. The handler checks, and re-arms:
+The local APIC is reached in one of two modes. In *xAPIC* mode its registers are memory at `0xfee0_0000`, or wherever `set_lapic_base` moved them. In *x2APIC* mode they are MSRs, and ids are 32 bits wide. `lapic_read`, `lapic_write`, `apic_id` and `send_ipi` hide the difference. `q35` stays in xAPIC mode, and `pc` uses x2APIC whenever the CPU has it.
 
-#srcfile("green-tea-bare/src/platform/x86_64.rs", lines: ((632, 648),), notes: ((634, [Acknowledge first: `on_tick` may not come back for a long time.]), (640, [A stale or early tick: wait for the deadline that is armed now.]),))[```rust
+The local APIC timer counts at a rate of its own, which `init_timer` measures against `Board::ticks` over 10 ms: the HPET on `q35`, the TSC on `pc`. It can't take back an interrupt it has raised, so a tick can be stale, or a little early from the conversion. The handler checks, and re-arms:
+
+#srcfile("green-tea-bare/src/platform/x86_64/mod.rs", lines: ((665, 681),), notes: ((667, [Acknowledge first: `on_tick` may not come back for a long time.]), (673, [A stale or early tick: wait for the deadline that is armed now.]),))[```rust
 extern "C" fn green_tea_timer() {
     // Acknowledge first: on_tick may switch tasks and not come back for a long time.
     lapic_write(LAPIC_EOI, 0);
@@ -384,8 +376,8 @@ extern "C" fn green_tea_timer() {
     // a little early, from converting the deadline to APIC ticks. Either way, wait for the
     // deadline that's armed now.
     let deadline = DEADLINE.get();
-    if Q35::ticks() < deadline {
-        Q35::set_deadline(deadline);
+    if Board::ticks() < deadline {
+        Board::set_deadline(deadline);
         return;
     }
     DEADLINE.set(u64::MAX); // one tick per deadline
@@ -401,7 +393,7 @@ The map is the identity on every board: a page at an address gets the frame at t
 
 riscv64 builds Sv39 tables in `paging::enable`: a 1 GiB leaf for the devices, a table of 2 MiB leaves for the gigabyte of RAM, and a table of 4 KiB leaves for the 2 MiB of stacks, in which each guard page is zero:
 
-#srcfile("green-tea-bare/src/platform/riscv64.rs", lines: ((455, 466),), notes: ((455, [Entry 0 of the root maps the first GiB as device memory: readable and writable, not executable.]), (465, [Not valid: any access faults.]),))[```rust
+#srcfile("green-tea-bare/src/platform/riscv64.rs", lines: ((476, 487),), notes: ((476, [Entry 0 of the root maps the first GiB as device memory: readable and writable, not executable.]), (486, [Not valid: any access faults.]),))[```rust
 (*root).0[0] = leaf(0, DEVICE); // the first GiB: UART, fw_cfg, CLINT, PLIC
 (*root).0[RAM / GIB] = branch(ram);
 for (i, entry) in (*ram).0.iter_mut().enumerate() {
@@ -416,7 +408,7 @@ for guard in stack::guard_pages() {
 }
 ```]
 
-`A` and `D` are set up front in every leaf, since QEMU otherwise faults the first access to have them set. x86_64 does the same in `enable_guard_pages`, replacing the 2 MiB entry of the stack pool in `_start`'s directories, and reloading `cr3`. aarch64 runs with the MMU off, so its guard pages are ordinary memory.
+`A` and `D` are set up front in every leaf, since QEMU otherwise faults the first access to have them set. x86_64 does the same in `enable_guard_pages`, replacing the 2 MiB entry of the stack pool in `_start`'s directories, and reloading `cr3`. Above the 4 GiB that `_start` maps, `paging::map_high` adds identity-mapped 2 MiB pages for a device that firmware put there, from eight spare tables; only `pc` calls it. aarch64 runs with the MMU off, so its guard pages are ordinary memory.
 
 The pool is `stack::SLOTS` (102) slots of `SLOT` bytes (20 KiB): a `PAGE` of guard under a `STACK_SIZE` of 16 KiB. It is a `green-tea-pool` `FreeList` (@crate-pool), whose link goes in the first word *above* the guard, which a board with guard pages can't write. `Stack::take` panics when the pool is empty, `Stack::try_take` returns `None`, `top` and `guard` give the addresses, and dropping a `Stack` gives it back.
 
@@ -433,7 +425,7 @@ PASS: overflowed after 26 frames, into the task's guard page at 0x80a05ff0
 
 On riscv64 and x86_64 the page tables start with all 1,024 pages of the heap missing. The first access faults, the handler maps the page, and the instruction runs again:
 
-#srcfile("green-tea-bare/src/pages.rs", lines: ((105, 120),), notes: ((109, [`set_mapped` returns whether the page was mapped before.]), (111, [A fault on a page that is there is a real fault, and the handler panics.]),))[```rust
+#srcfile("green-tea-bare/src/pages.rs", lines: ((118, 129),), notes: ((122, [`set_mapped` returns whether the page was mapped before.]), (124, [A fault on a page that is there is a real fault, and the handler panics.]),))[```rust
 pub fn fault(addr: usize) -> bool {
     if !Board::DEMAND_PAGING || !heap_range().contains(&addr) {
         return false;
@@ -442,19 +434,15 @@ pub fn fault(addr: usize) -> bool {
     if was_mapped {
         return false; // a fault on a page that is there: not for want of a mapping
     }
-    FAULTS.set(FAULTS.get() + 1);
-    MAPPED.set(MAPPED.get() + 1);
-    PEAK.set(
-        PEAK.get()
-            .max(MAPPED.get()),
-    );
+    FAULTS.fetch_add(1, Relaxed);
+    count_mapped();
     true
 }
 ```]
 
 The heap can straddle three 2 MiB pages, so each board keeps three tables of 4 KiB entries, `HEAP_4K`, mapping what else shares those 2 MiB as before and leaving the heap's pages out:
 
-#srcfile("green-tea-bare/src/platform/x86_64.rs", lines: ((744, 758),), notes: ((747, [This assertion allows the third table to be the stack pool's 2 MiB page: see @bare-limits.]),))[```rust
+#srcfile("green-tea-bare/src/platform/x86_64/mod.rs", lines: ((778, 792),), notes: ((786, [Only the tables the heap reaches. A heap on a 2 MiB boundary needs two, and the third entry, the stack pool's, stays as `enable_guard_pages` left it.]),))[```rust
 pub fn unmap_heap() {
     let heap = pages::heap_range();
     let base = heap.start & !(MIB2 - 1);
@@ -463,7 +451,7 @@ pub fn unmap_heap() {
     unsafe {
         // Only ever touched here, at boot: no other references exist.
         let (tables, pds) = (&raw mut HEAP_4K, &raw mut boot_pds);
-        for (t, table) in (*tables).iter_mut().enumerate() {
+        for (t, table) in (*tables).iter_mut().enumerate().take((heap.end - base).div_ceil(MIB2)) {
             for (i, entry) in table.0.iter_mut().enumerate() {
                 let page = base + t * MIB2 + i * pages::PAGE;
                 *entry = if heap.contains(&page) { 0 } else { page as u64 | PRESENT | WRITABLE };
@@ -476,7 +464,7 @@ Unmapping needs a TLB flush on both boards. Mapping needs one on riscv64, whose 
 
 `release` is the way back. It zeroes a page and unmaps it, so that a released page reads as zeros when next touched, as a page given back to Linux with `madvise(MADV_DONTNEED)` does. `trim` calls it on the pages of the heap's free blocks that hold none of the allocator's own words:
 
-#srcfile("green-tea-bare/src/pages.rs", lines: ((216, 225),))[```rust
+#srcfile("green-tea-bare/src/pages.rs", lines: ((223, 232),))[```rust
 pub fn trim() -> usize {
     heap::with(|heap| {
         let mut released = 0;
@@ -493,17 +481,17 @@ The rest of the module observes. `stats` returns a `Stats` of `reserved`, `mappe
 
 #output(title: "cargo xtask kernel --kernel pages --target riscv64")[
 ```
-  0x80464000, the heap's first page
-    entry   2  0x00000000200c8401  the next table, at 0x80321000
-    entry   2  0x00000000200c8801  the next table, at 0x80322000
-    entry 100  0x00000000201190cf  a page of 4 KiB, in the frame at 0x80464000
-  0x80465000, the heap's second page
-    entry   2  0x00000000200c8401  the next table, at 0x80321000
-    entry   2  0x00000000200c8801  the next table, at 0x80322000
-    entry 101  0x0000000000000000  not valid: an access faults
+  0x80482000, the heap's first page
+    entry   2  0x00000000200cfc01  the next table, at 0x8033f000
+    entry   2  0x00000000200d0001  the next table, at 0x80340000
+    entry 130  0x00000000201208cf  a page of 4 KiB, in the frame at 0x80482000
+  0x80483000, the heap's second page
+    entry   2  0x00000000200cfc01  the next table, at 0x8033f000
+    entry   2  0x00000000200d0001  the next table, at 0x80340000
+    entry 131  0x0000000000000000  not valid: an access faults
   0x80a00000, the guard page of the first task stack
-    entry   2  0x00000000200c8401  the next table, at 0x80321000
-    entry   5  0x00000000200c9801  the next table, at 0x80326000
+    entry   2  0x00000000200cfc01  the next table, at 0x8033f000
+    entry   5  0x00000000200d1001  the next table, at 0x80344000
     entry   0  0x0000000000000000  not valid: an access faults
 ```
 ]
@@ -524,13 +512,16 @@ And a megabyte's life, in pages:
 
 Allocating a megabyte maps one page, 256, where its footer and the next block's header are. The heap's last page, 1023, is mapped from boot because the allocator's end marker is there.
 
-== SMP startup
+== SMP startup <bare-smp>
 
-A kernel begins on one CPU, CPU 0. `cpus::start_all` starts the others, up to `MAX` (8) in all:
+A kernel begins on one CPU, CPU 0. `cpus::start_all` starts the others, up to `MAX` in all. `MAX` is 8 unless the build sets `GREEN_TEA_MAX_CPUS`, which `build.rs` accepts from 1 to 256. Each CPU the limit allows costs a 16 KiB fault stack in `.bss`:
 
-#srcfile("green-tea-bare/src/cpus.rs", lines: ((47, 66),), notes: ((49, [Demand paging is for one CPU: one fault stack, plain counters, and a TLB flush that reaches one CPU. So the heap is mapped whole first, and `release` does nothing from then on.]), (53, [An error means no such CPU: the loop ends, and `count` is how many there are.]),))[```rust
+#srcfile("green-tea-bare/src/cpus.rs", lines: ((59, 81),), notes: ((64, [Demand paging is for one CPU: plain counters, and a TLB flush that reaches one CPU. So the heap is mapped whole first, and `release` does nothing from then on.]), (68, [An error means no such CPU: the loop ends, and `count` is how many there are.]),))[```rust
 pub fn start_all() -> usize {
     assert_eq!(Board::cpu(), 0, "only the boot CPU starts the others");
+    if PARKED.load(Ordering::Acquire) {
+        return count();
+    }
     crate::pages::map_all(); // a page fault is something only the boot CPU can take
     for (cpu, online) in ONLINE.iter().enumerate().skip(count()) {
         let stack = Box::leak(vec![0u128; STACK / 16].into_boxed_slice());
@@ -555,9 +546,9 @@ Each board starts a CPU its own way:
 
 - *riscv64*: the SBI HSM extension's `hart_start`. CPUs 1, 2, … are the harts other than the boot hart, in order of hart id. The new hart's number is written under the top of its stack, and `green_tea_secondary_entry` loads it into `tp`.
 - *aarch64*: PSCI `CPU_ON` through `hvc`, which QEMU answers itself when there is no firmware. The CPU's number is the low byte of `MPIDR_EL1`.
-- *x86_64*: two messages from the local APIC, after copying a real-mode trampoline to `0x8000`:
+- *x86_64*: messages from the local APIC, after copying a real-mode trampoline to `0x8000`. `q35` knows how many CPUs there are from fw_cfg, and a CPU's number is its APIC id:
 
-#srcfile("green-tea-bare/src/platform/x86_64.rs", lines: ((295, 320),), notes: ((297, [fw_cfg item 5: the number of CPUs QEMU was started with. INIT and STARTUP get no answer, so nothing else says whether the CPU exists.]), (314, [The destination is an APIC id, and `cpu` is used as one directly.]), (318, [One STARTUP, with no retry. The vector is the page the CPU starts at.]),))[```rust
+#srcfile("green-tea-bare/src/platform/x86_64/q35.rs", lines: ((100, 109),), notes: ((102, [fw_cfg item 5: the number of CPUs QEMU was started with. INIT and STARTUP get no answer, so nothing else says whether the CPU exists.]), (107, [The destination is an APIC id, and on this board `cpu` is one.]),))[```rust
 fn start_cpu(cpu: usize, stack_top: usize) -> Result<(), &'static str> {
     use green_tea_fw_cfg::FwCfgPort;
     IoPorts.select(0x05);
@@ -565,32 +556,29 @@ fn start_cpu(cpu: usize, stack_top: usize) -> Result<(), &'static str> {
     if cpu >= cpus {
         return Err("no such CPU");
     }
-    const APIC_ENABLE: u32 = 1 << 8;
-    const INIT: u32 = 0x4500;
-    const STARTUP: u32 = 0x4600;
-    // SAFETY: the page at 0x8000 is free memory, mapped by `_start`; the previous CPU
-    // started has left the trampoline and loaded its stack, since `cpus::start_all`
-    // waits for each CPU before it starts the next.
-    unsafe {
-        let (start, end) = (&raw const ap_trampoline, &raw const ap_trampoline_end);
-        core::ptr::copy_nonoverlapping(start, AP_TRAMPOLINE as *mut u8, end as usize - start as usize);
-        green_tea_ap_stack = stack_top as u64;
-    }
-    lapic_write(LAPIC_SPURIOUS, APIC_ENABLE | SPURIOUS_VECTOR as u32);
-    lapic_write(LAPIC_ICR_HIGH, (cpu as u32) << 24);
-    lapic_write(LAPIC_ICR_LOW, INIT);
-    crate::delay_ms(10);
-    lapic_write(LAPIC_ICR_HIGH, (cpu as u32) << 24);
-    lapic_write(LAPIC_ICR_LOW, STARTUP | (AP_TRAMPOLINE >> 12) as u32); // the page to start at
+    super::wake_cpu(cpu as u32, stack_top);
     Ok(())
 }
 ```]
 
-The trampoline loads a GDT, enters protected mode and jumps to `ap_start32`, which repeats what `_start` did, with the page tables already built. `traps::join` loads the boot CPU's GDT, IDT and TSS, clearing the TSS's busy bit first, since loading a busy descriptor faults.
+`wake_cpu`, which both x86_64 boards share, sends INIT and then STARTUP twice, as Intel's startup sequence says:
+
+#srcfile("green-tea-bare/src/platform/x86_64/mod.rs", lines: ((540, 547),), notes: ((544, [The vector is the page the CPU starts at.]), (547, [A CPU that took the first STARTUP ignores this one.]),))[```rust
+lapic_write(LAPIC_SPURIOUS, APIC_ENABLE | SPURIOUS_VECTOR as u32);
+send_ipi(apic_id, INIT);
+crate::delay_ms(10);
+// Twice, as Intel's startup sequence says: a CPU that took the first ignores the second.
+let startup = STARTUP | (AP_TRAMPOLINE >> 12) as u32; // the page to start at
+send_ipi(apic_id, startup);
+crate::delay_ms(1);
+send_ipi(apic_id, startup);
+```]
+
+The trampoline loads a GDT, enters protected mode and jumps to `ap_start32`, which repeats what `_start` did, with the page tables already built. `green_tea_secondary` then moves the CPU's local APIC to x2APIC mode if the boot CPU's is in it, and `traps::join` loads the boot CPU's GDT and IDT and this CPU's own TSS.
 
 A started CPU then waits in `enter`, polling for work. `cpus::run` hands every CPU the same `fn(usize)`, itself included, and returns when all have finished. `together` holds them at a barrier so that none begins before all have arrived:
 
-#srcfile("green-tea-bare/src/cpus.rs", lines: ((70, 91),))[```rust
+#srcfile("green-tea-bare/src/cpus.rs", lines: ((85, 106),))[```rust
 pub fn run(f: fn(usize)) {
     assert_eq!(Board::cpu(), 0, "only the boot CPU hands out work");
     ARRIVED.store(0, Ordering::Release);
@@ -625,7 +613,7 @@ The kernel's heap is a `Tlsf` (@crate-fit) over the 4 MiB of `.heap`, installed 
 
 Every operation runs with interrupts off and holding a spin lock:
 
-#srcfile("green-tea-bare/src/heap.rs", lines: ((119, 145),), notes: ((121, [The lock holds the owner's CPU number plus one, so that 0 can mean free.]), (125, [A use of the heap from inside itself is a panic, not a wait that never ends.]),))[```rust
+#srcfile("green-tea-bare/src/heap.rs", lines: ((124, 150),), notes: ((126, [The lock holds the owner's CPU number plus one, so that 0 can mean free.]), (130, [A use of the heap from inside itself is a panic, not a wait that never ends.]),))[```rust
 fn locked<R>(f: impl FnOnce(&mut Tlsf, &mut Option<Recording>) -> R) -> R {
     Board::without_interrupts(|| {
         let me = Board::cpu() + 1;
@@ -657,13 +645,13 @@ fn locked<R>(f: impl FnOnce(&mut Tlsf, &mut Option<Recording>) -> R) -> R {
 
 `with` runs a closure on the allocator, which must not allocate. `used` and `capacity` are its two commonest uses, and `lock_counts` returns how many times the lock was taken and how many of those waited for another CPU. `align_up` is a mask where `next_multiple_of` would be a division.
 
-The heap can also record itself. `record` installs a buffer, every allocation and free is then written to it as a `green-tea-fit` trace `Event`, and `stop_recording` hands back a `Recording`: the `events`, their `len`, and how many were `dropped` when the buffer filled.
+The heap can also record itself. `record` installs a buffer, every allocation and free is then written to it as a `green-tea-fit` trace `Event`, and `stop_recording` hands back a `Recording`: the `events`, their `len`, and how many were `dropped` when the buffer filled. `is_recording` says whether one is under way.
 
-Under the heap, `kmem` holds the kernel's instance of `green-tea-kmem`'s page frames (@crate-kmem): `REGION` (16 MiB) of RAM from `__kernel_end` up, or `PAGES` frames, with a table in the first `TABLE_PAGES` that are never handed out. `region` gives the addresses, `with_frames` runs a closure on the allocator with interrupts off, and `KernelCache` is a slab `Cache` that can be a `static`, with `new`, `allocate`, `free`, `reap` and `with`. The kernel doesn't ask how much RAM there is: it relies on `cargo xtask kernel` starting QEMU with 128 MiB.
+Under the heap, `kmem` holds the kernel's instance of `green-tea-kmem`'s page frames (@crate-kmem): `REGION` (16 MiB) of RAM from `__kernel_end` up, or `PAGES` frames, with a table in the first `TABLE_PAGES` that are never handed out. `region` gives the addresses, `with_frames` runs a closure on the allocator with interrupts off, and `KernelCache` is a slab `Cache` that can be a `static`, with `new`, `allocate`, `free`, `reap` and `with`. On `q35` and `pc`, where a write past RAM would go unnoticed, the first use checks the region's end against `Board::ram_end` and panics if it doesn't fit. On riscv64 and aarch64 an access past RAM faults, and the fault is reported.
 
-`Arena` is a bump allocator over one block of the heap, and an `Allocator`, so `Vec::new_in(&arena)` works. `reset` takes `&mut self`, so the borrow checker refuses to reset an arena while anything allocated from it is alive. `used`, `peak` and `capacity` report on it. Freeing does something only for the last block, and growth is in place only for the last block:
+`Arena` is a bump allocator over one block of the heap, and an `Allocator`, so `Vec::new_in(&arena)` works. An arena of no bytes takes no block. `reset` takes `&mut self`, so the borrow checker refuses to reset an arena while anything allocated from it is alive. `used`, `peak` and `capacity` report on it. Freeing does something only for the last block, and growth is in place only for the last block:
 
-#srcfile("green-tea-bare/src/arena.rs", lines: ((86, 91), (95, 99),), notes: ((96, [`is_last`: this block ends where the next allocation would start.]),))[```rust
+#srcfile("green-tea-bare/src/arena.rs", lines: ((93, 98), (102, 106),), notes: ((103, [`is_last`: this block ends where the next allocation would start.]),))[```rust
 fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
     let addr = align_up(self.next.get(), layout.align()).ok_or(AllocError)?;
     self.bump_to(addr.checked_add(layout.size()).ok_or(AllocError)?)?;
@@ -695,7 +683,7 @@ pub fn read_byte() -> u8 {
 
 == The screen
 
-`Screen` draws the demos on the `ramfb` framebuffer: a status bar, and `COLUMNS` (5) columns, each with a bar that grows up to `BAR_MAX` pixels in its colour from `COLORS` on `BACKGROUND`. `new` clears it, `switch_to` moves a white outline to the task about to run and shows the switch count and task id, `idle` drops the outline, and `finish` turns the status bar green. The scheduler's hook owns the `Screen`. Workers draw through a `Painter`, a `Copy` that `painter` returns, with `bar` and `label`, which is safe because each worker draws only in its own column.
+`Screen` draws the demos on the board's `Framebuffer`: a status bar, and `COLUMNS` (5) columns, each with a bar that grows up to `BAR_MAX` pixels in its colour from `COLORS` on `BACKGROUND`. `new` clears it, `switch_to` moves a white outline to the task about to run and shows the switch count and task id, `idle` drops the outline, and `finish` turns the status bar green. The scheduler's hook owns the `Screen`. Workers draw through a `Painter`, a `Copy` that `painter` returns, with `bar` and `label`, which is safe because each worker draws only in its own column.
 
 == Tasks and the scheduler
 
@@ -764,17 +752,131 @@ loop {
 
 `run` takes the first task and a hook, and returns when no task is left. `spawn` adds to the back of the queue, from `run`'s `main` or any task. A sleeping task is off the queue, so it costs no time slices.
 
+== The `pc` board <bare-pc>
+
+`Pc`, in #repo("green-tea-bare/src/platform/x86_64/pc.rs"), is the board for a physical x86_64 PC, chosen at build time by the `board-pc` feature, which `cargo xtask kernel --board pc` turns on. Without the feature the x86_64 build is `Q35`. The two share `_start`, the traps, the local APIC and the paging in `mod.rs`. What `Q35` knows by address, `Pc` looks up:
+
+#dtable(columns: (auto, 1fr, 1fr), ("", "q35", "pc"),
+  [Loaded by], [QEMU, through PVH], [GRUB from UEFI, through Multiboot2],
+  [Load address], [`0x100000`], [`0x2000000` (32 MiB)],
+  [RAM], [fw_cfg item 3], [the Multiboot2 memory map],
+  [Screen], [`ramfb`], [GRUB's framebuffer, any size],
+  [`ticks`], [HPET], [TSC, measured at boot],
+  [CPUs], [fw_cfg item 5], [ACPI's MADT],
+  [CPU number], [APIC id], [position in the MADT's list],
+  [Local APIC], [xAPIC], [x2APIC if the CPU has it],
+  [Console], [COM1], [the screen, and COM1 if it answers],
+  [Keyboard], [the serial port], [the serial port, USB and PS/2],
+  [Test to run], [fw_cfg file], [`test=` on GRUB's command line],
+)
+
+=== Booting
+
+GRUB looks for a Multiboot2 header in the first 32 KiB of the file. The linker script puts the section `.multiboot2` first:
+
+#srcfile("green-tea-bare/src/platform/x86_64/pc.rs", lines: ((41, 52),), notes: ((46, [Tag 5, the framebuffer, with the flag that makes it optional.]), (48, [Any width and height, 32 bits per pixel.]),))[```rust
+mb2_start:
+    .long 0xe85250d6
+    .long 0
+    .long mb2_end - mb2_start
+    .long 0x100000000 - (0xe85250d6 + (mb2_end - mb2_start))
+    .short 5, 1
+    .long 20
+    .long 0, 0, 32
+    .balign 8
+    .short 0, 0
+    .long 8
+mb2_end:
+```]
+
+GRUB enters `_start` in 32-bit protected mode with paging off, as PVH does, with a magic number in `eax` and the address of its boot information in `ebx`. The kernel is linked at 32 MiB because UEFI firmware keeps data of its own a few MiB up, where a kernel at 1 MiB would overlap it. From the memory map, `init` keeps the end of the free RAM the kernel is in, for the check in `kmem`, and whether the page at `0x8000` is free, since `start_cpu` refuses to start a CPU if it isn't. Then it turns to ACPI:
+
+#srcfile("green-tea-bare/src/platform/x86_64/pc.rs", lines: ((272, 278), (286, 288),), notes: ((273, [Before the first `delay_ms`.]), (277, [Before `init_cpus`, which reads this CPU's APIC id.]),))[```rust
+let acpi = info.rsdp().and_then(|rsdp| Acpi::new(Identity4G, rsdp));
+TSC_PER_MS.store(measure_tsc(acpi.as_ref()), Ordering::Relaxed);
+if let Some(address) = acpi.as_ref().and_then(|a| a.lapic_address()) {
+    set_lapic_base(address);
+}
+enable_x2apic_if_available();
+init_cpus(acpi.as_ref());
+// …
+paging::enable_guard_pages();
+paging::unmap_heap();
+init_usb(acpi.as_ref());
+```]
+
+Unlike QEMU's, a physical machine's RAM doesn't start out zero, so `init` also clears the heap and the stack pool, which `_start` leaves alone.
+
+=== The screen and the console
+
+`init_screen` takes the framebuffer GRUB set up, if it is 32-bit XRGB, maps it with `map_high` when it is above 4 GiB, and clears what the firmware and GRUB left on it. The demos draw in the top-left 640×480. A text console, the `Text` of `green-tea-framebuffer` (@crate-framebuffer), takes the rest: beside the demos on a screen at least 1,024 pixels wide, below them on one at least 600 high, and over them on anything smaller. `putc` writes every byte to that console, and to COM1 if there is one. `init_serial` decides that by writing two values to the UART's scratch register and reading them back, since a laptop has no UART and its ports read `0xff`. A flag guards the console: a CPU or interrupt that finds it taken leaves its character off the screen, so that a `panic!` can't deadlock on it.
+
+=== The clock
+
+The TSC is the counter `ticks` reads, and nothing says how fast it runs, so `measure_tsc` times it for 10 ms against a clock whose rate ACPI (@crate-acpi) gives. That is the HPET if the firmware lists one below 4 GiB, and otherwise the ACPI power management timer, at 3,579,545 Hz, of which only 24 bits are sure to exist:
+
+#srcfile("green-tea-bare/src/platform/x86_64/pc.rs", lines: ((148, 156),))[```rust
+} else if let Some(port) = acpi.pm_timer_port() {
+    const MASK: u32 = 0x00ff_ffff; // 24 bits is all a timer is sure to have
+    let wait = (PM_TIMER_HZ * CALIBRATE_MS / 1000) as u32;
+    // SAFETY: ACPI's port for the timer; reading it has no effect.
+    unsafe {
+        let (from, start) = (inl(port) & MASK, rdtsc());
+        while (inl(port) & MASK).wrapping_sub(from) & MASK < wait {}
+        (start, rdtsc())
+    }
+```]
+
+=== The CPUs
+
+The MADT lists the local APICs, and on a physical machine their ids can have gaps. So a CPU's number is its position in a list, with the boot CPU first:
+
+#srcfile("green-tea-bare/src/platform/x86_64/pc.rs", lines: ((220, 230),), notes: ((225, [At most `MAX` ids, in the MADT's order, leaving out the boot CPU's, which is already first.]),))[```rust
+fn init_cpus(acpi: Option<&Acpi<Identity4G>>) {
+    let boot = apic_id();
+    APIC_IDS[0].store(boot, Ordering::Relaxed);
+    let Some(acpi) = acpi else { return };
+    let mut ids = [0; MAX];
+    let count = acpi.apic_ids(boot, &mut ids).max(1);
+    for (slot, id) in APIC_IDS.iter().zip(&ids[..count]) {
+        slot.store(*id, Ordering::Relaxed);
+    }
+    CPU_COUNT.store(count, Ordering::Release);
+}
+```]
+
+`cpu` searches that list for this CPU's APIC id, and `start_cpu` passes `wake_cpu` the id at position `cpu`. The list is written once, before any other CPU starts. `enable_x2apic_if_available` moves the boot CPU to x2APIC whenever CPUID reports it, because firmware may already have turned it on and it can't be turned off without resetting the APIC's state. Ids above 255 need that mode.
+
+=== The keyboards
+
+`getc` polls three sources in order: COM1 if it answered, then a USB keyboard, then a PS/2 one. `init_usb` finds the xHCI controllers through ACPI's MCFG table and keeps the first with a boot keyboard on one of its own ports (@crate-xhci). PS/2 is `green-tea-i8042` (@crate-i8042), which is what most laptops' built-in keyboards are. Neither takes an interrupt.
+
+=== A run
+
+`cargo xtask kernel --board pc` builds GRUB and the kernel into a directory laid out as a UEFI system partition, and boots it in QEMU with OVMF firmware, a `qemu-xhci` controller and a USB keyboard:
+
+#output(title: "cargo xtask kernel --board pc --kernel coop --headless")[
+```
+BdsDxe: starting Boot0001 "UEFI Misc Device" from PciRoot(0x0)/Pci(0x3,0x0)
+usb: keyboard on port 5
+green-tea-coop on x86_64 (pc)
+framebuffer: 1280x800 XRGB8888
+running 5 workers; expecting 57 switches
+all tasks finished after 57 switches (expected 57)
+PASS: 57 switches, as expected
+```
+]
+
 == Limits <bare-limits>
 
-- *aarch64 has no exception vectors on the boot CPU until `init_timer`.* `Platform::init` (`aarch64.rs:88`) enables the UART and nothing more, and the only write to `VBAR_EL1` on the boot CPU is at `aarch64.rs:355`. Of all the kernels, only `preempt` and the last part of `incremental` call `init_timer`. In every other kernel, and in those two before that call, a fault on CPU 0 doesn't reach `green_tea_exception`, and so produces no panic report: `VBAR_EL1`'s reset value is architecturally unknown. The CPUs that `start_cpu` starts do install the vectors (`aarch64.rs:80`), so in the SMP kernels a fault is reported on CPUs 1 to 3 and not on CPU 0. This comes from reading the code; we didn't provoke a fault to watch it.
-- *x86_64 assumes QEMU.* It enters through PVH (`x86_64.rs:45`), needs fw_cfg at its I/O ports for the CPU count (`x86_64.rs:297`) and for the display, writes to a 16550 at `0x3f8` (`x86_64.rs:264`), and hard-codes the HPET, the local APIC and ECAM. A real machine with a different layout wouldn't boot, or wouldn't print.
-- *An APIC id is used as the CPU number* (`x86_64.rs:289`). `start_cpu` sends to APIC id `cpu` (`x86_64.rs:314`), and `cpus` indexes `ONLINE` and `WORK` by it. That holds on QEMU, whose ids run 0, 1, 2, …, and fails on a machine whose ids have gaps, or whose boot CPU isn't 0, where `start_all`'s assertion fires. It also sends one STARTUP message with no retry. aarch64 has the same assumption in `MPIDR_EL1`'s low byte (`aarch64.rs:123`).
-- *A heap that starts on a 2 MiB boundary loses every guard page.* Both boards point three page-directory entries at `HEAP_4K`, starting at the heap's 2 MiB page (`x86_64.rs:757`, `riscv64.rs:480`). If `__heap_start` is a multiple of 2 MiB, the heap ends exactly at `.stacks`, the third table *is* the stack pool's page, and it overwrites the entry that pointed at `STACKS_4K`, mapping every guard page. The assertions allow it. None of the six debug builds on these two boards is affected (their heaps start at `0x80362000`, `0x803d8000`, `0x80464000`, `0x271000`, `0x331000` and `0x3f6000`); nor are the six release builds, but the layout moves with the code size. A private build with `.heap` aligned to 2 MiB lost its guard pages on both boards: `overflow` hung with no fault, and `pages` failed.
-- One fault stack serves every CPU on riscv64 and x86_64, so two CPUs faulting at once would overwrite each other's frames.
-- `cpus::run` after `park` waits forever if any other CPU was started, because those CPUs have halted and will never arrive. With only the boot CPU it returns.
-- `Arena::new(0)` passes a zero-sized layout to the global allocator (`arena.rs:35`), which `GlobalAlloc`'s contract forbids.
+- *The `pc` board has run only in QEMU with UEFI firmware and under KVM, never on physical hardware.* The run above is QEMU with OVMF, emulated, as `xtask` starts it. The conditions a physical machine would bring were forced in QEMU: no HPET, xAPIC and x2APIC, sparse APIC ids, 12 CPUs with a limit of 16, memory mapped above 4 GiB, and PS/2 and USB keyboards at full and high speed. A local APIC at a non-default address is covered only by a host test of its parsing.
+- *Secure Boot must be off*, since the GRUB that `xtask` builds isn't signed.
+- *The `disk` kernel isn't available on `pc`.* The board has no `VirtioBus`, and there is no USB storage driver. USB is a keyboard plugged straight into a controller's port before boot: no hubs, no hot-plugging.
+- *`pc` treats a CPU the MADT marks only online-capable as present* (`apic_ids` in `green-tea-acpi`). Such an entry may be a CPU that isn't there, and `start_all` then panics after a second with "was started and didn't arrive". This comes from reading the code; no run has had such an entry.
+- `pc` assumes the TSC runs at a constant rate and agrees between CPUs. It doesn't check CPUID for an invariant TSC.
+- Every mapping is write-back, device registers included. On `pc` the firmware's MTRRs are what make those registers uncached, and nothing checks them.
+- *`q35` and the two `virt` boards assume their QEMU machine.* Addresses are constants, and `q35` needs fw_cfg for the CPU count and the display. It uses the CPU number as an APIC id (`q35.rs:107`), and aarch64 takes it from `MPIDR_EL1`'s low byte (`aarch64.rs:125`), which holds on QEMU, whose ids run 0, 1, 2, ….
+- *A regression in the guard pages wouldn't show in CI.* `unmap_heap` on riscv64 and x86_64 must not touch the stack pool's 2 MiB page when the heap starts on a 2 MiB boundary. Only a build with the heap on that boundary exercises this, and the builds CI runs don't have one.
 - The scheduler's idle wait is a busy loop (`runtime.rs:57`), and the serial port is polled.
-- `kmem` assumes, without checking, that RAM reaches 16 MiB past `__kernel_end`. The 128 MiB that `xtask` gives QEMU is what makes that true.
-- The crate's first line names `coop` and `preempt` as its users, leaving out `shell`.
 
-Three boards, one trait, and the parts of a kernel. @crate-coop puts them to work.
+Four boards, one trait, and the parts of a kernel. @crate-coop puts them to work.

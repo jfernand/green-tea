@@ -5,15 +5,15 @@
 `green-tea-trace` is a host program that reads an allocation trace from a file and does what the shell's `replay` command does in the kernel: it describes the trace and replays it against each allocator of @crate-fit. It has three commands, `stat`, `replay` and `convert`. Its tables match the kernel's column for column, so a trace dumped by the kernel can be replayed on the host and the two outputs compared line by line.
 
 #spec(
-  ("Source", [#repo("green-tea-trace/src/main.rs"), 401 lines without its tests]),
+  ("Source", [#repo("green-tea-trace/src/main.rs"), 405 lines without its tests]),
   ("Depends on", [`green-tea-fit`; `std`]),
   ("Used by", [nothing: it is a program. Its traces come from `cargo xtask trace` (@crate-xtask)]),
-  ("Tests", [8 host tests]),
+  ("Tests", [11 host tests]),
 )
 
 #dtable(columns: (auto, 1fr), ("Command", "What it does"),
   [`stat <file>`], [Prints the form and size of the file, its records, the sizes asked for, how long blocks lived, the peak of live bytes, and two checks on the order of the records.],
-  [`replay <file>`], [Replays the trace against first, next and best fit, each with a LIFO and an address-ordered free list, then against the buddy system and TLSF. `--region-kib <n>` sets the region each replay gets. `--shuffle [<seed>]` adds a replay with the sizes and lifetimes dealt out at random.],
+  [`replay <file>`], [Replays the trace against first, next and best fit, each with a LIFO and an address-ordered free list, then against the buddy system and TLSF. `--region-kib <n>` sets the region each replay gets, from 1 KiB to 4 GiB. `--shuffle [<hex seed>]` adds a replay with the sizes and lifetimes dealt out at random.],
   [`convert <file> <out>`], [Writes the same records in the other form, or in the one named by `--text` or `--binary`.],
 )
 
@@ -38,7 +38,7 @@ The program allocated 656,120 bytes over the session and never held more than 14
 
 The last line reports two faults of order, found by `mismatches`:
 
-#srcfile("green-tea-trace/src/main.rs", lines: ((245, 255),), notes: ((250, [A free of an address that isn't allocated. It happens when the recording starts after the program does.]), (251, [An allocation at an address still allocated. It can't happen in a trace whose records are in the order of the calls.]),))[```rust
+#srcfile("green-tea-trace/src/main.rs", lines: ((249, 259),), notes: ((254, [A free of an address that isn't allocated. It happens when the recording starts after the program does.]), (255, [An allocation at an address still allocated. It can't happen in a trace whose records are in the order of the calls.]),))[```rust
 fn mismatches(events: &[Event]) -> (usize, usize) {
     let mut live = BTreeMap::new();
     let (mut unmatched, mut twice) = (0, 0);
@@ -56,7 +56,7 @@ The two faults are treated differently. An unmatched free is harmless, since `tr
 
 == `replay`
 
-#srcfile("green-tea-trace/src/main.rs", lines: ((298, 326),), notes: ((304, [The refusal: no replay of records out of order means anything.]), (310, [The default region: four times the peak of live bytes, rounded up to a power of two, and at least 512 KiB, which is what the shell uses.]), (311, [One allocation of `u128`s, so the region is aligned to 16. Each replay gets all of it, one after another.]), (318, [Every allocator must have made every allocation and seen the same peak of live bytes.]),))[```rust
+#srcfile("green-tea-trace/src/main.rs", lines: ((302, 330),), notes: ((308, [The refusal: no replay of records out of order means anything.]), (314, [The default region: four times the peak of live bytes, rounded up to a power of two, and at least 512 KiB, which is what the shell uses.]), (315, [One allocation of `u128`s, so the region is aligned to 16. Each replay gets all of it, one after another.]), (322, [Every allocator must have made every allocation and seen the same peak of live bytes.]),))[```rust
 fn replay(made: &Events, region: Option<usize>, shuffle: Option<u64>) -> Result<String, Failure> {
     let events = &made.events;
     let mut out = String::new();
@@ -90,7 +90,7 @@ fn replay(made: &Events, region: Option<usize>, shuffle: Option<u64>) -> Result<
 
 `table` builds a `Fit` for each of the six entries of `WAYS` on the same memory, replays, and runs `check` on the heap afterwards. `others` does the same for `Buddy` and `Tlsf` through `measured`. `row` prints one line and makes two checks of its own:
 
-#srcfile("green-tea-trace/src/main.rs", lines: ((335, 337), (339, 345),), notes: ((335, [Over the live bytes at the moment the footprint last grew.]), (336, [Over the most live bytes there ever were.]), (337, [Over the most bytes ever in blocks, which leaves out the tags and rounding and counts only the holes.]), (339, [A refused allocation makes the row meaningless: the replay stops there and says to use a larger region.]), (342, [Live bytes can't exceed used bytes, nor used bytes the footprint. A row that says so is a bug in an allocator or in the replay.]),))[```rust
+#srcfile("green-tea-trace/src/main.rs", lines: ((339, 341), (343, 349),), notes: ((339, [Over the live bytes at the moment the footprint last grew.]), (340, [Over the most live bytes there ever were.]), (341, [Over the most bytes ever in blocks, which leaves out the tags and rounding and counts only the holes.]), (343, [A refused allocation makes the row meaningless: the replay stops there and says to use a larger region.]), (346, [Live bytes can't exceed used bytes, nor used bytes the footprint. A row that says so is a bug in an allocator or in the replay.]),))[```rust
     percent(r.footprint - r.live_at_peak_footprint, r.live_at_peak_footprint),
     percent(r.footprint - r.peak_live, r.peak_live),
     percent(r.footprint - r.peak_used, r.peak_used),
@@ -141,6 +141,24 @@ The default seed is `SEED`, the one the shell's `replay` uses. With it, the kern
 
 The kernel's `replay` goes on to a fourth table, with blocks that outlive `LONG_LIVED` (64) allocations in a region of their own. `green-tea-trace` doesn't print that table.
 
+The word after `--shuffle` is its seed only if a file has already been named and the word parses in base 16. Before the file, the next word is the file, so a trace called `cafe` can follow the option:
+
+#srcfile("green-tea-trace/src/main.rs", lines: ((108, 112),), notes: ((110, [`files` is empty until the file has been read, so nothing can be taken for a seed before it.]),))[```rust
+"--shuffle" => {
+    // Before the file, the next word is the file, whatever it looks like.
+    let seed = rest.next_if(|next| !files.is_empty() && u64::from_str_radix(next, 16).is_ok());
+    shuffle = Some(seed.map_or(SEED, |seed| u64::from_str_radix(seed, 16).unwrap_or(SEED)));
+}
+```]
+
+The largest region is `MOST_REGION`, where the buddy system's table of lists ends. A larger one is a mistake on the command line, and exit status 2:
+
+#output(title: "green-tea-trace replay shell.gtt --region-kib 5000000")[
+```
+error: --region-kib needs a number of KiB from 1 to 4194304
+```
+]
+
 == `convert`
 
 `convert` picks the other form unless told, and writes it through `Form::write`. The binary form of this trace is 73,911 bytes against 277,801 for the text, 27% of the size, and it describes the same records:
@@ -161,39 +179,15 @@ Comments don't survive a conversion, because they aren't records. A trace conver
 
 == Tests
 
-The 8 tests run the program's functions directly. They cover the counts in `stat` on a six-record trace with a reallocation and an empty block, the peak of live bytes, rounding in `percent`, the number of rows in a replay, the refusal of records out of order and of a region too small, the checks on the command line, and a round trip through `convert` that also removes a line from a file and expects the error to name it.
+The 11 tests run the program's functions directly. They cover the counts in `stat` on a six-record trace with a reallocation and an empty block, that "before _n_ more" means fewer than _n_, the peak of live bytes, rounding in `percent`, the number of rows in a replay, the refusal of records out of order, of a region too small and of one too large, the checks on the command line, a file named in hexadecimal after `--shuffle`, and a round trip through `convert` that also removes a line from a file and expects the error to name it.
 
 #output(title: "cargo test -p green-tea-trace")[
 ```
-test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 ]
 
 == Limits
-
-- *An off-by-one in the lifetimes line.* "Freed before 8 more are allocated" counts lifetimes up to 7, which is right. "Before 64 more" counts lifetimes up to `LONG_LIVED`, 64, so it means before 65 more (`main.rs:291`). The shell has the same line (`green-tea-shell/src/replay.rs:259`), and the two agree with each other.
-- *A file whose name is a hexadecimal number can't follow `--shuffle`.* The option takes the next argument as its seed if it parses in base 16, and the usage doesn't say the seed is hexadecimal:
-
-#srcfile("green-tea-trace/src/main.rs", lines: ((105, 108),))[```rust
-"--shuffle" => {
-    let seed = rest.next_if(|next| u64::from_str_radix(next, 16).is_ok());
-    shuffle = Some(seed.map_or(SEED, |seed| u64::from_str_radix(seed, 16).unwrap_or(SEED)));
-}
-```]
-
-#output(title: "green-tea-trace replay --shuffle cafe")[
-```
-error: wrong number of files
-```
-]
-
-- *A region of 4 GiB or more panics.* `--region-kib` has no upper limit, `Buddy::new` asserts on one, and the panic loses the tables already built, because output is written only when the command ends:
-
-#output(title: "green-tea-trace replay shell.gtt --region-kib 5000000")[
-```
-a region too large for the table
-```
-]
 
 - It replays against the six free-list configurations, the buddy system and TLSF. `Hardened`, the pools and the slabs are measured by @crate-measure.
 - The whole trace is held in memory, and the standard input is read to its end before anything is printed.

@@ -43,4 +43,15 @@ ok    coop-x86_64     57 switches, as expected
 ```
 ]
 
+== On the pc board
+
+`cargo xtask kernel --board pc` runs 24 of the 25 on x86_64. Every kernel in the table runs but `disk`, because the board has no virtio. `smp`, `shard` and `smr` again get four CPUs. A test is named on the kernel's command line by GRUB, in place of the fw_cfg file, and the shell kernels get their input over a socket once the banner has appeared (@crate-xtask). All 24 pass, under QEMU with UEFI firmware. The first lines of the summary, in release and with one virtual CPU running at a time:
+
+#output(title: "cargo xtask kernel --release --headless --board pc --jobs 1")[
+```
+=== summary
+ok    coop-x86_64     57 switches, as expected
+```
+]
+
 @crate-coop, @crate-preempt and @crate-shell describe each in detail.

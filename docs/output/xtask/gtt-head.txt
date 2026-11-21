@@ -1,4 +1,4 @@
 gtt 1
 # recorded by green-tea-shell on riscv64
-a 804e80b0 33 1
-a 804e80f0 64 8
+a 805060b0 33 1
+a 805060f0 64 8

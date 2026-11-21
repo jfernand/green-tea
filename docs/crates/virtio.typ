@@ -5,14 +5,14 @@
 `green-tea-virtio` implements the virtio device model: the status handshake, feature negotiation, split virtqueues, and the two transports, MMIO on `riscv64` and `aarch64` `virt` and PCI on `x86_64` `q35`. A device driver such as @crate-virtio-blk is written once against the `Transport` trait and runs on all three. Only modern virtio (1.0 and later) is implemented, so everything on the wire is little-endian and the `VERSION_1` feature is required.
 
 #spec(
-  ("Source", [#repo("drivers/virtio/src/"), 4 files, 695 lines]),
+  ("Source", [#repo("drivers/virtio/src/"), 4 files, 991 lines]),
   ("Depends on", [`green-tea-io`, `green-tea-pci`, and `alloc`: a queue is heap-allocated]),
-  ("Used by", [`green-tea-virtio-blk`, `green-tea-bare` (each board's `for_each_virtio`)]),
-  ("Tests", [no host tests; the `disk` kernel, on all three architectures]),
+  ("Used by", [`green-tea-virtio-blk`, `green-tea-bare` (each QEMU board's `for_each_virtio`)]),
+  ("Tests", [15 host tests, on fake devices in memory; the `disk` kernel, on all three architectures]),
 )
 
 #dtable(columns: (auto, 1fr), ("Module", "What it holds"),
-  [crate root], [`Transport`, `negotiate`, `driver_ok`, `AnyTransport`, `Device`, `device_name`, the `ID_*`, `STATUS_*` and `F_VERSION_1` constants],
+  [crate root], [`Transport`, `negotiate`, `failed`, `driver_ok`, `AnyTransport`, `Device`, `device_name`, the `ID_*`, `STATUS_*` and `F_VERSION_1` constants],
   [`mmio`], [`MmioTransport`, and `probe` for one slot],
   [`pci`], [`PciTransport`, and `probe` for one PCI function],
   [`queue`], [`Queue`, `Buffer`, `SIZE`],
@@ -26,7 +26,7 @@ The device ids are the same on every transport: `ID_NET` (1), `ID_BLOCK` (2), `I
 
 `Transport` names the registers by meaning rather than by address:
 
-#srcfile("drivers/virtio/src/lib.rs", lines: ((61, 61), (63, 63), (65, 65), (67, 67), (69, 69), (72, 72), (75, 75), (77, 77), (81, 81), (83, 83), (87, 97),), notes: ((63, [`&mut self` on the feature and queue methods: on both transports they write a selector register first.]), (87, [The one provided method. The generation counter detects a configuration change between the two 32-bit reads, and the loop retries.]),))[```rust
+#srcfile("drivers/virtio/src/lib.rs", lines: ((61, 61), (63, 63), (65, 65), (67, 67), (69, 69), (72, 72), (74, 74), (77, 77), (79, 79), (83, 83), (85, 85), (89, 99),), notes: ((63, [`&mut self` on the feature and queue methods: on both transports they write a selector register first.]), (74, [A separate question from the size, so that a queue in use isn't mistaken for a missing one.]), (89, [The one provided method. The generation counter detects a configuration change between the two 32-bit reads, and the loop retries.]),))[```rust
 pub trait Transport {
 // …
     fn device_features(&mut self) -> u64;
@@ -38,6 +38,8 @@ pub trait Transport {
     fn set_status(&mut self, status: u8);
 // …
     fn max_queue_size(&mut self, queue: u16) -> u16;
+// …
+    fn queue_in_use(&mut self, queue: u16) -> bool;
 // …
     fn setup_queue(&mut self, queue: u16, size: u16, descriptors: u64, driver: u64, device: u64);
 // …
@@ -72,9 +74,9 @@ The driver moves the status byte through a fixed sequence, setting one more bit 
   [`STATUS_FAILED`], [128], [it has given up on the device],
 )
 
-`negotiate` does everything up to the queues, and `driver_ok` the last step:
+`negotiate` does everything up to the queues, `driver_ok` the last step, and `failed` gives up on a device by adding `STATUS_FAILED` to the bits already set, because the spec forbids a driver to clear one:
 
-#srcfile("drivers/virtio/src/lib.rs", lines: ((105, 125), (128, 131),), notes: ((107, [Writing 0 resets the device, and the reset is complete when the status reads 0 again.]), (116, [The agreed set: what the device offers, intersected with what the driver supports plus `F_VERSION_1`, which is bit 32 and always accepted.]), (120, [The device clears `FEATURES_OK` if it can't work with that subset, so the driver has to read it back.]), (130, [Read-modify-write, keeping the bits already set.]),))[```rust
+#srcfile("drivers/virtio/src/lib.rs", lines: ((107, 134), (137, 140),), notes: ((109, [Writing 0 resets the device, and the reset is complete when the status reads 0 again.]), (118, [The agreed set: what the device offers, intersected with what the driver supports plus `F_VERSION_1`, which is bit 32 and always accepted.]), (122, [The device clears `FEATURES_OK` if it can't work with that subset, so the driver has to read it back.]), (139, [Read-modify-write, keeping the bits already set.]),))[```rust
 pub fn negotiate(transport: &mut impl Transport, supported: u64) -> Result<u64, &'static str> {
     transport.set_status(0);
     while transport.status() != 0 {} // a reset may take a moment to finish
@@ -83,7 +85,7 @@ pub fn negotiate(transport: &mut impl Transport, supported: u64) -> Result<u64, 
 
     let offered = transport.device_features();
     if offered & F_VERSION_1 == 0 {
-        transport.set_status(STATUS_FAILED);
+        failed(transport);
         return Err("legacy-only virtio device (no VERSION_1 feature)");
     }
     let features = offered & (supported | F_VERSION_1);
@@ -91,10 +93,17 @@ pub fn negotiate(transport: &mut impl Transport, supported: u64) -> Result<u64, 
     transport.set_status(STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK);
     // The device clears FEATURES_OK if it can't work with that subset.
     if transport.status() & STATUS_FEATURES_OK == 0 {
-        transport.set_status(STATUS_FAILED);
+        failed(transport);
         return Err("the virtio device rejected our features");
     }
     Ok(features)
+}
+
+/// Tell the device we've given up on it. The spec forbids the driver to clear a status
+/// bit, so this adds to the ones already set.
+pub fn failed(transport: &mut impl Transport) {
+    let status = transport.status();
+    transport.set_status(status | STATUS_FAILED);
 }
 // …
 pub fn driver_ok(transport: &mut impl Transport) {
@@ -124,7 +133,7 @@ The `mmio` module drives a block of `0x200` bytes of 32-bit registers per device
 
 The 64-bit feature sets are reached through a 32-bit window with a selector, and a queue's registers through `QUEUE_SEL`. `setup_queue` writes the size and the three addresses, and writes `QUEUE_READY` last, because the device may use the queue from that write on.
 
-`max_queue_size` selects the queue and returns 0 if it is already ready. Otherwise it returns `QUEUE_NUM_MAX`, which the device reports as 0 for a queue that doesn't exist.
+`queue_in_use` selects the queue and reads `QUEUE_READY`. `max_queue_size` selects it and returns `QUEUE_NUM_MAX`, which the device reports as 0 for a queue that doesn't exist.
 
 == The PCI transport
 
@@ -136,7 +145,7 @@ On PCI, a virtio device is a function with vendor `0x1af4`. Its id comes from th
 
 The driver uses three of the structures: type 1 (`CFG_COMMON`), type 2 (`CFG_NOTIFY`) and type 4 (`CFG_DEVICE`). It ignores the ISR status, since it polls.
 
-#srcfile("drivers/virtio/src/pci.rs", lines: ((74, 92),), size: 6.8pt, notes: ((79, [`bar < 6` guards the index, and `ecam.bar` returns `None` for an I/O BAR, so such a capability is skipped.]), (92, [The device needs memory decoding and DMA from here on. This runs even if a capability is missing and `probe` then returns `None`.]),))[```rust
+#srcfile("drivers/virtio/src/pci.rs", lines: ((74, 93),), size: 6.8pt, notes: ((79, [`bar < 6` guards the index, and `ecam.bar` returns `None` for an I/O BAR, so such a capability is skipped.]), (92, [A device without common and notify structures is refused here, and stays off.]), (93, [The device needs memory decoding and DMA from here on.]),))[```rust
 ecam.for_each_capability(f, |cap, cap_id| {
     if cap_id != CAPABILITY_VENDOR {
         return;
@@ -155,18 +164,19 @@ ecam.for_each_capability(f, |cap, cap_id| {
         _ => {}
     }
 });
+let (common, notify) = (common?, notify?);
 ecam.enable(f);
 ```]
 
 The common configuration structure has its fields at fixed offsets, of mixed widths, so `PciTransport` has generic `read<T>` and `write<T>` over it. A queue's setup looks like the MMIO one, with one addition:
 
-#srcfile("drivers/virtio/src/pci.rs", lines: ((161, 163),), size: 6.1pt, notes: ((162, [Each queue has its own notification address: the notify structure, plus `queue_notify_off` times the capability multiplier. It is saved in an array of `MAX_QUEUES` (4), so that `notify` needn't reselect the queue.]),))[```rust
+#srcfile("drivers/virtio/src/pci.rs", lines: ((168, 170),), size: 6.1pt, notes: ((169, [Each queue has its own notification address: the notify structure, plus `queue_notify_off` times the capability multiplier. It is saved in an array of `MAX_QUEUES` (4), so that `notify` needn't reselect the queue. An address of 0 there means the queue was never set up.]),))[```rust
 let offset: u16 = self.read(QUEUE_NOTIFY_OFF);
 self.queue_notify[usize::from(queue)] = self.notify + usize::from(offset) * self.notify_multiplier as usize;
 self.write(QUEUE_ENABLE, 1u16);
 ```]
 
-`probe` then requires the common and notify structures, and allows a device with no device-specific area, recording address 0. `config_generation` is 8 bits wide here, and `read_config_u32` asserts that the device has a device-specific area.
+`probe` requires the common and notify structures, and allows a device with no device-specific area, recording address 0. `config_generation` is 8 bits wide here, and `read_config_u32` asserts that the device has a device-specific area. `setup_queue` asserts that the index is below `MAX_QUEUES` before it writes a register, `queue_in_use` answers `false` past them, and `notify` panics on a queue that was never set up.
 
 == `AnyTransport` and `Device`
 
@@ -195,9 +205,9 @@ The spec asks for alignments of 16, 2 and 4 for the three parts. `repr(C, align(
 
 === Creating a queue
 
-`Queue::new` checks the device's maximum, allocates the rings zeroed, links every descriptor into a free list through its `next` field, and hands the three addresses to the transport:
+`Queue::new` refuses a queue already in use, checks the device's maximum, allocates the rings zeroed, links every descriptor into a free list through its `next` field, and hands the three addresses to the transport:
 
-#srcfile("drivers/virtio/src/queue.rs", lines: ((117, 131),), notes: ((120, [`next` doubles as the free-list link while a descriptor is unused. The list is circular.]), (122, [`AVAIL_F_NO_INTERRUPT`: the driver polls the used ring, so it asks for no interrupts.]),))[```rust
+#srcfile("drivers/virtio/src/queue.rs", lines: ((133, 147),), notes: ((136, [`next` doubles as the free-list link while a descriptor is unused. The list is circular.]), (138, [`AVAIL_F_NO_INTERRUPT`: the driver polls the used ring, so it asks for no interrupts.]),))[```rust
 let rings = Box::into_raw(unsafe { Box::<Rings>::new_zeroed().assume_init() });
 unsafe {
     for i in 0..N {
@@ -219,9 +229,9 @@ The rings are never freed, because the device may still hold their addresses.
 
 === Submitting a chain
 
-A request is a slice of `Buffer`s, each with an `address`, a `length` and `device_writes`. `Buffer::reads` makes one the device reads from a `&T`, and `Buffer::writes` one the device writes from a `&mut T`. `submit` takes that many descriptors off the free list:
+A request is a slice of `Buffer`s, each with an `address`, a `length` and `device_writes`. `Buffer::reads` makes one the device reads from a `&T`, and `Buffer::writes` one the device writes from a `&mut T`. Both panic on 4 GiB or more, which a descriptor's `u32` length can't hold. `submit` takes that many descriptors off the free list:
 
-#srcfile("drivers/virtio/src/queue.rs", lines: ((144, 175),), notes: ((147, [Each descriptor's `next` already names the next free one, so a chain is a prefix of the free list and the loop never writes `next`.]), (169, [Indexes are free-running `u16`s, taken modulo the queue size for a slot.]), (170, [The descriptors and the ring slot have to be visible before the index that publishes them.]), (173, [And the index before the notification.]),))[```rust
+#srcfile("drivers/virtio/src/queue.rs", lines: ((160, 191),), notes: ((163, [Each descriptor's `next` already names the next free one, so a chain is a prefix of the free list and the loop never writes `next`.]), (185, [Indexes are free-running `u16`s, taken modulo the queue size for a slot.]), (186, [The descriptors and the ring slot have to be visible before the index that publishes them.]), (189, [And the index before the notification.]),))[```rust
 for (i, buffer) in buffers.iter().enumerate() {
     unsafe {
         let descriptor = addr_of_mut!((*rings).descriptors[usize::from(current)]);
@@ -260,7 +270,7 @@ Ok(head)
 
 `pop_used` compares the device's index with the last one read. If it moved, it reads the element, and walks the chain to put it back on the free list:
 
-#srcfile("drivers/virtio/src/queue.rs", lines: ((183, 208),), notes: ((187, [The fence between the index and what it covers: the element, and the data the device wrote.]), (199, [The chain's last descriptor is the only one whose link changes. It is spliced in front of the free list.]),))[```rust
+#srcfile("drivers/virtio/src/queue.rs", lines: ((199, 224),), notes: ((203, [The fence between the index and what it covers: the element, and the data the device wrote.]), (215, [The chain's last descriptor is the only one whose link changes. It is spliced in front of the free list.]),))[```rust
     let used = addr_of_mut!((*rings).used);
     if read_volatile(addr_of_mut!((*used).index)) == self.last_used {
         return None;
@@ -293,7 +303,15 @@ Since a finished chain goes back to the front of the free list in its original o
 
 == Exercised by
 
-The `disk` kernel is the only one that uses this crate, and it reaches the device over a different transport per machine. `cargo xtask kernel` attaches a 32 KiB image, passing `-global virtio-mmio.force-legacy=false` on `virt` and `disable-legacy=on` on `q35`, so both transports are modern. The kernel makes 20 requests: the disk's id, 16 reads of 4 sectors, one write, one flush and one read back. That is more than `SIZE`, so both rings wrap: the seventeenth request goes back to slot 0.
+The host tests run the negotiation, both transports and the buffers against fake devices in ordinary memory: a refused feature set keeps the status bits, a queue in use isn't reported as missing, an incomplete PCI device stays off, and a notification for a queue that was never set up panics.
+
+#output(title: "cargo test -p green-tea-virtio")[
+```
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+```
+]
+
+The `disk` kernel is the only one that uses this crate on a machine, and it reaches the device over a different transport per machine. `cargo xtask kernel` attaches a 32 KiB image, passing `-global virtio-mmio.force-legacy=false` on `virt` and `disable-legacy=on` on `q35`, so both transports are modern. The kernel makes 20 requests: the disk's id, 16 reads of 4 sectors, one write, one flush and one read back. That is more than `SIZE`, so both rings wrap: the seventeenth request goes back to slot 0.
 
 The `aarch64` run prints the same three lines as `riscv64`.
 
@@ -317,11 +335,8 @@ PASS: read 64 sectors over virtio-PCI, and wrote one back
 
 - Split virtqueues only, with no packed rings, indirect descriptors or `EVENT_IDX`. The driver polls, and no transport sets up interrupts.
 - A device whose largest queue is under 16 is refused, although a smaller queue would serve a three-descriptor request.
-- `negotiate` writes `STATUS_FAILED` alone (lib.rs lines 113 and 121), which clears the bits already set. Virtio 1.2, section 2.1.1, says the driver "MUST NOT clear a device status bit".
-- `Buffer::reads` and `writes` cast the length to `u32` (queue.rs lines 84 and 88), so a buffer of 4 GiB or more is silently shortened.
-- `Queue::new` reports a queue that is already in use as "no such queue", because `max_queue_size` returns 0 for both.
-- `pci::probe` enables memory decoding and bus mastering (pci.rs line 92) before it knows the device is usable, and leaves them on when it returns `None`. Every scan does this to every virtio function, including those nobody goes on to drive.
-- `PciTransport::notify` on a queue that was never set up writes to address 0 (pci.rs line 167). `setup_queue` with an index of 4 or more panics, after it has already written the queue's registers.
+- `pci::probe` enables memory decoding and bus mastering on every complete virtio function a scan finds, including those nobody goes on to drive.
+- The PCI transport handles four queues, `MAX_QUEUES`. Past them, `max_queue_size` says 0 and `setup_queue` panics.
 - The waits have no timeout: the reset loop in `negotiate` spins until the device answers.
 
 One device model, two transports, three machines. @crate-virtio-blk puts a disk on it.

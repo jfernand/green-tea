@@ -5,10 +5,10 @@
 `green-tea-kmem` is what a kernel allocates for itself with, in two layers. `frames` hands out page frames in blocks of 1 to 1,024 pages, with a binary buddy system whose records are kept apart from the pages. `slab` cuts those pages into caches of objects of one type, and keeps the objects constructed between uses, after Jeff Bonwick's slab allocator.
 
 #spec(
-  ("Source", [#repo("green-tea-kmem/src/"), 3 files, 762 lines without their tests]),
+  ("Source", [#repo("green-tea-kmem/src/"), 3 files, 778 lines without their tests]),
   ("Depends on", [nothing; `no_std`]),
   ("Used by", [`green-tea-bare` (the `kmem` and `task` modules), `green-tea-measure`]),
-  ("Tests", [20 host tests, the `slab` kernel]),
+  ("Tests", [21 host tests, the `slab` kernel]),
 )
 
 #dtable(columns: (auto, 1fr), ("Module", "What it holds"),
@@ -66,18 +66,25 @@ pub struct Frame {
 #bytefield(caption: [A `Frame`: 12 bytes, `repr(C)`],
   ("state", "1", 1), ("order", "1", 1), ("padding", "2", 1), ("next", "4", 2), ("prev", "4", 2))
 
-Keeping the records apart has three consequences. The allocator never reads or writes a free page. The order of an allocated block is on record, so `free` takes an address and nothing else. And a free of a block that isn't allocated can be refused, with `FreeError::NotAFrame` for an address that isn't the start of a frame and `FreeError::NotAllocated` for a free block or the inside of one. The price is the table: the `slab` kernel's 4,096 frames need 12 pages for it.
+Keeping the records apart has three consequences. The allocator never reads or writes a free page. The order of an allocated block is on record, so `free` takes an address and nothing else. And a free of a block that isn't allocated can be refused, with `FreeError::NotAFrame` for an address that isn't the start of a frame, `FreeError::Reserved` for one of the reserved pages, and `FreeError::NotAllocated` for a free block or the inside of one. The price is the table: the `slab` kernel's 4,096 frames need 12 pages for it.
 
-`Frames::new` takes the table and a count of `reserved` pages at the start of the region, which stay allocated. It fills the table with `Frame::NEW`, an allocated block of order 0, and frees the others one at a time, so that the ordinary merging builds the initial free lists:
+`Frames::new` takes the table and a count of `reserved` pages at the start of the region, which stay allocated for good. It fills the table with `Frame::NEW`, an allocated block of order 0, and frees the others one at a time, so that the ordinary merging builds the initial free lists:
 
-#srcfile("green-tea-kmem/src/frames.rs", lines: ((102, 116),), size: 6.3pt)[```rust
+#srcfile("green-tea-kmem/src/frames.rs", lines: ((106, 127),), size: 6.3pt)[```rust
 pub unsafe fn new(base: usize, table: &'a mut [Frame], reserved: usize) -> Frames<'a> {
     assert!(base.is_multiple_of(PAGE), "frame 0 must start on a page");
     assert!(table.len() < NONE as usize && reserved <= table.len(), "a table too large");
     table.fill(Frame::NEW);
     let pages = table.len();
-    let mut frames =
-        Frames { base, table, heads: [NONE; ORDERS], free: [0; ORDERS], used: pages, stats: Stats::default() };
+    let mut frames = Frames {
+        base,
+        table,
+        heads: [NONE; ORDERS],
+        free: [0; ORDERS],
+        reserved,
+        used: pages,
+        stats: Stats::default(),
+    };
     // Every page starts as an allocated block of order 0. Freeing the ones that aren't
     // reserved, one at a time, merges them into the largest blocks that fit.
     for frame in reserved..pages {
@@ -92,7 +99,7 @@ pub unsafe fn new(base: usize, table: &'a mut [Frame], reserved: usize) -> Frame
 
 `allocate` takes an order. It finds the smallest order with a free block, unlinks that block, and halves it until it is the right size. The upper half of each halving becomes a free block:
 
-#srcfile("green-tea-kmem/src/frames.rs", lines: ((121, 140),), notes: ((123, [A search of at most 11 list heads. The cost of an allocation depends on the orders, and never on how many blocks are free.]), (133, [`frame + (1 << half)` is the upper half. The lower half keeps the frame number and is halved again.]),))[```rust
+#srcfile("green-tea-kmem/src/frames.rs", lines: ((132, 151),), notes: ((134, [A search of at most 11 list heads. The cost of an allocation depends on the orders, and never on how many blocks are free.]), (144, [`frame + (1 << half)` is the upper half. The lower half keeps the frame number and is halved again.]),))[```rust
 pub fn allocate(&mut self, order: usize) -> Option<usize> {
     // The smallest free block that is large enough.
     let found = (order..ORDERS).find(|at| self.heads[*at] != NONE);
@@ -117,7 +124,7 @@ pub fn allocate(&mut self, order: usize) -> Option<usize> {
 
 `free` validates the address and calls `release`, which merges for as long as the buddy is free and of the same order:
 
-#srcfile("green-tea-kmem/src/frames.rs", lines: ((158, 181),), notes: ((164, [The buddy's frame number: flip the bit of the block's size.]), (169, [A buddy can be `Free` and smaller, when it has been split and its first part is free. The order tells the two apart.]), (174, [The upper of the two becomes a `Tail`, inside the merged block.]),))[```rust
+#srcfile("green-tea-kmem/src/frames.rs", lines: ((172, 195),), notes: ((178, [The buddy's frame number: flip the bit of the block's size.]), (183, [A buddy can be `Free` and smaller, when it has been split and its first part is free. The order tells the two apart.]), (188, [The upper of the two becomes a `Tail`, inside the merged block.]),))[```rust
 fn release(&mut self, frame: usize) -> usize {
     let freed = self.table[frame].order as usize;
     self.used -= 1 << freed;
@@ -239,7 +246,7 @@ pub fn allocate(&mut self, pages: &mut impl PageSource) -> Option<usize> {
 
 Filling partial slabs first is what lets the others empty, and an empty slab is what `reap` can return. `grow` takes a page, constructs every object in it, threads the free list in address order and writes the record:
 
-#srcfile("green-tea-kmem/src/slab.rs", lines: ((241, 273),), notes: ((252, [A constructor that fails: the ones already built are destroyed, and the page goes back.]), (269, [The next slab starts one colour further on, so objects at one index of successive slabs don't share an offset in the page, and compete less for the same lines of the processor's cache.]),))[```rust
+#srcfile("green-tea-kmem/src/slab.rs", lines: ((241, 275),), notes: ((252, [A constructor that fails: the ones already built are destroyed, and the page goes back.]), (271, [The next slab starts one colour further on, so objects at one index of successive slabs don't share an offset in the page, and compete less for the same lines of the processor's cache.]),))[```rust
 fn grow(&mut self, pages: &mut impl PageSource) -> Option<usize> {
     let page = pages.take_page()?;
     let first = page + self.next_colour * self.align;
@@ -252,7 +259,9 @@ fn grow(&mut self, pages: &mut impl PageSource) -> Option<usize> {
             // Undo the ones that were constructed, and do without the slab.
             if let Some(destructor) = self.destructor {
                 (0..index).for_each(|built| destructor(object(built) as *mut u8));
+                self.stats.destroyed += index;
             }
+            self.stats.constructed += index;
             // SAFETY: the page came from `pages` a moment ago.
             unsafe { pages.give_page(page) };
             return None;
@@ -309,11 +318,11 @@ A slab that empties stays in the cache, constructed. `Cache::reap` is the only w
 
 == How it is exercised
 
-The 20 host tests are 9 for `frames` and 11 for `slab`. Among them, `a_random_workload_leaves_the_region_as_it_found_it` drives the buddy system through 20,000 steps of random orders and calls `check` every 500, and `a_cache_over_page_frames_gives_every_page_back` runs a `Cache` over a real `Frames`.
+The 21 host tests are 10 for `frames` and 11 for `slab`. Among them, `a_random_workload_leaves_the_region_as_it_found_it` drives the buddy system through 20,000 steps of random orders and calls `check` every 500, and `a_cache_over_page_frames_gives_every_page_back` runs a `Cache` over a real `Frames`.
 
 #output(title: "cargo test -p green-tea-kmem")[
 ```
-test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 ]
 
@@ -384,7 +393,7 @@ The kernel's own task records come from such a cache, and a constructed record h
 
 #output(title: "the same run")[
 ```
-the kernel's cache of task records: a record is 472 bytes, a buffer 480, and a slab holds 8
+the kernel's cache of task records: a record is 488 bytes, a buffer 496, and a slab holds 8
   a constructed record has a stack, of which the pool has 102
 1000 tasks, one after another, every one with its locals at 0x80a09f2e:
   1001 records allocated, 8 constructed, in 1 slab; 8 stacks taken from the pool
@@ -397,8 +406,6 @@ the kernel's cache of task records: a record is 472 bytes, a buffer 480, and a s
 - A slab is one page. Bonwick's layout for objects larger than an eighth of a page, with the records kept elsewhere and slabs of several pages, isn't here, so a large object wastes much of its slab, and an object that doesn't fit beside its link and the record makes `Cache::new` panic.
 - The buddy system fragments externally, and rounds every request up to a power of two pages.
 - `free` of a slab object can't tell an address from another cache's slab, or from a page that was never a slab. Its signature is `unsafe` for that reason.
-- *Defect.* `Frames::new` documents the first `reserved` pages as allocated "for good" (`frames.rs:93-95`), and nothing enforces it. `free` accepts a reserved frame, and the page, which in the kernel may hold the allocator's own table, goes on a free list. A run with 4 reserved pages of 16 went from 12 free pages to 13 on `free(base)`.
-- *Defect.* `Stats::constructed` and `destroyed` are documented as calls of the constructor that succeeded and calls of the destructor (`slab.rs:70-72`). When a constructor fails part way through a slab, `grow` makes those calls without counting them (`slab.rs:247-258`). A run whose fourth constructor call failed reported `constructed: 0` and `destroyed: 0`.
 - A cache given a destructor and no constructor runs the destructor at `reap` on objects nothing ever constructed.
 
 Pages from a table, objects from pages. @crate-region allocates without freeing anything one block at a time.

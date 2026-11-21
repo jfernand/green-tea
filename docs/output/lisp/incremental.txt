@@ -1,5 +1,5 @@
 seven programs in 4096 words: the longest stop, in units of work
-                         Chapter 13     a cycle whole       a cycle in steps of 4 units an allocation
+                         mark-sweep     a cycle whole       a cycle in steps of 4 units an allocation
   program   allocated  collections  most  cycles  most     cycles  steps  most  stalls  most root slots
   list           8190            9  1292      19   803         20   4188    24       0               24
   fib            2002            1  1063       4   596          3    473    43       0               43

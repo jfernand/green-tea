@@ -5,10 +5,10 @@
 `green-tea-smp` makes an allocator usable from several CPUs at once. `SpinLock` is mutual exclusion with one atomic flag. `Cache` is one CPU's own stock of free blocks, by size class, which it allocates from and frees to without a lock. `Central` is what the caches share: the heap and a depot of spare batches, behind one `SpinLock`.
 
 #spec(
-  ("Source", [#repo("green-tea-smp/src/"), 3 files, 420 lines without their tests]),
+  ("Source", [#repo("green-tea-smp/src/"), 3 files, 434 lines without their tests]),
   ("Depends on", [`green-tea-fit`; `no_std`]),
   ("Used by", [`green-tea-bare`, `green-tea-shard`, `green-tea-measure`]),
-  ("Tests", [12 host tests on real threads, the `smp` kernel]),
+  ("Tests", [13 host tests on real threads, a doc test that must not compile, the `smp` kernel]),
 )
 
 #dtable(columns: (auto, 1fr), ("Module", "What it holds"),
@@ -35,7 +35,7 @@ A block's contents move between CPUs by the same route. A cache that frees a blo
 
 == `SpinLock`
 
-#srcfile("green-tea-smp/src/lock.rs", lines: ((30, 38), (41, 41), (44, 46),))[```rust
+#srcfile("green-tea-smp/src/lock.rs", lines: ((30, 38), (41, 41), (56, 60),), notes: ((59, [A guard hands out the `T` as a `&mut T` would, so it is `Sync` only if `T` is.]),))[```rust
 pub struct SpinLock<T, R = Spin> {
     held: AtomicBool,
     /// Times the lock was taken. Written only by whoever holds the lock.
@@ -50,12 +50,14 @@ unsafe impl<T: Send, R> Sync for SpinLock<T, R> {}
 // …
 pub struct Guard<'a, T, R = Spin> {
     lock: &'a SpinLock<T, R>,
+    /// The guard gives access to a `T` as a `&mut T` would, and is `Sync` only if that is.
+    value: PhantomData<&'a mut T>,
 }
 ```]
 
 The lock is *test and test-and-set*. The first attempt is a swap. A CPU that loses waits by reading, which leaves the flag's cache line shared between the waiting CPUs, and swaps again only when it sees the flag clear:
 
-#srcfile("green-tea-smp/src/lock.rs", lines: ((61, 82),), notes: ((64, [The uncontended path: one atomic swap.]), (70, [`Relaxed` loads while waiting. A swap here would take the cache line exclusively on every iteration.]), (74, [Another waiter may win between the load and this swap, so it is in a loop.]), (80, [Not a `fetch_add`: the lock is held, so nobody else writes this count.]),))[```rust
+#srcfile("green-tea-smp/src/lock.rs", lines: ((75, 96),), notes: ((78, [The uncontended path: one atomic swap.]), (84, [`Relaxed` loads while waiting. A swap here would take the cache line exclusively on every iteration.]), (88, [Another waiter may win between the load and this swap, so it is in a loop.]), (94, [Not a `fetch_add`: the lock is held, so nobody else writes this count.]),))[```rust
 pub fn lock(&self) -> Guard<'_, T, R> {
     // The swap writes `true` and returns what was there, in one step that no other
     // CPU can come between. If it returns `false`, the flag was clear and is now ours.
@@ -76,13 +78,13 @@ pub fn lock(&self) -> Guard<'_, T, R> {
     }
     // We hold the lock, so nobody else is writing this count.
     self.acquisitions.store(self.acquisitions.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
-    Guard { lock: self }
+    Guard { lock: self, value: PhantomData }
 }
 ```]
 
 Between two looks, a waiter calls `R::relax(spins)`, from the `Relax` trait. `Spin`, the default, is `core::hint::spin_loop`, right for a kernel where the holder is running on another hart. The tests supply a `Relax` that calls `thread::yield_now` every 64 spins, because their threads may outnumber the host's free CPUs and a thread spinning on a descheduled holder wastes a time slice.
 
-`lock` returns a `Guard`, whose `Deref` and `DerefMut` reach the value and whose `Drop` releases the lock. `SpinLock::new` is `const`. `with` runs a closure under the lock, `get_mut` reaches the value through `&mut self` with no locking at all, and `counts` returns the acquisitions and how many of them had to wait.
+`lock` returns a `Guard`, whose `Deref` and `DerefMut` reach the value and whose `Drop` releases the lock. The `PhantomData` keeps a `Guard<Cell<u32>>` from being `Sync`, because two threads sharing it could write the `Cell` at once, and a `compile_fail` doc test on `Guard` holds it to that. `SpinLock::new` is `const`. `with` runs a closure under the lock, `get_mut` reaches the value through `&mut self` with no locking at all, and `counts` returns the acquisitions and how many of them had to wait.
 
 == `Cache` and `Central`
 
@@ -207,7 +209,7 @@ To the heap, a block in a cache or in the depot is allocated. The heap's count o
 
 == How it is exercised
 
-The 12 tests are 2 for the lock and 10 for the caches. Three of them run on several threads:
+The 13 tests are 3 for the lock and 10 for the caches. Three of them run on several threads:
 
 - `four_threads_adding_under_the_lock_lose_nothing`
 - `four_threads_with_a_cache_each_leave_the_heap_whole`
@@ -215,7 +217,7 @@ The 12 tests are 2 for the lock and 10 for the caches. Three of them run on seve
 
 #output(title: "cargo test -p green-tea-smp")[
 ```
-test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 ]
 
@@ -226,23 +228,23 @@ The `smp` kernel runs on four harts. The first experiment is the lock. Each CPU 
 4 CPUs are running: the one that booted, and 3 it started
 each CPU adds 1 to a counter 1000000 times:
   with a lock: the counter is 4000000, and the lock was taken 4000000 times
-  this run: without a lock the counter is 1591995; with one, 3986052 acquisitions waited
+  this run: without a lock the counter is 1842202; with one, 3965903 acquisitions waited
 ```
 ]
 
-Without the lock, 2,408,005 of the 4,000,000 increments were lost in this run. The second experiment makes 20,000 allocations and frees per CPU, three ways:
+Without the lock, 2,157,798 of the 4,000,000 increments were lost in this run. The second experiment makes 20,000 allocations and frees per CPU, three ways:
 
 #output(title: "the same run", size: 5.8pt)[
 ```
 each CPU makes 20000 allocations and frees, of 1 to 512 bytes, holding up to 96:
   the kernel's heap, behind its lock:  80128 operations, and the lock was taken 80128 times
-  this run: 64151 of those waited for another CPU; 316 ms
+  this run: 63049 of those waited for another CPU; 542 ms
   a cache for each CPU:                80128 operations, and the lock was taken 2680 times
     1373 times to fill a cache with 8 blocks, and 1307 times to take 8 back
     when the work ended the CPUs held no blocks, and their caches held 528, of 105984 bytes in all
-  this run: 668 of those waited for another CPU; 210 ms
+  this run: 774 of those waited for another CPU; 317 ms
   the same, with a depot of 4 batches:  80128 operations, and the lock was taken 2680 times
-  this run: 136 of those waited; 193 ms; the depot served 1221 of the 1373 fills, and the heap made 1808 allocations and frees
+  this run: 152 of those waited; 284 ms; the depot served 1185 of the 1373 fills, and the heap made 2376 allocations and frees
 ```
 ]
 
@@ -255,6 +257,5 @@ The acquisitions are the same on every run. The waits and milliseconds are marke
 - A `Cache` has no `Drop`: one dropped without `flush_all` loses its blocks to the heap, which counts them as allocated for good.
 - A `Cache` doesn't know which `Central` filled it. The `Cache` and `Central` also take their `batch` separately, and a cache whose batch differs from its central's never gets a batch into the depot.
 - A block freed by another CPU goes to the freeing CPU's cache, so a producer and a consumer move every block through the central lock. @crate-shard is built around that case.
-- *Defect.* `SpinLock` declares `Sync` for `T: Send` (`lock.rs:41`), which is right for the lock. `Guard` has no bound of its own, and contains only a `&SpinLock`, so the compiler derives `Guard<T>: Sync` for any `T: Send`, including `Cell<u32>`, which isn't `Sync`. A `&Guard<Cell<u32>>` shared between two threads gives both a `&Cell<u32>`: a data race in safe code. A compile check confirms the `Sync` bound holds. `std::sync::MutexGuard` has an explicit `T: Sync` bound for this reason.
 
 One flag, a list per class, and a lock taken 30 times less often. @crate-shard takes no lock at all.

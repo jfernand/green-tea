@@ -25,6 +25,8 @@
                	fsd	fs9, 0xb8(a0)
                	fsd	fs10, 0xc0(a0)
                	fsd	fs11, 0xc8(a0)
+               	frcsr	t0
+               	sd	t0, 0xd0(a0)
                	ld	sp, 0x0(a1)
                	ld	ra, 0x8(a1)
                	ld	s0, 0x10(a1)
@@ -51,6 +53,8 @@
                	fld	fs9, 0xb8(a1)
                	fld	fs10, 0xc0(a1)
                	fld	fs11, 0xc8(a1)
+               	ld	t0, 0xd0(a1)
+               	fscsr	t0
                	ret
                	nop
 <bootstrap_entry>:

@@ -20,28 +20,28 @@ fw_cfg files:
   0x0031      6 opt/green-tea/test
   0x0032  28672 vgaroms/vgabios-ramfb.bin
 ramfb: 640x480 XRGB8888
-kernel: 0x100000..0xa00000, 9216 KiB
+kernel: 0x100000..0xc00000, 11264 KiB
   section      start        end      bytes    align
   (gap)                                 32
-  .text    0x00100020 0x0027946f   1545295        1
+  .text    0x00100020 0x0027ec6f   1567823        1
   (gap)                                  1
-  .rodata  0x00279470 0x002a4c2b    178107       16
-  (gap)                                453
-  .data    0x002a4df0 0x002a6138      4936       16
-  (gap)                               3784
-  .bss     0x002a7000 0x003e6000   1306624       16
-  .stack   0x003e6000 0x003f6000     65536     4096
-  .heap    0x003f6000 0x007f6000   4194304     4096
-  (gap)                              40960
-  .stacks  0x00800000 0x00a00000   2097152  2097152
+  .rodata  0x0027ec70 0x002aad33    180419       16
+  (gap)                                461
+  .data    0x002aaf00 0x002ac5a0      5792       16
+  (gap)                               2656
+  .bss     0x002ad000 0x00409000   1425408       16
+  .stack   0x00409000 0x00419000     65536     4096
+  .heap    0x00419000 0x00819000   4194304     4096
+  (gap)                            1994752
+  .stacks  0x00a00000 0x00c00000   2097152  2097152
   address    in       what
-  0x00121140 .text    a function
-  0x00280e40 .rodata  a constant static
-  0x002a4e08 .data    an initialised static
-  0x002a7028 .bss     a zeroed static
-  0x003f1fef .stack   a local of kmain's
-  0x003f6010 .heap    a Box<u64>
-  0x003f7000 .heap    a Box<Page>
-  0x00804f46 .stacks  a local of a task's
+  0x00107180 .text    a function
+  0x00285908 .rodata  a constant static
+  0x002aaf18 .data    an initialised static
+  0x002ad028 .bss     a zeroed static
+  0x00414fef .stack   a local of kmain's
+  0x00419010 .heap    a Box<u64>
+  0x0041a000 .heap    a Box<Page>
+  0x00a04f46 .stacks  a local of a task's
 PASS: 7 sections in order and aligned; 8 addresses where they should be
 halting

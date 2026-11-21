@@ -5,10 +5,10 @@
 `green-tea-virtio-blk` drives a virtio disk over any `Transport`: it reads and writes whole 512-byte sectors, flushes the write cache and reads the device's serial number. It makes one request at a time and polls for the answer.
 
 #spec(
-  ("Source", [#repo("drivers/virtio-blk/src/lib.rs"), 191 lines]),
+  ("Source", [#repo("drivers/virtio-blk/src/lib.rs"), 339 lines]),
   ("Depends on", [`green-tea-io`, `green-tea-virtio`, and `alloc`]),
   ("Used by", [`green-tea-bare` (re-exported as `virtio_blk`), and through it `green-tea-coop`]),
-  ("Tests", [no host tests; the `disk` kernel, on all three architectures]),
+  ("Tests", [5 host tests, against a fake disk in memory; the `disk` kernel, on all three architectures]),
 )
 
 #dtable(columns: (auto, 1fr), ("Item", "What it does"),
@@ -22,12 +22,12 @@
   [`id()`], [the serial number: 20 bytes, NUL-padded],
   [`SECTOR_SIZE`], [512],
   [`F_RO`, `F_FLUSH`], [feature bits 5 and 9, the two the driver accepts],
-  [`Error`], [`Unaligned`, `OutOfRange`, `ReadOnly`, `Io`, `Unsupported`, `Device`, with a `Display` message each],
+  [`Error`], [`Unaligned`, `OutOfRange`, `TooLong`, `ReadOnly`, `Io`, `Unsupported`, `Device`, with a `Display` message each],
 )
 
 == Initialization
 
-`Blk::new` calls `negotiate` accepting only `F_RO` and `F_FLUSH`, sets up queue 0, calls `driver_ok`, and reads the capacity, the first 64-bit field of the configuration area, once. It then allocates the `Request` on the heap, so that its address stays put wherever the `Blk` moves.
+`Blk::new` calls `negotiate` accepting only `F_RO` and `F_FLUSH`, sets up queue 0 (marking the device failed if that doesn't work), calls `driver_ok`, and reads the capacity, the first 64-bit field of the configuration area, once. It then allocates the `Request` on the heap, so that its address stays put wherever the `Blk` moves.
 
 == Requests
 
@@ -48,13 +48,12 @@ The first three fields are the 16-byte `Header`, in one descriptor. The data is 
 
 The status byte is `S_OK` (0), `S_IOERR` (1) or `S_UNSUPP` (2). The driver starts it at `S_PENDING`, `0xff`, a value the device doesn't send, so that a status left unwritten reads as an error.
 
-`read` and `write` first run `check`, which requires a non-zero whole number of sectors and uses `checked_add`, so that a sector number near `u64::MAX` can't wrap past the capacity. `write` first refuses a read-only disk, and `flush` on a disk without `F_FLUSH` succeeds at once, with no request.
+`read` and `write` first run `check`, which requires a non-zero whole number of sectors under 4 GiB, returning `TooLong` otherwise, and uses `checked_add`, so that a sector number near `u64::MAX` can't wrap past the capacity. `read` then compares the bytes the device says it wrote with the buffer plus the status byte, and a short count is `Device`. `write` first refuses a read-only disk, and `flush` on a disk without `F_FLUSH` succeeds at once, with no request.
 
 
 `request` is where they meet:
 
-#srcfile("drivers/virtio-blk/src/lib.rs", lines: ((160, 165), (168, 190),), notes: ((169, [The chain: header, data, status. The two driver-owned `Buffer`s are built on the two lines this listing omits.]), (175, [A spin on the used ring. The `_written` count is ignored.]), (180, [`pop_used` has fenced the ring; this one covers the data and the status byte.]), (181, [With one request at a time, the answer has to be for this chain.]),))[```rust
-fn request(&mut self, kind: u32, sector: u64, data: Option<Buffer>) -> Result<(), Error> {
+#srcfile("drivers/virtio-blk/src/lib.rs", lines: ((173, 177), (180, 202),), notes: ((181, [The chain: header, data, status. The two driver-owned `Buffer`s are built on the two lines this listing omits.]), (187, [A spin on the used ring, keeping the count of bytes the device wrote.]), (192, [`pop_used` has fenced the ring; this one covers the data and the status byte.]), (193, [With one request at a time, the answer has to be for this chain.]), (197, [`read` compares the count with the buffer, and a short one is `Device`.]),))[```rust
     let request = self.request;
     unsafe {
         write_volatile(&raw mut (*request).header, Header { kind, reserved: 0, sector });
@@ -67,9 +66,9 @@ fn request(&mut self, kind: u32, sector: u64, data: Option<Buffer>) -> Result<()
     }
     .map_err(|_| Error::Device)?;
 
-    let done = loop {
-        if let Some((done, _written)) = self.queue.pop_used() {
-            break done;
+    let (done, written) = loop {
+        if let Some(used) = self.queue.pop_used() {
+            break used;
         }
         core::hint::spin_loop();
     };
@@ -78,7 +77,7 @@ fn request(&mut self, kind: u32, sector: u64, data: Option<Buffer>) -> Result<()
         return Err(Error::Device);
     }
     match unsafe { read_volatile(&raw const (*request).status) } {
-        S_OK => Ok(()),
+        S_OK => Ok(written),
         S_IOERR => Err(Error::Io),
         S_UNSUPP => Err(Error::Unsupported),
         _ => Err(Error::Device),
@@ -102,15 +101,20 @@ PASS: read 64 sectors over virtio-MMIO, and wrote one back
 ```
 ]
 
-The `x86_64` run passes the same test over PCI, with the recording in @crate-virtio. The test doesn't exercise `Io`, `Unsupported`, `ReadOnly` or `Device`: QEMU's disk gave it no reason to.
+The `x86_64` run passes the same test over PCI, with the recording in @crate-virtio. The kernel test doesn't exercise `Io`, `Unsupported`, `ReadOnly` or `Device`: QEMU's disk gave it no reason to. Five host tests use a fake disk that answers on `notify`: a read returns the device's bytes, a failed queue marks the device failed, a short read reported as OK is `Device`, a write needs only its status byte back, and a 4 GiB read is `TooLong` before the device hears of it.
+
+#output(title: "cargo test -p green-tea-virtio-blk")[
+```
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+```
+]
 
 == Limits
 
 - One request at a time, polled, with no timeout: a device that never answers hangs the kernel.
-- `Blk::new` doesn't set `STATUS_FAILED` when `Queue::new` fails (line 94), and leaves the device part-way through initialization.
 - The capacity is read once, so a resized disk isn't noticed.
-- The `_written` count in the used ring is ignored (line 175), so a device that reports success after a short read goes undetected.
+- Only `read` checks the used ring's count. `id` ignores it, so a device that writes fewer than 20 bytes and reports success goes undetected.
 - `Blk` has no `Drop`: its `Request` is never freed, and the device is never reset.
 - The driver negotiates neither `F_SEG_MAX`, `F_SIZE_MAX` nor `F_BLK_SIZE`, and assumes 512-byte sectors and one data segment of any length.
 
-Three buffers per request, and a disk on every architecture. @crate-bare is what puts these drivers on a machine.
+Three buffers per request, and a disk on every architecture. @crate-multiboot2 starts the drivers a physical PC needs.

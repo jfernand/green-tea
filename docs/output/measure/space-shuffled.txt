@@ -1,4 +1,4 @@
-shell, shuffled: 20483 events, 10316 allocations of 656120 bytes in all, 18528 bytes live at the peak; checksum f137558e1fe4dcb2
+shell, shuffled: 20483 events, 10316 allocations of 656120 bytes in all, 18528 bytes live at the peak; checksum d48aa9507ec3677c
 each allocator in regions of 512 KiB:
   allocator    peak used  footprint  over peak live  over peak used  blocks searched  per event  most
   first-addr       23520      25216           36.1%            7.2%           131331       6.41    42

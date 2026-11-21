@@ -283,10 +283,10 @@ The `tlsf` kernel puts four allocators in front of one allocation of 4,096 bytes
 ```
 an allocation of 4,096 bytes and its free, with holes of 64 bytes in the way (100 of each, averaged):
   holes  allocator               looked at  walked past  microseconds
-   8000  first fit, by address        8001         8000       2569.3
-   8000  best fit, by address         8001         8000       2563.0
-   8000  buddy system                    1            0          2.2
-   8000  TLSF                            1            0          4.1
+   8000  first fit, by address        8001         8000       4373.6
+   8000  best fit, by address         8001         8000       5518.7
+   8000  buddy system                    1            0          4.1
+   8000  TLSF                            1            0          7.6
 the kernel's heap (TLSF): 6622 allocations and 6621 frees since boot; the most blocks one allocation looked at: 1; the most one free walked past: 0
 ```
 ]

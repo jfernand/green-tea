@@ -33,43 +33,43 @@ collections, and objects traced, in a heap that is a multiple of the smallest:
   closure         8           5       364             6       430        6       430
 one collection, run 1; the last column is a time, and varies from run to run:
   heap             live  garbage   traced   walked  words moved  microseconds
-  mark-sweep       1000   100000     1000   101000            0           273
-  mark-compact     1000   100000     1000   303000         3000           367
+  mark-sweep       1000   100000     1000   101000            0           267
+  mark-compact     1000   100000     1000   303000         3000           351
   copying          1000   100000     1000        0         3000            14
-  mark-sweep      10000   100000    10000   110000            0           347
+  mark-sweep      10000   100000    10000   110000            0           370
   mark-compact    10000   100000    10000   330000        30000           462
-  copying         10000   100000    10000        0        30000           145
-  mark-sweep     100000   100000   100000   200000            0          1106
-  mark-compact   100000   100000   100000   600000       300000          1665
-  copying        100000   100000   100000        0       300000          1810
-  mark-sweep     100000     1000   100000   101000            0           753
-  mark-compact   100000     1000   100000   303000       300000          1349
-  copying        100000     1000   100000        0       300000           722
+  copying         10000   100000    10000        0        30000           151
+  mark-sweep     100000   100000   100000   200000            0          1219
+  mark-compact   100000   100000   100000   600000       300000          1817
+  copying        100000   100000   100000        0       300000          1591
+  mark-sweep     100000     1000   100000   101000            0           804
+  mark-compact   100000     1000   100000   303000       300000          1520
+  copying        100000     1000   100000        0       300000           644
 one collection, run 2; the last column is a time, and varies from run to run:
   heap             live  garbage   traced   walked  words moved  microseconds
-  mark-sweep       1000   100000     1000   101000            0           285
-  mark-compact     1000   100000     1000   303000         3000           396
-  copying          1000   100000     1000        0         3000             7
-  mark-sweep      10000   100000    10000   110000            0           370
-  mark-compact    10000   100000    10000   330000        30000           520
-  copying         10000   100000    10000        0        30000            71
-  mark-sweep     100000   100000   100000   200000            0          1071
-  mark-compact   100000   100000   100000   600000       300000          1927
-  copying        100000   100000   100000        0       300000          1377
-  mark-sweep     100000     1000   100000   101000            0           775
-  mark-compact   100000     1000   100000   303000       300000          1388
-  copying        100000     1000   100000        0       300000           724
+  mark-sweep       1000   100000     1000   101000            0           295
+  mark-compact     1000   100000     1000   303000         3000           359
+  copying          1000   100000     1000        0         3000            11
+  mark-sweep      10000   100000    10000   110000            0           349
+  mark-compact    10000   100000    10000   330000        30000           529
+  copying         10000   100000    10000        0        30000            65
+  mark-sweep     100000   100000   100000   200000            0          1541
+  mark-compact   100000   100000   100000   600000       300000          2054
+  copying        100000   100000   100000        0       300000          1463
+  mark-sweep     100000     1000   100000   101000            0           761
+  mark-compact   100000     1000   100000   303000       300000          1635
+  copying        100000     1000   100000        0       300000           758
 one collection, run 3; the last column is a time, and varies from run to run:
   heap             live  garbage   traced   walked  words moved  microseconds
-  mark-sweep       1000   100000     1000   101000            0           279
-  mark-compact     1000   100000     1000   303000         3000           389
+  mark-sweep       1000   100000     1000   101000            0           248
+  mark-compact     1000   100000     1000   303000         3000           408
   copying          1000   100000     1000        0         3000             7
-  mark-sweep      10000   100000    10000   110000            0           344
-  mark-compact    10000   100000    10000   330000        30000           547
-  copying         10000   100000    10000        0        30000            69
-  mark-sweep     100000   100000   100000   200000            0          1067
-  mark-compact   100000   100000   100000   600000       300000          1723
-  copying        100000   100000   100000        0       300000           575
-  mark-sweep     100000     1000   100000   101000            0           657
-  mark-compact   100000     1000   100000   303000       300000          1139
-  copying        100000     1000   100000        0       300000           570
+  mark-sweep      10000   100000    10000   110000            0           387
+  mark-compact    10000   100000    10000   330000        30000           727
+  copying         10000   100000    10000        0        30000            62
+  mark-sweep     100000   100000   100000   200000            0          1082
+  mark-compact   100000   100000   100000   600000       300000          1748
+  copying        100000   100000   100000        0       300000           659
+  mark-sweep     100000     1000   100000   101000            0           882
+  mark-compact   100000     1000   100000   303000       300000          1284
+  copying        100000     1000   100000        0       300000           698
