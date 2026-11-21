@@ -78,7 +78,12 @@ pub fn spawn(func: impl FnOnce() + 'static) -> Box<Task> {
     task
 }
 
+/// Suspend the current task and switch back to the scheduler.
+///
+/// # Panics
+/// If called outside a task.
 pub fn yield_now() {
+    assert!(unsafe { !CURRENT.is_null() }, "yield_now called outside a task");
     unsafe { swap_context(&raw mut (*CURRENT).context, &raw const MAIN) };
 }
 
@@ -129,6 +134,12 @@ mod tests {
             .status()
             .unwrap();
         assert!(status.success(), "the child failed: {status}");
+    }
+
+    #[test]
+    #[should_panic(expected = "yield_now called outside a task")]
+    fn yield_outside_a_task_panics() {
+        yield_now();
     }
 
     #[test]
