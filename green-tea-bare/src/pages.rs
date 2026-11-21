@@ -19,10 +19,10 @@
 //! On aarch64 the MMU is off: every page is always there, nothing faults, and `release`
 //! does nothing.
 
-use crate::global::Global;
 use crate::heap;
 use crate::platform::{Board, Platform, TimerInterrupt};
 use core::ops::Range;
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 use green_tea_fit::pages::idle_ranges;
 
 pub const PAGE: usize = 4096;
@@ -32,12 +32,19 @@ unsafe extern "C" {
     static __heap_end: u8;
 }
 
-static FAULTS: Global<usize> = Global::new(0);
-static MAPPED: Global<usize> = Global::new(0);
-static PEAK: Global<usize> = Global::new(0);
-static RELEASED: Global<usize> = Global::new(0);
+// Atomics, since any CPU can take a fault.
+static FAULTS: AtomicUsize = AtomicUsize::new(0);
+static MAPPED: AtomicUsize = AtomicUsize::new(0);
+static PEAK: AtomicUsize = AtomicUsize::new(0);
+static RELEASED: AtomicUsize = AtomicUsize::new(0);
 /// Set by `map_all`: the whole heap is mapped, and stays mapped.
-static WHOLE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static WHOLE: AtomicBool = AtomicBool::new(false);
+
+/// Count one more page mapped.
+fn count_mapped() {
+    let mapped = MAPPED.fetch_add(1, Relaxed) + 1;
+    PEAK.fetch_max(mapped, Relaxed);
+}
 
 /// What has happened to the heap's pages so far.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -92,7 +99,13 @@ pub fn stats() -> Stats {
     if !Board::DEMAND_PAGING {
         return Stats { reserved, mapped: reserved, peak: reserved, faults: 0, released: 0 };
     }
-    Stats { reserved, mapped: MAPPED.get(), peak: PEAK.get(), faults: FAULTS.get(), released: RELEASED.get() }
+    Stats {
+        reserved,
+        mapped: MAPPED.load(Relaxed),
+        peak: PEAK.load(Relaxed),
+        faults: FAULTS.load(Relaxed),
+        released: RELEASED.load(Relaxed),
+    }
 }
 
 /// Called by a board's fault handler for a page fault at `addr`, on the fault stack, with
@@ -110,31 +123,25 @@ pub fn fault(addr: usize) -> bool {
     if was_mapped {
         return false; // a fault on a page that is there: not for want of a mapping
     }
-    FAULTS.set(FAULTS.get() + 1);
-    MAPPED.set(MAPPED.get() + 1);
-    PEAK.set(
-        PEAK.get()
-            .max(MAPPED.get()),
-    );
+    FAULTS.fetch_add(1, Relaxed);
+    count_mapped();
     true
 }
 
 /// Map every page of the heap that isn't mapped yet, and release none from now on.
 ///
-/// Demand paging here is for one CPU: there is one fault stack, the counters above are
-/// plain statics, and unmapping a page flushes one CPU's TLB. So before a kernel starts
-/// its other CPUs ([`crate::cpus::start_all`]) the heap is mapped whole, and after that
+/// Demand paging here is for one CPU: unmapping a page flushes one CPU's TLB, and nothing
+/// tells the others. So before a kernel starts its other CPUs ([`crate::cpus::start_all`]) the heap is mapped whole, and after that
 /// no CPU faults on it and no page table entry changes.
 pub fn map_all() {
     if !Board::DEMAND_PAGING {
         return;
     }
-    WHOLE.store(true, core::sync::atomic::Ordering::Relaxed);
+    WHOLE.store(true, Relaxed);
     for page in heap_range().step_by(PAGE) {
         Board::without_interrupts(|| {
             if !Board::set_mapped(page, true) {
-                MAPPED.set(MAPPED.get() + 1);
-                PEAK.set(PEAK.get().max(MAPPED.get()));
+                count_mapped();
             }
         });
     }
@@ -182,7 +189,7 @@ pub fn for_each_run(mut f: impl FnMut(Range<usize>)) {
 /// Nothing in those pages may be needed again: `range` must be memory that is free, in the
 /// heap, and not about to be read.
 pub unsafe fn release(range: Range<usize>) -> usize {
-    if !Board::DEMAND_PAGING || WHOLE.load(core::sync::atomic::Ordering::Relaxed) {
+    if !Board::DEMAND_PAGING || WHOLE.load(Relaxed) {
         return 0;
     }
     let heap = heap_range();
@@ -202,8 +209,8 @@ pub unsafe fn release(range: Range<usize>) -> usize {
                 // SAFETY: the page is mapped, and the caller says nothing needs it.
                 unsafe { core::ptr::write_bytes(page as *mut u8, 0, PAGE) };
                 Board::set_mapped(page, false);
-                MAPPED.set(MAPPED.get() - 1);
-                RELEASED.set(RELEASED.get() + 1);
+                MAPPED.fetch_sub(1, Relaxed);
+                RELEASED.fetch_add(1, Relaxed);
                 released += 1;
             }
         });

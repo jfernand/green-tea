@@ -105,6 +105,12 @@ pub trait Platform {
         FwCfg(Self::FW_CFG)
     }
 
+    /// The first address past the machine's RAM, on a board where an access beyond it
+    /// would go unnoticed. On the others it faults, and the fault handler reports it.
+    fn ram_end() -> Option<usize> {
+        None
+    }
+
     /// Call `f` with every virtio device on the board: in `virt`'s virtio-mmio slots on
     /// riscv64 and aarch64, on the PCI bus on x86_64. An error if one is there that the
     /// driver can't use (a legacy virtio-mmio device).
@@ -129,7 +135,7 @@ pub trait Platform {
 /// and with every register of the interrupted code saved, so a handler may switch to
 /// another task and come back much later.
 pub trait TimerInterrupt: Platform {
-    /// Install the trap handler and enable the timer interrupt at its source, so that
+    /// Enable the timer interrupt at its source (`init` installed the trap handler), so that
     /// `on_tick` runs once every time a deadline set with `set_deadline` passes, while
     /// interrupts are on. Interrupts stay off until `interrupts_on`.
     fn init_timer(on_tick: fn());

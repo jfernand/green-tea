@@ -1,4 +1,5 @@
-//! What green-tea's bare-metal kernels (green-tea-coop, green-tea-preempt) share.
+//! What green-tea's bare-metal kernels (green-tea-coop, green-tea-preempt, green-tea-shell)
+//! share.
 //!
 //! - [`platform`]: per-machine code behind the [`Platform`] and [`TimerInterrupt`] traits:
 //!   boot code, timers, interrupts and paging, and where each device is (which serial

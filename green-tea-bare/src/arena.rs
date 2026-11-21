@@ -26,17 +26,22 @@ pub struct Arena {
 
 impl Arena {
     /// An arena of `capacity` bytes, taken from the global heap, and given back when the
-    /// arena is dropped.
+    /// arena is dropped. An arena of no bytes takes nothing from the heap.
     ///
     /// # Panics
     /// If the heap doesn't have `capacity` bytes left.
     pub fn new(capacity: usize) -> Arena {
         let layout = Layout::from_size_align(capacity, 16).expect("an arena of a sane size");
-        let start = unsafe { alloc(layout) };
-        if start.is_null() {
-            handle_alloc_error(layout);
-        }
-        let start = start as usize;
+        let start = if capacity == 0 {
+            layout.align() // no block: `alloc` must not be asked for zero bytes
+        } else {
+            // SAFETY: the layout has a size.
+            let start = unsafe { alloc(layout) };
+            if start.is_null() {
+                handle_alloc_error(layout);
+            }
+            start as usize
+        };
         Arena { start, end: start + capacity, next: Cell::new(start), peak: Cell::new(start) }
     }
 
@@ -77,8 +82,10 @@ impl Arena {
 
 impl Drop for Arena {
     fn drop(&mut self) {
-        // SAFETY: `new` allocated the block with this layout.
-        unsafe { dealloc(self.start as *mut u8, Layout::from_size_align_unchecked(self.capacity(), 16)) };
+        if self.capacity() != 0 {
+            // SAFETY: `new` allocated the block with this layout.
+            unsafe { dealloc(self.start as *mut u8, Layout::from_size_align_unchecked(self.capacity(), 16)) };
+        }
     }
 }
 

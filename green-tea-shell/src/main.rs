@@ -7,8 +7,8 @@
 //! it prints) and is done with all of it when it returns.
 //!
 //! Where that memory comes from is switchable, with `use`:
-//! - `use heap`: the global heap, green-tea-bare's first-fit allocator. Each of a command's
-//!   blocks is found by a search, and freed on its own when the command returns.
+//! - `use heap`: the global heap, green-tea-bare's TLSF allocator. Each of a command's
+//!   blocks is allocated, and freed, on its own when the command returns.
 //! - `use arena`: an [`Arena`], reset after every command.
 //!
 //! Either way the shell runs indefinitely. `heap` prints the heap block by block.
@@ -61,6 +61,9 @@ const LINE_MAX: usize = 120;
 const HEAP_BLOCKS: usize = 24;
 /// The arena's size: far more than any command needs.
 const ARENA_SIZE: usize = 64 * 1024;
+
+/// What `Shell::line` runs itself, rather than as a command.
+const WHOLE_LINES: [&str; 8] = ["repeat", "test", "trace", "session", "replay", "harden", "regions", "pages"];
 
 /// Where a command's memory comes from.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -148,8 +151,7 @@ impl Shell {
     fn line(&mut self, line: &[u8]) -> Next {
         let text = core::str::from_utf8(line).unwrap_or("").trim_ascii();
         if let Some(rest) = text.strip_prefix("repeat ") {
-            self.repeat(rest.trim_ascii_start());
-            Next::Prompt
+            self.repeat(rest.trim_ascii_start())
         } else if text == "test" {
             self.test();
             Next::Prompt
@@ -203,17 +205,38 @@ impl Shell {
 
     /// `repeat <n> <command>`: run a command `n` times without its output, and report
     /// what that did to memory.
-    fn repeat(&mut self, args: &str) {
+    fn repeat(&mut self, args: &str) -> Next {
         let (count, command) = args.split_once(' ').unwrap_or((args, ""));
         let (Ok(count), false) = (count.parse::<usize>(), command.trim_ascii().is_empty()) else {
-            return println!("usage: repeat <n> <command>");
+            println!("usage: repeat <n> <command>");
+            return Next::Prompt;
         };
+        // These are handled by `line`, around a command's memory: `command` doesn't know them.
+        if let Some(word) = command.split_ascii_whitespace().next().filter(|word| WHOLE_LINES.contains(word)) {
+            println!("`repeat` runs one command at a time, and can't run `{word}`");
+            return Next::Prompt;
+        }
+        let unknown = self.unknown;
         let (used, before) = (heap::used(), heap::with(|fit| fit.stats()));
         self.quiet = true;
+        let mut halted = false;
         for _ in 0..count {
-            self.command(command);
+            if self.command(command) == Next::Halt {
+                halted = true;
+                break;
+            }
+            if self.unknown != unknown {
+                break; // it will be unknown every time
+            }
         }
         self.quiet = false;
+        if halted {
+            return Next::Halt;
+        }
+        if self.unknown != unknown {
+            println!("unknown command `{command}`; try `help`");
+            return Next::Prompt;
+        }
         let after = heap::with(|fit| fit.stats());
         println!(
             "ran `{command}` {count} times from the {}: {} heap allocations, {} frees, heap {:+} bytes; arena peak {} \
@@ -224,6 +247,7 @@ impl Shell {
             heap::used() as isize - used as isize,
             self.arena.peak()
         );
+        Next::Prompt
     }
 
     /// `trace on`, `trace off`: record what the heap is asked for, into a buffer that is
@@ -231,6 +255,7 @@ impl Shell {
     fn trace(&mut self, arg: &str) {
         match arg {
             "on" => {
+                drop(heap::stop_recording()); // one under way: its buffer's free isn't in the new one
                 self.trace = None; // frees the last trace's buffer
                 let buffer = alloc::vec![Default::default(); replay::TRACE_EVENTS].into_boxed_slice();
                 // The runtime allocates its list of sleeping tasks the first time a task
@@ -238,7 +263,7 @@ impl Shell {
                 // now, so that it isn't sometimes in the trace and sometimes not.
                 green_tea_bare::task::sleep_ms(1);
                 self.counted = heap::with(|fit| (fit.stats().allocations, fit.stats().frees));
-                drop(heap::record(buffer));
+                heap::record(buffer);
                 println!("recording the heap's allocations and frees, up to {} of them", replay::TRACE_EVENTS);
             }
             "off" => match heap::stop_recording() {
@@ -254,6 +279,57 @@ impl Shell {
             "check" => self.check(),
             _ => println!("usage: trace on|off|dump|check"),
         }
+    }
+
+    /// What `repeat` does with a command that isn't an ordinary one.
+    fn repeats(&mut self) -> Result<(), &'static str> {
+        if self.repeat("1 halt") != Next::Halt {
+            return Err("`repeat 1 halt` didn't halt");
+        }
+        let unknown = self.unknown;
+        self.repeat("2 repeat 2 echo nested");
+        if self.unknown != unknown {
+            self.unknown = unknown;
+            return Err("a nested `repeat` counted as an unknown command");
+        }
+        Ok(())
+    }
+
+    /// A second `trace on` starts a clean recording: the old one's buffer is freed before
+    /// it starts. Leaves alone a recording that was typed, and the last one kept.
+    fn trace_twice(&mut self) -> Result<(), &'static str> {
+        if heap::is_recording() {
+            return Ok(());
+        }
+        let kept = (self.trace.take(), self.counted);
+        self.trace("on");
+        self.trace("on");
+        let events = heap::stop_recording().map_or(0, |recording| recording.len);
+        (self.trace, self.counted) = kept;
+        if events != 0 {
+            return Err("a second `trace on` put the old buffer's free in the new trace");
+        }
+        Ok(())
+    }
+
+    /// `regions` leaves a recording under way, and the variables, as they were.
+    fn regions_refuse(&mut self) -> Result<(), &'static str> {
+        let vars = self.vars.take();
+        self.vars.borrow_mut().push((String::from("kept"), String::from("value")));
+        self.regions();
+        let kept = self.vars.borrow().len() == 1;
+        self.vars.replace(vars);
+        if !kept {
+            return Err("`regions` discarded the variables");
+        }
+        if !heap::is_recording() {
+            heap::record(alloc::vec![Default::default(); 16].into_boxed_slice());
+            self.regions();
+            if heap::stop_recording().is_none() {
+                return Err("`regions` discarded a recording under way");
+            }
+        }
+        Ok(())
     }
 
     /// `test`: check that commands run from the heap allocate there and free all of it,
@@ -299,6 +375,8 @@ impl Shell {
             println!("FAIL: the arena has {in_use} bytes in use after a reset, and peaked at {peak}");
         } else if let Err(e) = heap::with(|fit| fit.check()) {
             println!("FAIL: the heap is inconsistent: {e}");
+        } else if let Err(e) = empty_arena().and_then(|()| self.repeats()).and_then(|()| self.trace_twice()).and_then(|()| self.regions_refuse()) {
+            println!("FAIL: {e}");
         } else {
             println!(
                 "PASS: {RUNS} commands made {from_heap} heap allocations and freed them all, or none from an arena \
@@ -306,6 +384,23 @@ impl Shell {
             );
         }
     }
+}
+
+/// An arena of no bytes asks the heap for nothing, and has nothing to give.
+fn empty_arena() -> Result<(), &'static str> {
+    let counts = || heap::with(|fit| (fit.stats().allocations, fit.stats().frees));
+    let before = counts();
+    let arena = Arena::new(0);
+    let refused = arena.allocate(core::alloc::Layout::new::<u8>()).is_err();
+    let capacity = arena.capacity();
+    drop(arena);
+    if counts() != before {
+        return Err("an arena of no bytes used the heap");
+    }
+    if capacity != 0 || !refused {
+        return Err("an arena of no bytes handed out a byte");
+    }
+    Ok(())
 }
 
 impl Source {
@@ -456,7 +551,8 @@ trace check        write it as a file in memory, and read it back
 session            run a script of a few thousand commands, from the heap
 replay             replay what was recorded against each policy
 harden             replay it against the hardened allocator, a defence at a time
-regions            run the session with its memory from regions, and compare
+regions            run the session with its memory from regions, and compare (with no
+                   variables and no recording under way)
 pages [trim|replay] the heap's pages: how many are mapped; give back the idle ones;
                    replay what was recorded and count the pages it touches
 repeat <n> <cmd>   run a command n times, without its output

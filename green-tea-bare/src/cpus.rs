@@ -34,18 +34,22 @@ static ARRIVED: AtomicUsize = AtomicUsize::new(0);
 /// Set by [`park`]: the started CPUs stop for good.
 static PARKED: AtomicBool = AtomicBool::new(false);
 
-/// How many CPUs are running: 1 until [`start_all`].
+/// How many CPUs are running: 1 until [`start_all`], and 1 again after [`park`].
 pub fn count() -> usize {
     COUNT.load(Ordering::Acquire)
 }
 
 /// Start every other CPU the board has, up to [`MAX`] in all, and wait for each to be
 /// ready for work. Returns how many CPUs are now running. Call it from the boot CPU.
+/// After [`park`] it starts nothing.
 ///
 /// # Panics
 /// If a CPU that the board agreed to start doesn't arrive within a second.
 pub fn start_all() -> usize {
     assert_eq!(Board::cpu(), 0, "only the boot CPU starts the others");
+    if PARKED.load(Ordering::Acquire) {
+        return count();
+    }
     crate::pages::map_all(); // a page fault is something only the boot CPU can take
     for (cpu, online) in ONLINE.iter().enumerate().skip(count()) {
         let stack = Box::leak(vec![0u128; STACK / 16].into_boxed_slice());
@@ -90,9 +94,11 @@ fn together(f: fn(usize), cpu: usize) {
     f(cpu);
 }
 
-/// Stop every started CPU for good. They can't be started again.
+/// Stop every started CPU for good. They can't be started again, and from here on
+/// [`run`] runs on the boot CPU alone. Call it from the boot CPU, with no `run` under way.
 pub fn park() {
     PARKED.store(true, Ordering::Release);
+    COUNT.store(1, Ordering::Release);
 }
 
 /// Where a started CPU spends its life: waiting for work, and doing it. The board's
