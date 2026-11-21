@@ -15,7 +15,10 @@ caller's to say, and green-tea-bare's platforms say it.
 | [`green-tea-virtio-blk`](virtio-blk) | virtio-blk, a disk, over any virtio transport | all |
 | [`green-tea-io`](io) | not a driver: what they share (`dma_fence`, x86 port I/O) | |
 
-All are `no_std` and build only for the bare-metal targets. They assume what
-green-tea-bare provides: one CPU, and memory mapped one to one, so a buffer's address is
-also the physical address a device needs for DMA. green-tea-virtio allocates its queues,
-so a kernel using it needs a global allocator.
+All are `no_std` and are built for the bare-metal targets; the ones with logic worth
+testing (pci, fw-cfg, ramfb, virtio, virtio-blk) also run host tests, against fake devices
+in memory. They assume what green-tea-bare provides: memory mapped one to one, so a
+buffer's address is also the physical address a device needs for DMA. They take no locks:
+where a kernel starts several CPUs, keeping them from using one device at once is the
+caller's job. green-tea-virtio allocates its queues, so a kernel using it needs a global
+allocator.
