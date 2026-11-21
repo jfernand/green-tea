@@ -88,7 +88,9 @@ pub struct Generations {
     pub deepest: usize,
     /// Calls of `set_field`.
     pub stores: u64,
-    /// Of those, the stores into an object in the old space.
+    /// Of those, the stores into an object in the old space. Counted by
+    /// [`Barrier::Filter`] only: [`Barrier::Every`] tests nothing, and leaves this and
+    /// `old_to_young` at 0.
     pub stores_old: u64,
     /// Of those, the stores of a reference to a nursery object.
     pub old_to_young: u64,

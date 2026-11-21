@@ -250,7 +250,9 @@ impl Cache {
                 // Undo the ones that were constructed, and do without the slab.
                 if let Some(destructor) = self.destructor {
                     (0..index).for_each(|built| destructor(object(built) as *mut u8));
+                    self.stats.destroyed += index;
                 }
+                self.stats.constructed += index;
                 // SAFETY: the page came from `pages` a moment ago.
                 unsafe { pages.give_page(page) };
                 return None;
@@ -648,7 +650,8 @@ mod tests {
         let objects: Vec<usize> = (0..19).map(|_| cache.allocate(&mut pages).unwrap()).collect();
         assert_eq!(cache.allocate(&mut pages), None);
         assert_eq!((cache.slabs(), pages.out.len()), ((1, 0, 0), 1), "the page of the slab that failed was kept");
-        assert_eq!((CONSTRUCTED.get(), DESTROYED.get(), cache.stats().constructed), (24, 5, 19));
+        assert_eq!((CONSTRUCTED.get(), DESTROYED.get()), (24, 5));
+        assert_eq!((cache.stats().constructed, cache.stats().destroyed), (24, 5), "the failed slab's calls");
         // The cache still works: a freed object is handed out, and a slab can be made
         // once the constructor succeeds.
         unsafe { cache.free(objects[4]).unwrap() };

@@ -42,7 +42,23 @@ impl<T> Rcu<T> {
 
     /// Replace the value with what `f` makes of it. If another writer gets in first, `f`
     /// is called again on the value that writer left.
-    pub fn update<R: Reclaim>(&self, smr: &mut R, f: impl Fn(&T) -> T) {
+    ///
+    /// The old value is retired, and whichever thread frees it drops it, so `T` must be
+    /// `Send`. This must not compile:
+    ///
+    /// ```compile_fail,E0277
+    /// use green_tea_smr::{epoch::Epochs, rcu::Rcu};
+    /// use std::rc::Rc;
+    ///
+    /// let epochs = Epochs::new();
+    /// let mut local = epochs.local(0);
+    /// let value = Rcu::new(Rc::new(1));
+    /// value.update(&mut local, |old| old.clone());
+    /// ```
+    pub fn update<R: Reclaim>(&self, smr: &mut R, f: impl Fn(&T) -> T)
+    where
+        T: Send,
+    {
         smr.enter();
         loop {
             let old = smr.protect(0, &self.current);

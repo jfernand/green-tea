@@ -7,9 +7,11 @@
 //! The interpreter never sees memory. It reaches its objects through the [`Heap`] trait,
 //! and this crate's first implementation of it, [`rc::RcHeap`], counts references. A heap
 //! that traces, or one that copies, can take its place without a change to the evaluator,
-//! because of what the interface does and doesn't let the evaluator do. Two do:
+//! because of what the interface does and doesn't let the evaluator do. Four do:
 //! [`mark::MarkHeap`] marks what the root stack reaches and sweeps or compacts the rest,
-//! and [`semispace::Semispace`] copies what it reaches. [`gc`] has what they share.
+//! [`semispace::Semispace`] copies what it reaches, [`generational::GenHeap`] keeps young
+//! objects apart from old ones, and [`incremental::IncHeap`] marks and sweeps a little at
+//! a time. [`gc`] has what they share.
 //!
 //! # The interface
 //!
@@ -111,6 +113,9 @@ pub enum Val {
 impl Value {
     pub const NIL: Value = Value(TAG_CONST);
     pub const TRUE: Value = Value(1 << TAG_BITS | TAG_CONST);
+    /// The largest and the smallest integer a value holds: 61 bits.
+    pub const MAX_INT: i64 = i64::MAX >> TAG_BITS;
+    pub const MIN_INT: i64 = i64::MIN >> TAG_BITS;
 
     /// Arithmetic wraps at 61 bits.
     pub fn int(n: i64) -> Value {

@@ -240,6 +240,7 @@ impl<H: Heap> Lisp<H> {
             }
             Val::Sym(IF) => {
                 let test = self.nth(expr, 1)?;
+                self.nth(expr, 2)?; // the first branch: only the second may be left out
                 self.heap.push(test);
                 self.heap.push(self.heap.root(env));
                 Ok(Form::If)

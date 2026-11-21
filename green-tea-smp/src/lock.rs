@@ -41,8 +41,22 @@ pub struct SpinLock<T, R = Spin> {
 unsafe impl<T: Send, R> Sync for SpinLock<T, R> {}
 
 /// Proof that the lock is held. Dropping it releases the lock.
+///
+/// A shared guard shares the value, so a guard is `Sync` only if the value is. This must
+/// not compile, or two threads could write a `Cell` through one guard:
+///
+/// ```compile_fail,E0277
+/// use core::cell::Cell;
+/// use green_tea_smp::lock::SpinLock;
+///
+/// fn shared<T: Sync>(_: &T) {}
+/// let lock = SpinLock::<Cell<u32>>::new(Cell::new(0));
+/// shared(&lock.lock());
+/// ```
 pub struct Guard<'a, T, R = Spin> {
     lock: &'a SpinLock<T, R>,
+    /// The guard gives access to a `T` as a `&mut T` would, and is `Sync` only if that is.
+    value: PhantomData<&'a mut T>,
 }
 
 impl<T, R: Relax> SpinLock<T, R> {
@@ -78,7 +92,7 @@ impl<T, R: Relax> SpinLock<T, R> {
         }
         // We hold the lock, so nobody else is writing this count.
         self.acquisitions.store(self.acquisitions.load(Ordering::Relaxed) + 1, Ordering::Relaxed);
-        Guard { lock: self }
+        Guard { lock: self, value: PhantomData }
     }
 
     /// Run `f` on the value, holding the lock.
@@ -143,6 +157,13 @@ mod tests {
         }
         assert_eq!(lock.with(|v| *v), 10);
         assert_eq!(lock.counts(), (11, 0));
+    }
+
+    #[test]
+    fn a_guard_of_a_value_that_can_be_shared_can_be_shared() {
+        fn shared<T: Sync>(_: &T) {}
+        let lock = SpinLock::<u32>::new(0);
+        shared(&lock.lock());
     }
 
     #[test]

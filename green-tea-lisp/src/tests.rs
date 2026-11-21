@@ -47,7 +47,7 @@ fn atoms_evaluate_to_themselves() {
 #[test]
 fn quote_returns_its_argument_unevaluated() {
     assert_eq!(value("(quote (a b (c 1) nil))"), "(a b (c 1) nil)");
-    assert_eq!(value("'(1 . 2)"), "(1 . 2)"); // read as a list of three symbols
+    assert_eq!(value("'(1 . 2)"), "(1 . 2)");
     assert_eq!(value("'x"), "x");
     assert_eq!(value("''x"), "(quote x)");
 }
@@ -110,6 +110,41 @@ fn closures_keep_their_environment() {
 fn a_tail_call_needs_no_root_stack() {
     // 100,000 iterations, where 32 nested calls are all `eval` allows.
     assert_eq!(value("(define (loop n acc) (if (= n 0) acc (loop (- n 1) (+ acc 1)))) (loop 100000 0)"), "100000");
+}
+
+#[test]
+fn an_integer_that_does_not_fit_in_61_bits_is_a_reader_error() {
+    let too_large = Error::Syntax("an integer outside the 61 bits of a value");
+    assert_eq!(value("1152921504606846975"), "1152921504606846975"); // 2^60 - 1
+    assert_eq!(value("-1152921504606846976"), "-1152921504606846976"); // -2^60
+    assert_eq!(lisp().run("1152921504606846976"), Err(too_large)); // 2^60
+    assert_eq!(lisp().run("-1152921504606846977"), Err(too_large));
+    assert_eq!(lisp().run("99999999999999999999"), Err(too_large)); // beyond an i64, too
+    assert_eq!(lisp().run("-99999999999999999999"), Err(too_large));
+    assert_eq!(value("'1+"), "1+"); // a symbol that starts with a digit is still one
+}
+
+#[test]
+fn an_if_needs_a_test_and_a_branch() {
+    let short = Error::Syntax("a form is too short");
+    assert_eq!(lisp().run("(if #t)"), Err(short));
+    assert_eq!(lisp().run("(if nil)"), Err(short));
+    assert_eq!(lisp().run("(if)"), Err(short));
+    assert_eq!(value("(if nil 1)"), "nil"); // the second branch may be left out
+    assert_eq!(value("(if #t 1)"), "1");
+}
+
+#[test]
+fn a_pair_reads_back_as_it_is_printed() {
+    assert_eq!(value("(car '(1 . 2))"), "1");
+    assert_eq!(value("(cdr '(1 . 2))"), "2");
+    assert_eq!(value("(cdr '(1 2 . 3))"), "(2 . 3)");
+    assert_eq!(value("'(1 . (2 3))"), "(1 2 3)");
+    assert_eq!(value("(cdr '((1 . 2) . (3 . 4)))"), "(3 . 4)");
+    assert_eq!(lisp().run("'( . 2)"), Err(Error::Syntax("a . with no element before it")));
+    assert_eq!(lisp().run("'(1 .)"), Err(Error::Syntax("a . with nothing after it")));
+    assert_eq!(lisp().run("'(1 . 2 3)"), Err(Error::Syntax("more than one value after a .")));
+    assert_eq!(value("'(a .b ...)"), "(a .b ...)"); // symbols that only start with a dot
 }
 
 #[test]
