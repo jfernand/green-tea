@@ -477,7 +477,7 @@ mod tests {
 
     #[test]
     fn blocks_freed_by_another_thread_come_back_through_the_central_heap() {
-        let central = shared(1 << 20, 8, 0);
+        let central = shared(1 << 21, 8, 0);
         let (send, receive) = mpsc::channel::<usize>();
         let (produced, consumed) = thread::scope(|s| {
             let producer = s.spawn(|| {

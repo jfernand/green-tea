@@ -124,6 +124,7 @@ version = "0.1.0"
 dependencies = [
  "green-tea-bare",
  "green-tea-lisp",
+ "green-tea-shard",
 ]
 
 [[package]]
@@ -187,6 +188,14 @@ name = "green-tea-region"
 version = "0.1.0"
 dependencies = [
  "green-tea-fit",
+]
+
+[[package]]
+name = "green-tea-shard"
+version = "0.1.0"
+dependencies = [
+ "green-tea-fit",
+ "green-tea-smp",
 ]
 
 [[package]]

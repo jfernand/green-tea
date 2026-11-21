@@ -27,8 +27,8 @@ kernels built on the same context switch:
 | [`green-tea-region`](green-tea-region) | Regions: a bump allocator over chunks taken from the heap, freed all at once. `alloc` returns a reference that lives as long as the borrow of the region, so the borrow checker refuses a use after the region is dropped or reset, and a pointer from a long-lived region into a short-lived one. `no_std`. |
 | [`green-tea-trace`](green-tea-trace) | A command for the host that reads a trace file (`green-tea-fit`'s `tracefile` module: a text form and a binary form) and replays it against each allocator, as the shell's `replay` does in the kernel. `cargo xtask trace` gets such a file out of the kernel, over its serial console. |
 | [`green-tea-smp`](green-tea-smp) | Allocating from several CPUs: a spin lock, and a cache of free blocks for each CPU in front of a heap behind the lock. `no_std`; its tests run on the host with real threads. |
-| [`green-tea-fit`](green-tea-fit) | An allocator for blocks of any size: a free list searched first-fit, next-fit or best-fit, with boundary tags to merge freed neighbours. `no_std`; the kernels' heap is one. Also replays recorded traces of allocations against each policy, and measures the fragmentation. |
 | [`green-tea-lisp`](green-tea-lisp) | A small Lisp: a reader, an evaluator and a printer, over a heap it reaches only through the ten operations of a trait. The first heap counts references. `no_std`; `--kernel lisp` runs it. |
+| [`green-tea-shard`](green-tea-shard) | Allocating from several CPUs with no lock, after mimalloc: pages of one size class each, a free list in every page, and a second list in every page that other CPUs push to with a compare-and-swap. `no_std`; its tests run on the host with real threads. |
 | [`drivers/`](drivers) | The device drivers, one crate each, which know their device but not the machine: serial ports (16550, PL011), QEMU's fw_cfg and ramfb, PCI through ECAM, virtio (MMIO and PCI transports, split virtqueues) and virtio-blk. |
 | [`green-tea-bare`](green-tea-bare) | What the kernels share: boot code per board behind the `Platform` and `TimerInterrupt` traits (timers, interrupts, paging, and where each device is), a port of v2's `Task` and scheduler, and a heap. |
 | [`green-tea-coop`](green-tea-coop) | A bare-metal kernel for QEMU on riscv64, aarch64 and x86_64 whose tasks yield to each other, so you can watch the context switches on screen. |
@@ -77,7 +77,9 @@ cargo xtask kernel --kernel frag      # fragmentation: an adversary, and a rando
 cargo xtask kernel --kernel tlsf      # allocators that don't search: a buddy system and TLSF, against the ones that do
 cargo xtask kernel --kernel slab      # page frames from a buddy system, and a slab cache for task records
 cargo xtask kernel --kernel smp       # four CPUs: the heap behind a lock, then a cache for each CPU
+cargo xtask kernel --kernel shard     # four CPUs and no lock: a heap of pages for each, against the caches
 cargo xtask kernel --kernel lisp      # a small Lisp on a heap that counts references
+cargo xtask kernel --kernel gc        # the same Lisp on heaps that mark and sweep, mark and compact, and copy
 cargo xtask kernel --kernel shell     # the shell's test, typed at its serial console
 cargo xtask kernel --kernel trace     # the shell records its heap, and replays the trace against each policy
 cargo xtask kernel --kernel safety    # a task corrupts the free list; the allocator hardened, a defence at a time
@@ -363,6 +365,35 @@ many times a count was raised or lowered, frees a list each of the three ways, a
 the two programs that make cycles in a heap too small for what they leak. Every number is
 a count, the same on each architecture, but for the bytes of stack the recursion used. The
 crate's own tests run on the host: `cargo test -p green-tea-lisp`.
+
+[`green-tea-shard`](green-tea-shard) does without the lock. An `Arena` is a region cut
+into pages of 16 KiB, and each CPU has a `Heap` that owns some of them. A page holds
+blocks of one size class and has three free lists in its header: one the owner allocates
+from, one for the blocks the owner frees, and one that other CPUs push to with a
+compare-and-swap, which the owner takes whole, with one swap, when its own list runs out.
+`free` takes an address and nothing else. `--kernel shard` runs the smp test's work
+through both: the caches take their lock 2,680 times and the heaps of pages take none,
+and then every block is freed by a CPU that didn't allocate it, 38,400 of them, and each
+goes back to its page. `cargo test -p green-tea-shard`.
+### Heaps that trace
+
+Three more heaps implement the same `Heap` trait, and the evaluator doesn't change.
+[`MarkHeap`](green-tea-lisp/src/mark.rs) marks every object the root stack reaches, with a
+mark bit in each header and a mark stack of a fixed size, and then either sweeps the heap
+into free lists (`Reclaim::Sweep`) or slides the marked objects down to its start
+(`Reclaim::Compact`). [`Semispace`](green-tea-lisp/src/semispace.rs) copies what the root
+stack reaches into the other half of its memory with Cheney's scan, and allocates by
+moving a pointer. They collect when `alloc` finds no room, and
+[`gc.rs`](green-tea-lisp/src/gc.rs) has what they share: the `Collect` trait (`collect`,
+the counts, a switch that collects at every allocation, a clock for timing) and
+`reachable`.
+
+`--kernel gc` types the `lisp` test's definitions at a heap that marks, runs the two
+programs that leak under reference counting in 1,024 words, runs the five programs on
+each heap and counts the collections and the objects traced, walked and moved, and shows
+where objects are after a collection, what the mark stack holds, and what a reference
+that the heap wasn't told about refers to afterwards. The smallest heap each program runs
+in is found on the host: `cargo run --release -p green-tea-lisp --example heaps`.
 
 ### A shell, and an arena
 
