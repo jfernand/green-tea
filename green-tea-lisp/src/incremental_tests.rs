@@ -331,6 +331,26 @@ fn the_search_after_an_overflow_is_done_in_steps() {
 }
 
 #[test]
+fn a_stall_is_one_pause_and_not_a_step() {
+    let mut heap = IncHeap::new(64, Barrier::Deletion, Pace::Manual, MARK_STACK);
+    heap.set_clock(counting_clock);
+    heap.start();
+    // Fill the heap with what the roots hold: the stall finishes the cycle under way, finds
+    // no room, and runs another.
+    loop {
+        heap.push(Value::int(0));
+        heap.push(Value::NIL);
+        if heap.alloc(Kind::Pair).is_err() {
+            break;
+        }
+    }
+    let steps = heap.steps();
+    assert_eq!((steps.steps, steps.stalls), (1, 1));
+    assert_eq!(steps.pauses.iter().sum::<u32>(), 1, "the buckets count steps");
+    assert_eq!(heap.counts().pause_total, 2, "the step and the stall, a tick each");
+}
+
+#[test]
 fn a_heap_too_small_for_its_pace_stalls_and_still_computes() {
     // 1,400 words is a little over what `list` needs with a sweep (Chapter 13: 1,278).
     let mut lisp = Lisp::new(IncHeap::new(1400, Barrier::Deletion, Pace::Alloc(1), MARK_STACK));

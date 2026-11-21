@@ -131,7 +131,9 @@ pub struct Steps {
     pub largest_floating: u64,
     pub lost: u64,
     /// With a clock: how long the steps took. Bucket 0 counts steps of no ticks at all,
-    /// and bucket `n` those of at least `2^(n-1)` ticks and fewer than `2^n`.
+    /// and bucket `n` those of at least `2^(n-1)` ticks and fewer than `2^n`. A stall is
+    /// not a step, and is not here: it counts, as one pause, in the pause fields of
+    /// [`Counts`].
     pub pauses: [u32; PAUSE_BUCKETS],
 }
 
@@ -445,18 +447,17 @@ impl IncHeap {
     // ---- steps ------------------------------------------------------------------------
 
     /// Work on the cycle in progress until `budget` units are done or the clock has
-    /// advanced by `slice`, or the cycle ends. With `begin`, start a cycle first if none
+    /// advanced by `slice` (so many ticks, since a time it read), or the cycle ends. With `begin`, start a cycle first if none
     /// is in progress. A scan of the root stack is never cut short, so a step can go over
     /// its budget by the number of root slots. Returns the units done.
-    fn work(&mut self, budget: u64, slice: Option<u64>, begin: bool) -> u64 {
-        let started = self.clock.map(|clock| clock());
+    fn work(&mut self, budget: u64, slice: Option<(u64, u64)>, begin: bool) -> u64 {
         let mut units = 0;
         if begin && self.phase == Phase::Idle {
             units += self.begin();
         }
         while self.phase != Phase::Idle && units < budget {
-            if let (Some(slice), Some(clock), Some(started)) = (slice, self.clock, started)
-                && clock().wrapping_sub(started) >= slice
+            if let (Some((ticks, started)), Some(clock)) = (slice, self.clock)
+                && clock().wrapping_sub(started) >= ticks
             {
                 break;
             }
@@ -481,14 +482,20 @@ impl IncHeap {
                 _ => self.end_cycle(),
             }
         }
-        if let (Some(clock), Some(started)) = (self.clock, started) {
-            let pause = clock().wrapping_sub(started);
-            self.counts.pause_total += pause;
-            self.counts.pause_longest = self.counts.pause_longest.max(pause);
-            let bucket = (u64::BITS - pause.leading_zeros()) as usize;
-            self.steps.pauses[bucket.min(PAUSE_BUCKETS - 1)] += 1;
-        }
         units
+    }
+
+    /// The clock, if the heap has one.
+    fn now(&self) -> Option<u64> {
+        self.clock.map(|clock| clock())
+    }
+
+    /// A pause that began at `started` is over: add it to the totals, and return it.
+    fn paused(&mut self, started: Option<u64>) -> Option<u64> {
+        let pause = self.clock?().wrapping_sub(started?);
+        self.counts.pause_total += pause;
+        self.counts.pause_longest = self.counts.pause_longest.max(pause);
+        Some(pause)
     }
 
     /// The mark stack is empty, and the root stack has changed since it was scanned.
@@ -500,25 +507,32 @@ impl IncHeap {
         self.traced != before
     }
 
-    fn record(&mut self, units: u64) {
+    /// A step that began at `started` is over, having done `units`.
+    fn record(&mut self, units: u64, started: Option<u64>) {
         self.steps.steps += 1;
         self.steps.units += units;
         self.steps.largest = self.steps.largest.max(units);
+        if let Some(pause) = self.paused(started) {
+            let bucket = (u64::BITS - pause.leading_zeros()) as usize;
+            self.steps.pauses[bucket.min(PAUSE_BUCKETS - 1)] += 1;
+        }
     }
 
     /// Start a cycle, if none is in progress: one step, of a unit for each root slot.
     pub fn start(&mut self) {
         if self.phase == Phase::Idle {
+            let started = self.now();
             let units = self.work(0, None, true);
-            self.record(units);
+            self.record(units, started);
         }
     }
 
     /// One step of at most `budget` units. Returns whether a cycle is still in progress.
     pub fn step(&mut self, budget: usize) -> bool {
         if self.phase != Phase::Idle {
+            let started = self.now();
             let units = self.work(budget as u64, None, false);
-            self.record(units);
+            self.record(units, started);
         }
         self.phase != Phase::Idle
     }
@@ -540,19 +554,21 @@ impl IncHeap {
         if !wanted || !ticked {
             return;
         }
+        let started = self.now();
         let units = match self.pace {
             Pace::Manual => return,
             Pace::Whole => self.work(u64::MAX, None, true),
             Pace::Alloc(units) | Pace::Tick(units) => self.work(units as u64, None, true),
-            Pace::Slice(ticks) => self.work(u64::MAX, Some(ticks), true),
+            Pace::Slice(ticks) => self.work(u64::MAX, started.map(|at| (ticks, at)), true),
         };
-        self.record(units);
+        self.record(units, started);
     }
 
     /// `alloc` has no room. Finish the cycle in progress; if that frees nothing of the
     /// right size, run a whole cycle more, which frees what the first one left floating.
     fn stall(&mut self, fields: usize) -> Option<usize> {
         self.steps.stalls += 1;
+        let started = self.now();
         let mut units = 0;
         if self.phase != Phase::Idle {
             units += self.work(u64::MAX, None, false);
@@ -563,6 +579,7 @@ impl IncHeap {
             at = self.take(fields);
         }
         self.steps.largest_stall = self.steps.largest_stall.max(units);
+        self.paused(started);
         at
     }
 
@@ -586,12 +603,13 @@ impl Collect for IncHeap {
     /// Finish the cycle in progress, and then run a whole one, so that what is allocated
     /// afterwards is what the root stack reaches.
     fn collect(&mut self) {
+        let started = self.now();
         let mut units = 0;
         if self.phase != Phase::Idle {
             units += self.work(u64::MAX, None, false);
         }
         units += self.work(u64::MAX, None, true);
-        self.record(units);
+        self.record(units, started);
     }
 
     fn counts(&self) -> Counts {
