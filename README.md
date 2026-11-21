@@ -23,6 +23,7 @@ kernels built on the same context switch:
 | [`green-tea-arch`](green-tea-arch) | The `arch` layer on its own: `Context` and `swap_context` for each architecture. `no_std`, so v2 and the kernels share it. |
 | [`green-tea-pool`](green-tea-pool) | Pools of fixed-size blocks, two ways: a bitmap and an intrusive free list. `no_std`; the kernels' task stacks come from one. |
 | [`green-tea-fit`](green-tea-fit) | An allocator for blocks of any size: a free list searched first-fit, next-fit or best-fit, with boundary tags to merge freed neighbours. `no_std`; the kernels' heap is one. Also replays recorded traces of allocations against each policy, and measures the fragmentation. |
+| [`green-tea-region`](green-tea-region) | Regions: a bump allocator over chunks taken from the heap, freed all at once. `alloc` returns a reference that lives as long as the borrow of the region, so the borrow checker refuses a use after the region is dropped or reset, and a pointer from a long-lived region into a short-lived one. `no_std`. |
 | [`drivers/`](drivers) | The device drivers, one crate each, which know their device but not the machine: serial ports (16550, PL011), QEMU's fw_cfg and ramfb, PCI through ECAM, virtio (MMIO and PCI transports, split virtqueues) and virtio-blk. |
 | [`green-tea-bare`](green-tea-bare) | What the kernels share: boot code per board behind the `Platform` and `TimerInterrupt` traits (timers, interrupts, paging, and where each device is), a port of v2's `Task` and scheduler, and a heap. |
 | [`green-tea-coop`](green-tea-coop) | A bare-metal kernel for QEMU on riscv64, aarch64 and x86_64 whose tasks yield to each other, so you can watch the context switches on screen. |
@@ -70,6 +71,7 @@ cargo xtask kernel --kernel fit       # the heap's allocator: merging, three way
 cargo xtask kernel --kernel frag      # fragmentation: an adversary, and a random workload
 cargo xtask kernel --kernel shell     # the shell's test, typed at its serial console
 cargo xtask kernel --kernel trace     # the shell records its heap, and replays the trace against each policy
+cargo xtask kernel --kernel region    # the shell's script again, with its memory from two regions
 cargo xtask shell                     # the shell, on this terminal (--target to pick a board)
 cargo xtask kernel --target aarch64   # just one architecture
 cargo xtask kernel --headless --screenshot   # no windows; saves target/kernel/<kernel>-<arch>.png
@@ -236,6 +238,27 @@ serial port. The second is `test`, which runs 1,000 commands each way and checks
 commands run from the heap free everything they allocate, and that commands run from the
 arena don't touch the heap. (The script starts with an empty line,
 because on riscv64 the first byte typed before the kernel is up doesn't arrive.)
+
+### Regions
+
+[`green-tea-region`](green-tea-region) is the arena again with its lifetimes in the types.
+A `Region` takes chunks from the heap as it fills, and gives them all back when it is
+dropped; `reset` keeps one chunk to fill again. `region.alloc(value)` returns `&mut T`
+borrowed from the region, `Vec::new_in(&region)` grows in it, and `scope` is a region that
+lasts for one call. A region runs no destructors, so `alloc` refuses, at build time, a type
+that has one. The crate's documentation has five programs the compiler refuses, as
+`compile_fail` tests: `cargo test -p green-tea-region`.
+
+`--kernel region` types `regions` at the shell, which runs the session's script of 1,970
+commands four ways with the heap recording: everything on the heap (10,316 allocations),
+commands in the arena (2,996), commands in a region that is reset and variables in a
+region for the session (16), and the same with a new region for every command (1,985).
+It also prints what the session's region held at the end: 57,693 bytes, of which the
+variables still set are 6,609. A region frees nothing until it frees everything.
+
+`cargo run --release -p green-tea-region --example cost -- region 100000` runs the shell's
+`echo` on the host with its memory from `malloc`, first fit, TLSF or a region, for counting
+instructions under valgrind.
 
 ## Testing
 

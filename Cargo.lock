@@ -172,10 +172,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "green-tea-region"
+version = "0.1.0"
+dependencies = [
+ "green-tea-fit",
+]
+
+[[package]]
 name = "green-tea-shell"
 version = "0.1.0"
 dependencies = [
  "green-tea-bare",
+ "green-tea-region",
 ]
 
 [[package]]

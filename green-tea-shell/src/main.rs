@@ -27,6 +27,7 @@
 
 extern crate alloc;
 
+mod region;
 mod replay;
 
 use alloc::alloc::Global;
@@ -156,6 +157,9 @@ impl Shell {
             Next::Prompt
         } else if text == "replay" {
             self.replay();
+            Next::Prompt
+        } else if text == "regions" {
+            self.regions();
             Next::Prompt
         } else {
             self.command(text)
@@ -437,6 +441,7 @@ vars               the variables
 trace on|off       record the heap's allocations and frees
 session            run a script of a few thousand commands, from the heap
 replay             replay what was recorded against each policy
+regions            run the session with its memory from regions, and compare
 repeat <n> <cmd>   run a command n times, without its output
 test               check that commands free what they allocate, either way
 halt               stop

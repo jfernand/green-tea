@@ -1,0 +1,17 @@
+[package]
+name = "green-tea-region"
+description = "Regions: memory that is allocated a block at a time and freed all at once, with the lifetime of every block checked by the borrow checker."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+# no_std, and its only dependency is the alloc crate's global allocator, where a region gets
+# its chunks. The bare-metal kernels can use it, and its tests run on the host:
+# cargo test -p green-tea-region
+
+[dev-dependencies]
+green-tea-fit = { path = "../green-tea-fit" }
