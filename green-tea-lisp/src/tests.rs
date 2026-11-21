@@ -47,7 +47,7 @@ fn atoms_evaluate_to_themselves() {
 #[test]
 fn quote_returns_its_argument_unevaluated() {
     assert_eq!(value("(quote (a b (c 1) nil))"), "(a b (c 1) nil)");
-    assert_eq!(value("'(1 . 2)"), "(1 . 2)"); // read as a list of three symbols
+    assert_eq!(value("'(1 . 2)"), "(1 . 2)");
     assert_eq!(value("'x"), "x");
     assert_eq!(value("''x"), "(quote x)");
 }
@@ -132,6 +132,19 @@ fn an_if_needs_a_test_and_a_branch() {
     assert_eq!(lisp().run("(if)"), Err(short));
     assert_eq!(value("(if nil 1)"), "nil"); // the second branch may be left out
     assert_eq!(value("(if #t 1)"), "1");
+}
+
+#[test]
+fn a_pair_reads_back_as_it_is_printed() {
+    assert_eq!(value("(car '(1 . 2))"), "1");
+    assert_eq!(value("(cdr '(1 . 2))"), "2");
+    assert_eq!(value("(cdr '(1 2 . 3))"), "(2 . 3)");
+    assert_eq!(value("'(1 . (2 3))"), "(1 2 3)");
+    assert_eq!(value("(cdr '((1 . 2) . (3 . 4)))"), "(3 . 4)");
+    assert_eq!(lisp().run("'( . 2)"), Err(Error::Syntax("a . with no element before it")));
+    assert_eq!(lisp().run("'(1 .)"), Err(Error::Syntax("a . with nothing after it")));
+    assert_eq!(lisp().run("'(1 . 2 3)"), Err(Error::Syntax("more than one value after a .")));
+    assert_eq!(value("'(a .b ...)"), "(a .b ...)"); // symbols that only start with a dot
 }
 
 #[test]

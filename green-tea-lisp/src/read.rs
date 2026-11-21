@@ -2,7 +2,8 @@
 //!
 //! A list is read by pushing each of its elements on the root stack, then `nil`, and then
 //! allocating one pair for each element, last element first: `alloc` pops a `car` and a
-//! `cdr` and pushes the pair, which is the `cdr` the next `alloc` needs.
+//! `cdr` and pushes the pair, which is the `cdr` the next `alloc` needs. In `(a b . c)`,
+//! `c` takes the place of `nil`.
 
 use crate::eval::{Error, Lisp, QUOTE};
 use crate::{Heap, Kind, Value};
@@ -37,6 +38,12 @@ impl<'a> Text<'a> {
         }
     }
 
+    /// Whether the next byte is a `.` standing alone, and not the start of a symbol.
+    fn at_dot(&self) -> bool {
+        self.bytes[self.at] == b'.'
+            && self.bytes.get(self.at + 1).is_none_or(|&b| b.is_ascii_whitespace() || b"()';".contains(&b))
+    }
+
     /// Whether anything is left to read.
     pub fn more(&mut self) -> bool {
         self.peek().is_some()
@@ -56,17 +63,35 @@ impl<H: Heap> Lisp<H> {
         match text.peek().ok_or(Error::Syntax("the text ended inside an expression"))? {
             b'(' => {
                 text.at += 1;
-                let mut elements = 0;
+                let (mut elements, mut dotted) = (0, false);
                 loop {
                     match text.peek() {
                         None => return Err(Error::Syntax("a list without its )")),
                         Some(b')') => break,
+                        Some(b'.') if text.at_dot() => {
+                            if elements == 0 {
+                                return Err(Error::Syntax("a . with no element before it"));
+                            }
+                            text.at += 1;
+                            if matches!(text.peek(), None | Some(b')')) {
+                                return Err(Error::Syntax("a . with nothing after it"));
+                            }
+                            // What follows the dot is the last pair's `cdr`, in place of `nil`.
+                            self.read_nested(text, nesting + 1)?;
+                            if text.peek() != Some(b')') {
+                                return Err(Error::Syntax("more than one value after a ."));
+                            }
+                            dotted = true;
+                            break;
+                        }
                         Some(_) => self.read_nested(text, nesting + 1)?,
                     }
                     elements += 1;
                 }
                 text.at += 1;
-                self.heap.push(Value::NIL);
+                if !dotted {
+                    self.heap.push(Value::NIL);
+                }
                 for _ in 0..elements {
                     self.heap.alloc(Kind::Pair)?;
                 }
