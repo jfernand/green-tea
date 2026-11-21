@@ -148,8 +148,7 @@ impl Shell {
     fn line(&mut self, line: &[u8]) -> Next {
         let text = core::str::from_utf8(line).unwrap_or("").trim_ascii();
         if let Some(rest) = text.strip_prefix("repeat ") {
-            self.repeat(rest.trim_ascii_start());
-            Next::Prompt
+            self.repeat(rest.trim_ascii_start())
         } else if text == "test" {
             self.test();
             Next::Prompt
@@ -203,17 +202,25 @@ impl Shell {
 
     /// `repeat <n> <command>`: run a command `n` times without its output, and report
     /// what that did to memory.
-    fn repeat(&mut self, args: &str) {
+    fn repeat(&mut self, args: &str) -> Next {
         let (count, command) = args.split_once(' ').unwrap_or((args, ""));
         let (Ok(count), false) = (count.parse::<usize>(), command.trim_ascii().is_empty()) else {
-            return println!("usage: repeat <n> <command>");
+            println!("usage: repeat <n> <command>");
+            return Next::Prompt;
         };
         let (used, before) = (heap::used(), heap::with(|fit| fit.stats()));
         self.quiet = true;
+        let mut halted = false;
         for _ in 0..count {
-            self.command(command);
+            if self.command(command) == Next::Halt {
+                halted = true;
+                break;
+            }
         }
         self.quiet = false;
+        if halted {
+            return Next::Halt;
+        }
         let after = heap::with(|fit| fit.stats());
         println!(
             "ran `{command}` {count} times from the {}: {} heap allocations, {} frees, heap {:+} bytes; arena peak {} \
@@ -224,6 +231,7 @@ impl Shell {
             heap::used() as isize - used as isize,
             self.arena.peak()
         );
+        Next::Prompt
     }
 
     /// `trace on`, `trace off`: record what the heap is asked for, into a buffer that is
@@ -254,6 +262,14 @@ impl Shell {
             "check" => self.check(),
             _ => println!("usage: trace on|off|dump|check"),
         }
+    }
+
+    /// What `repeat` does with a command that isn't an ordinary one.
+    fn repeats(&mut self) -> Result<(), &'static str> {
+        if self.repeat("1 halt") != Next::Halt {
+            return Err("`repeat 1 halt` didn't halt");
+        }
+        Ok(())
     }
 
     /// `test`: check that commands run from the heap allocate there and free all of it,
@@ -299,7 +315,7 @@ impl Shell {
             println!("FAIL: the arena has {in_use} bytes in use after a reset, and peaked at {peak}");
         } else if let Err(e) = heap::with(|fit| fit.check()) {
             println!("FAIL: the heap is inconsistent: {e}");
-        } else if let Err(e) = empty_arena() {
+        } else if let Err(e) = empty_arena().and_then(|()| self.repeats()) {
             println!("FAIL: {e}");
         } else {
             println!(
