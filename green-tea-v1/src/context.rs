@@ -84,7 +84,10 @@ pub fn yield_now() {
 
 /// Cooperative round-robin scheduler: run the task at the front of the queue until it
 /// yields or finishes, then put it at the back, or drop it (and its stack) if it's done.
+///
+/// A task may call `run`: the outer scheduler's `MAIN` and `CURRENT` are put back on return.
 pub fn run(tasks: impl IntoIterator<Item = Box<Task>>) {
+    let (outer_main, outer_current) = unsafe { ((&raw const MAIN).read(), CURRENT) };
     let mut queue: VecDeque<Box<Task>> = tasks
         .into_iter()
         .collect();
@@ -92,20 +95,62 @@ pub fn run(tasks: impl IntoIterator<Item = Box<Task>>) {
         unsafe {
             CURRENT = &raw mut *task;
             swap_context(&raw mut MAIN, &raw const task.context);
-            CURRENT = core::ptr::null_mut();
+            CURRENT = outer_current;
         }
         if !task.done {
             queue.push_back(task);
         }
     }
+    unsafe { (&raw mut MAIN).write(outer_main) };
 }
 
 #[cfg(test)]
 mod tests {
     use crate::context::{
-        Context, MAIN, Task, bootstrap_entry, initial_sp, swap_context, task_entry,
+        Context, MAIN, Task, bootstrap_entry, initial_sp, run, spawn, swap_context, task_entry,
+        yield_now,
     };
     use crate::stack::Stack;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// `MAIN` and `CURRENT` are process-wide, and the harness runs tests on several threads,
+    /// so a test that calls `run` runs alone: in a child process that re-enters this test.
+    fn in_child(test: &str, body: impl FnOnce()) {
+        const IN_CHILD: &str = "GREEN_TEA_V1_TEST_CHILD";
+        if std::env::var_os(IN_CHILD).is_some() {
+            body();
+            return;
+        }
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([test, "--exact", "--test-threads=1"])
+            .env(IN_CHILD, "1")
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "the child failed: {status}");
+    }
+
+    #[test]
+    fn a_nested_run_leaves_the_outer_task_able_to_yield() {
+        in_child("context::tests::a_nested_run_leaves_the_outer_task_able_to_yield", || {
+            let log = Rc::new(RefCell::new(Vec::new()));
+            let outer_log = log.clone();
+            let outer = spawn(move || {
+                let inner_log = outer_log.clone();
+                run([spawn(move || {
+                    inner_log.borrow_mut().push("inner 1");
+                    yield_now();
+                    inner_log.borrow_mut().push("inner 2");
+                })]);
+                outer_log.borrow_mut().push("outer 1");
+                yield_now();
+                outer_log.borrow_mut().push("outer 2");
+            });
+            run([outer]);
+            assert_eq!(*log.borrow(), ["inner 1", "inner 2", "outer 1", "outer 2"]);
+        });
+    }
 
     #[test_log::test]
     fn test_swap_context() {
