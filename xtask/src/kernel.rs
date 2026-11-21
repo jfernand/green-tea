@@ -360,7 +360,9 @@ fn parse(args: &[String]) -> Result<Options, String> {
                     .iter()
                     .find(|a| a.name == value || a.triple == value)
                     .ok_or_else(|| format!("unknown target {value}; known: riscv64, aarch64, x86_64"))?;
-                arches.push(arch);
+                if !arches.iter().any(|a| ptr::eq(*a, arch)) {
+                    arches.push(arch);
+                }
             }
             "--kernel" => {
                 let value = args.next().ok_or("--kernel needs a value")?;
@@ -371,7 +373,10 @@ fn parse(args: &[String]) -> Result<Options, String> {
                         let known: Vec<&str> = KERNELS.iter().map(|k| k.name).collect();
                         format!("unknown kernel {value}; known: {}", known.join(", "))
                     })?;
-                kernels.push(kernel);
+                // Twice would be two runs writing to one log.
+                if !kernels.iter().any(|k| ptr::eq(*k, kernel)) {
+                    kernels.push(kernel);
+                }
             }
             "-h" | "--help" => return Err(String::new()),
             _ => return Err(format!("unknown option {arg}")),
@@ -753,6 +758,13 @@ mod tests {
         assert_eq!(labels(&[]), expected(None));
         assert!(labels(&[]).contains(&"overflow-riscv64".to_string()));
         assert!(!labels(&[]).contains(&"overflow-aarch64".to_string()));
+    }
+
+    #[test]
+    fn a_kernel_or_target_named_twice_runs_once() {
+        let once = labels(&["--kernel", "coop", "--target", "riscv64"]);
+        assert_eq!(labels(&["--kernel", "coop", "--kernel", "coop", "--target", "riscv64"]), once);
+        assert_eq!(labels(&["--kernel", "coop", "--target", "riscv64", "--target", "riscv64"]), once);
     }
 
     #[test]
