@@ -70,28 +70,6 @@ pub const NAMES: [&str; 15] = [
     "null",
 ];
 
-/// What a name means, for a table's caption.
-pub fn describe(name: &str) -> &'static str {
-    match name {
-        "bump" => "a bump pointer that never frees",
-        "first-lifo" => "first fit, free list in LIFO order",
-        "first-addr" => "first fit, free list in address order",
-        "next-lifo" => "next fit, LIFO",
-        "next-addr" => "next fit, address order",
-        "best-lifo" => "best fit, LIFO",
-        "best-addr" => "best fit, address order",
-        "buddy" => "the binary buddy system",
-        "tlsf" => "TLSF",
-        "hardened" => "first fit, LIFO, with all five defences",
-        "pools" => "a pool for each of twelve size classes, TLSF for larger blocks",
-        "slabs" => "a slab cache for each size class over page frames from a buddy system",
-        "caches" => "a per-CPU cache of twelve size classes in front of TLSF",
-        "shards" => "pages of one size class with a free list each, TLSF for larger blocks",
-        "null" => "no allocator: the cost of the replay itself",
-        _ => "",
-    }
-}
-
 /// The seed of the hardened allocator's secrets and choices.
 const SEED: u64 = 0x2545_f491_4f6c_dd1d;
 /// Blocks a cache moves at a time, the most it holds of a class, and the batches the depot keeps.
