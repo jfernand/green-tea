@@ -1,10 +1,22 @@
 use core::arch::global_asm;
 
-global_asm!(include_str!("x86_64.s"));
+// x86_64-unknown-none is soft-float: SSE is off in CR4 there, so `stmxcsr` would fault, and
+// no code uses the floating-point state anyway. x86_64.s skips it unless the target has SSE.
+global_asm!(
+    ".set GREEN_TEA_FP_CONTROL, {fp_control}",
+    include_str!("x86_64.s"),
+    fp_control = const cfg!(target_feature = "sse2") as u8,
+);
+
+/// MXCSR at reset: round to nearest, every exception masked.
+const DEFAULT_MXCSR: u32 = 0x1F80;
+/// The x87 control word after `fninit`: round to nearest, extended precision, all masked.
+const DEFAULT_X87_CW: u16 = 0x037F;
 
 /// The registers `swap_context` saves and restores: `rsp` plus the SysV callee-saved
-/// registers. Everything else is caller-saved, so the compiler has already spilled
-/// anything it cares about before calling `swap_context`.
+/// registers, and the floating-point control state (MXCSR and the x87 control word), which
+/// the ABI also makes callee-saved. Everything else is caller-saved, so the compiler has
+/// already spilled anything it cares about before calling `swap_context`.
 #[derive(Debug, Default)]
 #[repr(C)]
 pub struct Context {
@@ -15,7 +27,14 @@ pub struct Context {
     r12: u64, // [rdi + 0x20]
     rbx: u64, // [rdi + 0x28]
     rbp: u64, // [rdi + 0x30]
+    mxcsr: u32,   // [rdi + 0x38] SSE control and status; not switched on soft-float targets
+    x87_cw: u16,  // [rdi + 0x3C] x87 control word; likewise
 }
+
+// The offsets x86_64.s uses.
+const _: () = assert!(size_of::<Context>() == 64);
+const _: () = assert!(core::mem::offset_of!(Context, mxcsr) == 0x38);
+const _: () = assert!(core::mem::offset_of!(Context, x87_cw) == 0x3C);
 
 unsafe extern "C" {
     /// Save the current registers into `from`, load `to`'s, and `ret` onto `to`'s stack.
@@ -45,6 +64,8 @@ impl Context {
             rsp: sp as u64,
             r15: arg as u64,
             r14: entry as *const () as u64,
+            mxcsr: DEFAULT_MXCSR,
+            x87_cw: DEFAULT_X87_CW,
             ..Context::default()
         }
     }

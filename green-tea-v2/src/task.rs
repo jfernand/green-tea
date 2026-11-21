@@ -115,6 +115,7 @@ extern "C" fn task_entry(arg: *mut ()) -> ! {
 #[cfg(test)]
 mod tests {
     use super::{Task, yield_now};
+    use core::arch::asm;
     use libc::{c_int, c_void};
     use std::cell::{Cell, RefCell};
     use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -264,6 +265,98 @@ mod tests {
         assert_eq!(payload.downcast_ref::<&str>(), Some(&"boom"));
         assert!(dropped.get(), "the task's destructors did not run");
         assert!(task.is_done());
+    }
+
+    /// The floating-point control state: the rounding mode and friends, without the sticky
+    /// status flags, which ordinary arithmetic sets.
+    fn fp_control() -> u64 {
+        #[cfg(target_arch = "x86_64")]
+        {
+            let (mut mxcsr, mut cw) = (0u32, 0u16);
+            unsafe {
+                asm!("stmxcsr [{}]", in(reg) &raw mut mxcsr);
+                asm!("fnstcw [{}]", in(reg) &raw mut cw);
+            }
+            u64::from(mxcsr & !0x3F) | u64::from(cw) << 32
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            let fpcr: u64;
+            unsafe { asm!("mrs {}, fpcr", out(reg) fpcr) };
+            fpcr
+        }
+        #[cfg(target_arch = "riscv64")]
+        {
+            let frm: u64;
+            unsafe { asm!(".option push", ".option arch, +d", "frrm {}", ".option pop", out(reg) frm) };
+            frm
+        }
+    }
+
+    /// Round toward zero, in every floating-point unit the architecture has.
+    fn round_toward_zero() {
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            let (mut mxcsr, mut cw) = (0u32, 0u16);
+            asm!("stmxcsr [{}]", in(reg) &raw mut mxcsr);
+            asm!("fnstcw [{}]", in(reg) &raw mut cw);
+            mxcsr |= 0x6000;
+            cw |= 0x0C00;
+            asm!("ldmxcsr [{}]", in(reg) &raw const mxcsr);
+            asm!("fldcw [{}]", in(reg) &raw const cw);
+        }
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            let fpcr: u64;
+            asm!("mrs {}, fpcr", out(reg) fpcr);
+            asm!("msr fpcr, {}", in(reg) fpcr | 3 << 22);
+        }
+        #[cfg(target_arch = "riscv64")]
+        unsafe {
+            asm!(".option push", ".option arch, +d", "fsrmi 1", ".option pop");
+        }
+    }
+
+    /// Each task has its own rounding mode, and so does its resumer. On a thread of its own,
+    /// so a failure can't leave the harness's thread rounding the wrong way.
+    #[test]
+    fn fp_control_state_is_per_task() {
+        std::thread::spawn(|| {
+            let resumer = fp_control();
+            let in_task = Rc::new(Cell::new(0));
+            let seen = in_task.clone();
+            let mut task = Task::new(move || {
+                round_toward_zero();
+                seen.set(fp_control());
+                yield_now();
+                seen.set(fp_control());
+            });
+            task.resume();
+            let changed = in_task.get();
+            assert_ne!(changed, resumer, "the task could not change its rounding mode");
+            assert_eq!(fp_control(), resumer, "the task's rounding mode leaked into its resumer");
+            task.resume();
+            assert_eq!(in_task.get(), changed, "the task lost its rounding mode across a yield");
+            assert_eq!(fp_control(), resumer);
+        })
+        .join()
+        .unwrap();
+    }
+
+    /// A new task starts in the default mode, whatever its creator has set.
+    #[test]
+    fn a_fresh_task_has_the_default_fp_control_state() {
+        std::thread::spawn(|| {
+            let default = fp_control();
+            round_toward_zero();
+            let in_task = Rc::new(Cell::new(0));
+            let seen = in_task.clone();
+            let mut task = Task::new(move || seen.set(fp_control()));
+            task.resume();
+            assert_eq!(in_task.get(), default);
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]

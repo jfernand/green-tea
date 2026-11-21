@@ -10,6 +10,10 @@ swap_context:
     mov [rdi + 0x20], r12
     mov [rdi + 0x28], rbx
     mov [rdi + 0x30], rbp
+.if GREEN_TEA_FP_CONTROL
+    stmxcsr dword ptr [rdi + 0x38]
+    fnstcw  word ptr [rdi + 0x3C]
+.endif
 
     // Load saved registers from `to` (*const Context in rsi)
     mov rsp, [rsi + 0x00]
@@ -19,6 +23,10 @@ swap_context:
     mov r12, [rsi + 0x20]
     mov rbx, [rsi + 0x28]
     mov rbp, [rsi + 0x30]
+.if GREEN_TEA_FP_CONTROL
+    ldmxcsr dword ptr [rsi + 0x38]
+    fldcw   word ptr [rsi + 0x3C]
+.endif
 
     ret // pops the value at the top of the stack, jumps to it think 'pop rip'
         // `call` put the value there ('push rip'), or `Context::new` for a first switch
