@@ -26,6 +26,7 @@ green-tea-kmem = { path = "../green-tea-kmem" }
 green-tea-smp = { path = "../green-tea-smp" }
 green-tea-io = { path = "../drivers/io" }
 green-tea-fw-cfg = { path = "../drivers/fw-cfg" }
+green-tea-framebuffer = { path = "../drivers/framebuffer" }
 green-tea-ramfb = { path = "../drivers/ramfb" }
 green-tea-pci = { path = "../drivers/pci" }
 green-tea-virtio = { path = "../drivers/virtio" }

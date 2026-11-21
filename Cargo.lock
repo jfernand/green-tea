@@ -105,6 +105,7 @@ version = "0.1.0"
 dependencies = [
  "green-tea-arch",
  "green-tea-fit",
+ "green-tea-framebuffer",
  "green-tea-fw-cfg",
  "green-tea-io",
  "green-tea-kmem",
@@ -130,6 +131,10 @@ dependencies = [
 
 [[package]]
 name = "green-tea-fit"
+version = "0.1.0"
+
+[[package]]
+name = "green-tea-framebuffer"
 version = "0.1.0"
 
 [[package]]
@@ -193,6 +198,7 @@ dependencies = [
 name = "green-tea-ramfb"
 version = "0.1.0"
 dependencies = [
+ "green-tea-framebuffer",
  "green-tea-fw-cfg",
 ]
 

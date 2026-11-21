@@ -13,7 +13,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Write;
 use green_tea_bare::fit::{Fit, FreeError, MIN_BLOCK, Order, Policy, Stats};
-use green_tea_bare::ramfb::Framebuffer;
+use green_tea_bare::Framebuffer;
 use green_tea_bare::runtime::{run, spawn};
 use green_tea_bare::screen::Screen;
 use green_tea_bare::task::yield_now;

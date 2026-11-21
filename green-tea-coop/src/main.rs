@@ -14,14 +14,14 @@
 #![no_std]
 #![no_main]
 
-use green_tea_bare::ramfb::Framebuffer;
+use green_tea_bare::Framebuffer;
 use green_tea_bare::runtime::{Switch, run, spawn};
 use green_tea_bare::screen::{COLORS, COLUMNS, Painter, Screen};
 use green_tea_bare::task::{current_guard, yield_now};
 use green_tea_bare::virtio::{self, Transport};
 use green_tea_bare::virtio_blk::{self as blk, Blk, SECTOR_SIZE};
 use green_tea_bare::pool::{Bitmap, FreeList, GiveError, Pool};
-use green_tea_bare::{Board, Global, Platform, boot, delay_ms, heap, memory, println, stack};
+use green_tea_bare::{Board, Global, Platform, VirtioBus, boot, delay_ms, heap, memory, println, stack};
 
 extern crate alloc;
 
@@ -48,7 +48,7 @@ use core::sync::atomic::AtomicUsize;
 extern "C" fn kmain() -> ! {
     let fb = boot("green-tea-coop");
     let mut test = [0u8; 16];
-    let len = Board::fw_cfg().read_file("opt/green-tea/test", &mut test).unwrap_or(0);
+    let len = Board::test_name(&mut test);
     match &test[..len] {
         b"" => demo(fb),
         b"overflow" => overflow_test(fb),

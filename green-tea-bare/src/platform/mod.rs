@@ -10,6 +10,9 @@
 //! Context switching itself (`Context`, `swap_context`) isn't here: it depends only on
 //! the ISA and its calling convention, not on the machine, and lives in green-tea-arch.
 
+mod qemu;
+pub use qemu::Qemu;
+
 #[cfg(target_arch = "aarch64")]
 mod aarch64;
 #[cfg(target_arch = "riscv64")]
@@ -25,7 +28,7 @@ pub use riscv64::RiscvVirt as Board;
 #[cfg(target_arch = "x86_64")]
 pub use x86_64::Q35 as Board;
 
-pub use green_tea_fw_cfg::{FwCfg, FwCfgPort};
+use crate::Framebuffer;
 use green_tea_virtio as virtio;
 
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64")))]
@@ -96,21 +99,23 @@ pub trait Platform {
         Err("this board can't start another CPU")
     }
 
-    /// How this board reaches QEMU's fw_cfg device.
-    type FwCfg: FwCfgPort;
-    const FW_CFG: Self::FwCfg;
+    /// Turn on the display and return it. An error if the board has none it can use.
+    fn display() -> Result<Framebuffer, &'static str>;
 
-    /// The fw_cfg device, ready to use.
-    fn fw_cfg() -> FwCfg<Self::FwCfg> {
-        FwCfg(Self::FW_CFG)
-    }
+    /// Put the name of the test this boot should run in `name`, and return its length: 0
+    /// for none, which means the kernel's demo.
+    fn test_name(name: &mut [u8]) -> usize;
 
     /// The first address past the machine's RAM, on a board where an access beyond it
     /// would go unnoticed. On the others it faults, and the fault handler reports it.
     fn ram_end() -> Option<usize> {
         None
     }
+}
 
+/// A board with virtio devices. Code that needs a disk says so with this bound, so it
+/// doesn't build for a board without one.
+pub trait VirtioBus: Platform {
     /// Call `f` with every virtio device on the board: in `virt`'s virtio-mmio slots on
     /// riscv64 and aarch64, on the PCI bus on x86_64. An error if one is there that the
     /// driver can't use (a legacy virtio-mmio device).

@@ -9,6 +9,7 @@ caller's to say, and green-tea-bare's platforms say it.
 | [`green-tea-ns16550`](ns16550) | 16550 UART, memory-mapped or on I/O ports | riscv64, x86_64 |
 | [`green-tea-pl011`](pl011) | Arm PL011 UART | aarch64 |
 | [`green-tea-fw-cfg`](fw-cfg) | QEMU's firmware configuration device | all |
+| [`green-tea-framebuffer`](framebuffer) | Drawing on a linear XRGB8888 framebuffer | all |
 | [`green-tea-ramfb`](ramfb) | QEMU's ramfb display, set up through fw_cfg | all |
 | [`green-tea-pci`](pci) | PCI configuration space through ECAM | x86_64 |
 | [`green-tea-virtio`](virtio) | virtio: negotiation, split virtqueues, the MMIO and PCI transports | all |
@@ -16,7 +17,7 @@ caller's to say, and green-tea-bare's platforms say it.
 | [`green-tea-io`](io) | not a driver: what they share (`dma_fence`, x86 port I/O) | |
 
 All are `no_std` and are built for the bare-metal targets; the ones with logic worth
-testing (pci, fw-cfg, ramfb, virtio, virtio-blk) also run host tests, against fake devices
+testing (framebuffer, pci, fw-cfg, virtio, virtio-blk) also run host tests, against fake devices
 in memory. They assume what green-tea-bare provides: memory mapped one to one, so a
 buffer's address is also the physical address a device needs for DMA. They take no locks:
 where a kernel starts several CPUs, keeping them from using one device at once is the

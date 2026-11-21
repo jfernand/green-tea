@@ -18,7 +18,7 @@ use alloc::vec::Vec;
 use green_tea_bare::fit::hardened::{ALL, CANARY, ENCODE, Fault, Hardened, QUARANTINE, UNLINK};
 use green_tea_bare::fit::trace::{self, Random};
 use green_tea_bare::fit::{Fit, Order, Policy};
-use green_tea_bare::ramfb::Framebuffer;
+use green_tea_bare::Framebuffer;
 use green_tea_bare::runtime::{run, spawn};
 use green_tea_bare::screen::Screen;
 use green_tea_bare::task::yield_now;

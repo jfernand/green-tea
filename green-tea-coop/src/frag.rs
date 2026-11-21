@@ -16,7 +16,7 @@ use green_tea_bare::fit::adversary::{self, Round};
 use green_tea_bare::fit::trace::{self, Event, Random};
 use green_tea_bare::fit::{Fit, Order, Policy};
 use green_tea_bare::println;
-use green_tea_bare::ramfb::Framebuffer;
+use green_tea_bare::Framebuffer;
 use green_tea_bare::screen::Screen;
 
 /// The region each allocator gets, from the kernel's heap.

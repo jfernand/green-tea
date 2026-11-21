@@ -18,8 +18,8 @@
 //! Demand paging: the same map leaves out every page of the heap. A fault there maps the
 //! page (`crate::pages::fault`), and `trap_entry` returns to the instruction that faulted.
 
-use super::{Platform, TimerInterrupt};
-use crate::Global;
+use super::{Platform, Qemu, TimerInterrupt, VirtioBus};
+use crate::{Framebuffer, Global};
 use crate::{pages, stack};
 use core::arch::{asm, global_asm};
 use green_tea_fw_cfg::Mmio;
@@ -174,9 +174,21 @@ impl Platform for RiscvVirt {
         }
     }
 
+    fn display() -> Result<Framebuffer, &'static str> {
+        Self::ramfb_display()
+    }
+
+    fn test_name(name: &mut [u8]) -> usize {
+        Self::fw_cfg_test_name(name)
+    }
+}
+
+impl Qemu for RiscvVirt {
     type FwCfg = Mmio;
     const FW_CFG: Mmio = Mmio(0x1010_0000);
+}
 
+impl VirtioBus for RiscvVirt {
     /// Eight virtio-mmio slots, 4 KiB apart.
     fn for_each_virtio(mut f: impl FnMut(virtio::Device)) -> Result<(), &'static str> {
         for slot in 0..8 {

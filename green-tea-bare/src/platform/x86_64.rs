@@ -26,8 +26,8 @@
 //! leaves every page of the heap out. A page fault there maps the page
 //! (`crate::pages::fault`), and the exception stub returns to the instruction that faulted.
 
-use super::{Platform, TimerInterrupt};
-use crate::Global;
+use super::{Platform, Qemu, TimerInterrupt, VirtioBus};
+use crate::{Framebuffer, Global};
 use crate::{pages, stack};
 use core::arch::{asm, global_asm};
 use core::ptr::{read_volatile, write_volatile};
@@ -320,9 +320,6 @@ impl Platform for Q35 {
         Ok(())
     }
 
-    type FwCfg = IoPorts;
-    const FW_CFG: IoPorts = IoPorts;
-
     /// RAM starts at 0, and fw_cfg's item 3 is its size in bytes: what QEMU's `-m` said. A
     /// write past it faults on nothing here, and is lost.
     fn ram_end() -> Option<usize> {
@@ -331,6 +328,21 @@ impl Platform for Q35 {
         Some(u64::from_le_bytes([0; 8].map(|_| IoPorts.read_u8())) as usize)
     }
 
+    fn display() -> Result<Framebuffer, &'static str> {
+        Self::ramfb_display()
+    }
+
+    fn test_name(name: &mut [u8]) -> usize {
+        Self::fw_cfg_test_name(name)
+    }
+}
+
+impl Qemu for Q35 {
+    type FwCfg = IoPorts;
+    const FW_CFG: IoPorts = IoPorts;
+}
+
+impl VirtioBus for Q35 {
     /// virtio devices are PCI functions here. SeaBIOS put ECAM at 0xb000_0000 (inside
     /// the 4 GiB that `_start` maps) and gave their BARs addresses below 4 GiB.
     fn for_each_virtio(mut f: impl FnMut(virtio::Device)) -> Result<(), &'static str> {

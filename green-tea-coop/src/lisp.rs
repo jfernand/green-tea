@@ -13,7 +13,7 @@
 
 use alloc::format;
 use alloc::string::String;
-use green_tea_bare::ramfb::Framebuffer;
+use green_tea_bare::Framebuffer;
 use green_tea_bare::runtime::{run, spawn};
 use green_tea_bare::screen::Screen;
 use green_tea_bare::{Global, println, stack};

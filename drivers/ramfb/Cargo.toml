@@ -16,4 +16,5 @@ publish.workspace = true
 bench = false
 
 [dependencies]
+green-tea-framebuffer = { path = "../framebuffer" }
 green-tea-fw-cfg = { path = "../fw-cfg" }

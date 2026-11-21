@@ -23,7 +23,7 @@
 #![no_std]
 #![no_main]
 
-use green_tea_bare::ramfb::Framebuffer;
+use green_tea_bare::Framebuffer;
 use green_tea_bare::runtime::{Switch, run, spawn};
 use green_tea_bare::screen::{BAR_MAX, COLORS, COLUMNS, Painter, Screen};
 use green_tea_bare::task::{in_task, sleep_ms, yield_now};

@@ -13,8 +13,8 @@
 //! controller as an IRQ. The exception vectors below save every register on the
 //! interrupted stack before calling Rust.
 
-use super::{Platform, TimerInterrupt};
-use crate::Global;
+use super::{Platform, Qemu, TimerInterrupt, VirtioBus};
+use crate::{Framebuffer, Global};
 use core::arch::{asm, global_asm};
 use core::ptr::{read_volatile, write_volatile};
 use green_tea_fw_cfg::Mmio;
@@ -146,9 +146,21 @@ impl Platform for AarchVirt {
         }
     }
 
+    fn display() -> Result<Framebuffer, &'static str> {
+        Self::ramfb_display()
+    }
+
+    fn test_name(name: &mut [u8]) -> usize {
+        Self::fw_cfg_test_name(name)
+    }
+}
+
+impl Qemu for AarchVirt {
     type FwCfg = Mmio;
     const FW_CFG: Mmio = Mmio(0x0902_0000);
+}
 
+impl VirtioBus for AarchVirt {
     /// 32 virtio-mmio slots, 0x200 bytes apart.
     fn for_each_virtio(mut f: impl FnMut(virtio::Device)) -> Result<(), &'static str> {
         for slot in 0..32 {

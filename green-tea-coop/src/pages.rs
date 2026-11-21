@@ -14,7 +14,7 @@ use core::alloc::Layout;
 use core::fmt::Write;
 use core::hint::black_box;
 use green_tea_bare::pages::{self, PAGE, PointsTo, Step};
-use green_tea_bare::ramfb::Framebuffer;
+use green_tea_bare::Framebuffer;
 use green_tea_bare::screen::Screen;
 use green_tea_bare::{Board, Platform, heap, println, stack};
 

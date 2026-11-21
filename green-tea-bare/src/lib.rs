@@ -3,7 +3,7 @@
 //!
 //! - [`platform`]: per-machine code behind the [`Platform`] and [`TimerInterrupt`] traits:
 //!   boot code, timers, interrupts and paging, and where each device is (which serial
-//!   port, how to reach fw_cfg, where to look for virtio devices). [`Board`] is the
+//!   port, the display, where to look for virtio devices). [`Board`] is the
 //!   implementation for the target being built.
 //! - The device drivers themselves are crates of their own, in drivers/, re-exported
 //!   here: [`fw_cfg`], [`ramfb`], [`pci`], [`virtio`], [`virtio_blk`]. Here are [`console`]
@@ -52,31 +52,21 @@ pub use {
     green_tea_fit as fit, green_tea_fw_cfg as fw_cfg, green_tea_pci as pci, green_tea_pool as pool, green_tea_ramfb as ramfb,
     green_tea_smp as smp, green_tea_virtio as virtio, green_tea_virtio_blk as virtio_blk,
 };
-pub use platform::{Board, Platform, TimerInterrupt};
+pub use green_tea_framebuffer::Framebuffer;
+pub use platform::{Board, Platform, Qemu, TimerInterrupt, VirtioBus};
 
 use core::panic::PanicInfo;
-use ramfb::{Framebuffer, HEIGHT, WIDTH};
 
-/// The start of every kernel: bring up the board, announce `kernel`, find fw_cfg and turn
-/// on the display. The banner's "green-tea-" prefix is what `cargo xtask kernel` waits for
-/// before echoing the serial log (it skips the firmware's banner).
+/// The start of every kernel: bring up the board, announce `kernel`, and turn on the
+/// display. The banner's "green-tea-" prefix is what `cargo xtask kernel` waits for before
+/// echoing the serial log (it skips the firmware's banner).
 pub fn boot(kernel: &str) -> Framebuffer {
     Board::init();
     println!("{kernel} on {}", Board::NAME);
-
-    let fw_cfg = Board::fw_cfg();
-    if let Err(e) = fw_cfg.probe() {
-        panic!("{e}");
-    }
-    println!("fw_cfg files:");
-    fw_cfg.for_each_file(|f| println!("  {:#06x} {:6} {}", f.select, f.size, f.name()));
-
-    let fb = match Framebuffer::init(&fw_cfg) {
+    match Board::display() {
         Ok(fb) => fb,
         Err(e) => panic!("{e}"),
-    };
-    println!("ramfb: {WIDTH}x{HEIGHT} XRGB8888");
-    fb
+    }
 }
 
 /// Busy-wait on the platform's timer.

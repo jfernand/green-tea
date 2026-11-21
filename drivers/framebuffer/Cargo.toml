@@ -1,0 +1,15 @@
+[package]
+name = "green-tea-framebuffer"
+description = "Drawing on a linear XRGB8888 framebuffer, whoever set it up."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+# no_std; builds for the host (its tests) and the bare-metal targets. See drivers/README.md.
+
+[lib]
+bench = false

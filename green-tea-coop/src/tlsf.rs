@@ -15,7 +15,7 @@ use green_tea_bare::fit::buddy::Buddy;
 use green_tea_bare::fit::tlsf::{self, Tlsf};
 use green_tea_bare::fit::trace;
 use green_tea_bare::fit::{Block, Fit, Heap, Order, Policy, adversary};
-use green_tea_bare::ramfb::Framebuffer;
+use green_tea_bare::Framebuffer;
 use green_tea_bare::screen::Screen;
 use green_tea_bare::{Board, Platform, heap, println};
 

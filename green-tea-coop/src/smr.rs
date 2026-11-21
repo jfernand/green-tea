@@ -13,7 +13,7 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::hint::spin_loop;
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicUsize, Ordering};
-use green_tea_bare::ramfb::Framebuffer;
+use green_tea_bare::Framebuffer;
 use green_tea_bare::screen::Screen;
 use green_tea_bare::{Board, Platform, cpus, heap, println};
 use green_tea_smr::epoch::{self, Epochs};

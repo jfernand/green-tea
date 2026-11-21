@@ -16,7 +16,7 @@
 
 use alloc::format;
 use alloc::string::String;
-use green_tea_bare::ramfb::Framebuffer;
+use green_tea_bare::Framebuffer;
 use green_tea_bare::screen::Screen;
 use green_tea_bare::{Board, Platform, println};
 use green_tea_lisp::gc::{Collect, Counts, reachable};

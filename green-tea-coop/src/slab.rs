@@ -19,7 +19,7 @@ use core::fmt::Write;
 use green_tea_bare::kmem::frames::{self, MAX_ORDER, ORDERS};
 use green_tea_bare::kmem::slab::{self, Cache, HEADER};
 use green_tea_bare::kmem::{self, PAGE, with_frames};
-use green_tea_bare::ramfb::Framebuffer;
+use green_tea_bare::Framebuffer;
 use green_tea_bare::runtime::{run, spawn};
 use green_tea_bare::screen::Screen;
 use green_tea_bare::task::{self, yield_now};

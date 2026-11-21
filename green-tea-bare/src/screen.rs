@@ -3,10 +3,14 @@
 //! outlined in white. Task ids follow creation order: 0 is the main task, and the worker
 //! in column `c` has id `c + 1`.
 
-use crate::ramfb::{Framebuffer, HEIGHT, WIDTH};
+use crate::Framebuffer;
 
 pub const COLUMNS: usize = 5;
 pub const COLORS: [u32; COLUMNS] = [0xe0605a, 0xe8b44a, 0x6cc070, 0x4fa3e0, 0xb07ce0];
+
+/// The demos draw in this much of the screen, from its top left corner, whatever its size.
+const WIDTH: usize = 640;
+const HEIGHT: usize = 480;
 
 const STATUS_H: usize = 60;
 const COL_W: usize = WIDTH / COLUMNS;
