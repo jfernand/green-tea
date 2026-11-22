@@ -1,0 +1,14 @@
+[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01HBdsDxe: loading Boot0001 "UEFI Misc Device" from PciRoot(0x0)/Pci(0x2,0x0)
+BdsDxe: starting Boot0001 "UEFI Misc Device" from PciRoot(0x0)/Pci(0x2,0x0)
+green-tea-shell on x86_64 (pc)
+framebuffer: 1280x800 XRGB8888
+type `help` for the commands
+> lights
+lights: this firmware isn't one whose lights we know, so nothing was sent
+> lights left red
+lights: this firmware isn't one whose lights we know, so nothing was sent
+> lights nonsense
+unknown color `nonsense`: try red, green, blue, white, orange, yellow, cyan, purple, pink, or rrggbb
+> lights bright 40
+lights: this firmware isn't one whose lights we know, so nothing was sent
+> 

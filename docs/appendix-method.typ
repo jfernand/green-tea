@@ -2,7 +2,7 @@
 
 = How this report was produced <app-method>
 
-The report describes one commit, #raw(pinned), read from a clean export so that uncommitted work can't leak into it. Its first version described an earlier commit, `7898396`, and it was then brought up to date: every listing was re-pinned to #raw(pinned) by script and read again, every output was recorded again from #raw(pinned), and each section was revised against the new code. Four scripts in `docs/` keep it honest, and each can be run again.
+The report describes one commit, #raw(pinned), read from a clean export so that uncommitted work can't leak into it. Its first version described an earlier commit, `7898396`, and it has been brought up to date since. At #raw(pinned), which added device interrupts and the keyboard lights, every listing was re-pinned by script and checked again. The outputs of the crates that changed, the host tests and both kernel suites were recorded again from #raw(pinned). Outputs of crates with no change since `79b31d6` are from that commit. Four scripts in `docs/` keep it honest, and each can be run again.
 
 #dtable(columns: (auto, 1fr), ("Script", "What it does"),
   [`record.sh`], [Exports the pinned commit, and runs the commands in `record.d/` to produce the outputs in `output/`],

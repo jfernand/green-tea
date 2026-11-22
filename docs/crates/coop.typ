@@ -152,7 +152,7 @@ On `pc` the same checks run on NVMe, behind a guard, since that board can meet a
 
 `memmap_test` prints each section (the output is in @crate-bare), and `check_memmap` verifies that each starts on its alignment, that they are in order without overlap, and that the ones the script sizes have that size. Then eight *witnesses*, one address of each kind, must be where they belong:
 
-#srcfile("green-tea-coop/src/main.rs", lines: ((425, 434),))[```rust
+#srcfile("green-tea-coop/src/main.rs", lines: ((422, 431),))[```rust
 let witnesses = [
     ("a function", memmap_test as fn(Framebuffer) as usize, ".text", 1),
     ("a constant static", &raw const CONSTANT as usize, ".rodata", 1),
@@ -184,7 +184,7 @@ PASS: 7 sections in order and aligned; 8 addresses where they should be
 
 The same takes and gives go to both of `green-tea-pool`'s pools (@crate-pool). A slot given back twice breaks `give`'s contract on purpose:
 
-#srcfile("green-tea-coop/src/main.rs", lines: ((532, 535),))[```rust
+#srcfile("green-tea-coop/src/main.rs", lines: ((529, 532),))[```rust
 let slot = base + 7 * POOL_SLOT;
 let _ = unsafe { pool.give(slot) };
 let second_give = unsafe { pool.give(slot) };

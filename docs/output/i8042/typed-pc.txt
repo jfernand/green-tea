@@ -5,4 +5,6 @@ framebuffer: 1280x800 XRGB8888
 type `help` for the commands
 > echo keys
 keys
+> irq
+keyboard 27, mouse 0, serial 0, backup timer 84, halts 111
 > 

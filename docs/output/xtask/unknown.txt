@@ -1,4 +1,4 @@
-error: unknown kernel nosuch; known: coop, preempt, overflow, disk, memmap, pool, fit, frag, tlsf, slab, pages, smp, lisp, shard, gc, smr, gen, incremental, shell, trace, safety, harden, region, gtt, resident
+error: unknown kernel nosuch; known: coop, preempt, overflow, disk, memmap, pool, fit, frag, tlsf, slab, pages, smp, lisp, shard, gc, smr, gen, incremental, shell, trace, safety, harden, region, gtt, interrupts, resident
 
 usage: cargo xtask kernel [--kernel <name>]... [--target riscv64|aarch64|x86_64]...
                           [--release] [--headless] [--screenshot] [--jobs <n>]

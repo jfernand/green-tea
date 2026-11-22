@@ -9,7 +9,7 @@ cp /usr/share/OVMF/OVMF_VARS_4M.fd "$pc/typed.vars"
 {
     for _ in $(seq 600); do grep -q '^> ' "$log" 2>/dev/null && break; sleep 0.1; done
     sleep 1
-    for key in e c h o spc k e y s ret; do echo "sendkey $key"; sleep 0.3; done
+    for key in e c h o spc k e y s ret i r q ret; do echo "sendkey $key"; sleep 0.3; done
     sleep 1
     echo quit
 } | timeout 120 qemu-system-x86_64 -machine q35 -cpu max -m 512M -vga std -net none  \

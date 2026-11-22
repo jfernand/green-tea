@@ -5,7 +5,7 @@
 `green-tea-ns16550` drives a 16550 UART by polling, as a console: it writes a byte when the transmitter has room, and reads one if one has arrived. The serial console on `riscv64` and `x86_64` is this driver.
 
 #spec(
-  ("Source", [#repo("drivers/ns16550/src/lib.rs"), 54 lines]),
+  ("Source", [#repo("drivers/ns16550/src/lib.rs"), 67 lines]),
   ("Depends on", [`green-tea-io`, on `x86_64` only]),
   ("Used by", [`green-tea-bare` (the `riscv64`, `q35` and `pc` boards)]),
   ("Tests", [no host tests; every kernel on `riscv64` and `x86_64` prints through it, and the `shell` kernel reads through it]),
@@ -16,7 +16,7 @@
   [`Ns16550Port(pub u16)`], [`inb` and `outb`; `x86_64` only], [`0x3f8` (COM1) on `q35` and `pc`],
 )
 
-Both types have the same two methods: `putc` waits for room and writes a byte, and `getc` returns `Some(byte)` if one has arrived and `None` if not.
+Both types have the same two methods: `putc` waits for room and writes a byte, and `getc` returns `Some(byte)` if one has arrived and `None` if not. `Ns16550Port` also has `enable_receive_interrupt`, which sets the receive bit of the interrupt enable register and the modem control register's `OUT2`, without which a PC's UART line never reaches the interrupt controller.
 
 == Registers
 
@@ -65,8 +65,8 @@ hello from the serial port
 == Limits
 
 - No initialization in the driver: a board on hardware has to set the baud rate and line format, as `pc` does.
-- No interrupts. A task waiting for input polls, and a byte that overruns the receiver while nobody polls is lost.
+- Only the `pc` board uses the receive interrupt. Elsewhere a task waiting for input polls. A byte that overruns the receiver before a task reads it is lost.
 - `getc` ignores the line status error bits (overrun, parity, framing).
 - `putc` can spin forever if the transmitter never empties.
 
-A console in 54 lines. @crate-pl011 is the same job on Arm's UART.
+A console in 67 lines. @crate-pl011 is the same job on Arm's UART.

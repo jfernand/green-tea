@@ -8,7 +8,7 @@ This appendix has two parts: what is open at commit #raw(pinned), and the 73 def
 
 === The two defects left
 
-- *A port to other physical hardware is unproven.* The `pc` board is written for physical x86_64 PCs, and it has run only in QEMU, under OVMF. All 25 of its kernels pass there (@app-kernels), which shows the code works against QEMU's firmware and devices, and says nothing about any particular machine's. QEMU's own boards keep their assumptions on purpose, and on aarch64 a CPU's number is still the low byte of `MPIDR_EL1`.
+- *A port to other physical hardware is unproven.* The `pc` board is written for physical x86_64 PCs, and it has run only in QEMU, under OVMF. All 26 of its kernels pass there (@app-kernels), which shows the code works against QEMU's firmware and devices, and says nothing about any particular machine's. QEMU's own boards keep their assumptions on purpose, and on aarch64 a CPU's number is still the low byte of `MPIDR_EL1`.
 - *`lisp instructions` measures each heap against its own floor.* The floor of a garbage-collected heap is that heap with room never to collect, and the mark-sweep floor is 2.1 to 2.4 times the explicit one across the five programs, because `MarkHeap` checks every object and field access and a release `Explicit` doesn't. The columns over the floor therefore compare the cost of reclamation, and not the cost of running a program on each heap (@crate-measure).
 
 === Limits of the pc board and USB
@@ -17,11 +17,13 @@ This appendix has two parts: what is open at commit #raw(pinned), and the 73 def
 - *No hot-plugging.* The keyboard must be attached at boot.
 - *No USB storage.* A USB keyboard is the only device class the driver uses. The stick the kernel boots from is read by the firmware and GRUB.
 - *Secure Boot must be off*, because the GRUB that `xtask` builds isn't signed.
-- *One NVMe drive.* The `disk` kernel uses the first controller's first namespace, and refuses any disk whose serial isn't `green-tea-disk`, so a machine's own drive is left alone (@crate-nvme).
+- *The NVMe test disk.* The `disk` kernel uses only the controller whose serial is `green-tea-disk`. It resets the others to ask them, and neither reads nor writes their blocks (@crate-nvme).
+- *Device interrupts are for input only.* NVMe, xHCI, virtio and the other architectures still poll, and a device interrupt is taken only while the CPU is idle (@bare-limits).
+- *The keyboard lights are unconfirmed.* The driver has sent nothing to a real EC (@crate-clevo-lights).
 
 === Found while describing the pc board
 
-Writing the sections on the `pc` board turned up these problems in the code at `59e8c91`. Commit `1363d86` fixed the first six. The rest are open.
+Writing the sections on the `pc` board turned up these problems in the code at `59e8c91`. Commit `1363d86` fixed the first six, and `8762171` the last two. The rest are open.
 
 #dtable(columns: (1fr, 1.1fr), ("Problem", "State"),
   [A CPU the MADT marks Online Capable but not Enabled counted as present, and `start_all` could panic waiting for it.], [Fixed in `1363d86`: only Enabled counts.],
@@ -33,7 +35,8 @@ Writing the sections on the `pc` board turned up these problems in the code at `
   [The TSC is assumed invariant and synchronised between CPUs, with no CPUID check.], [Open (@bare-limits).],
   [A report shorter than 8 bytes is decoded with the tail of the previous one.], [Open (@crate-xhci).],
   [A configuration descriptor with a total length of 0 produces a setup TRB with no data, followed by a data TRB.], [Open (@crate-xhci).],
-  [A keyboard that stalled the refused `SET_IDLE` leaves endpoint 0 halted, so a later endpoint recovery fails and the keyboard is given up.], [Open (@crate-xhci).],
+  [A keyboard that stalled the refused `SET_IDLE` leaves endpoint 0 halted, so a later endpoint recovery fails and the keyboard is given up.], [Fixed in `8762171`: endpoint 0 is reset and moved past the request.],
+  [An NVMe controller already in a fatal state was reported as an error, with no attempt to reset it.], [Fixed in `8762171`: it is reset.],
 )
 
 *What hasn't run.* Nothing here has run on physical hardware. The xHCI firmware handoff, the scratchpad pages and endpoint recovery have run only in host tests, against fake registers and a fake controller, because QEMU's controller exercises none of them. The NVMe driver has run on QEMU's device and a fake one.
