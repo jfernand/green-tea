@@ -113,8 +113,9 @@ type `help` for the commands
 
 Five tags tell a kernel what kind of machine it woke up on. @crate-acpi reads the one that points further.
 // chapter-status:begin
-// stage: early-draft
+// stage: research-done
 // revision: 2
 // body: 2b4b5d0ac93f
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

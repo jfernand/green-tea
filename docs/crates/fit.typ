@@ -553,8 +553,9 @@ Next fit over a LIFO list used the whole 1,024 KiB region for a program that nev
 
 Four allocators, one interface, and the instruments to compare them. @crate-kmem applies the buddy idea to page frames.
 // chapter-status:begin
-// stage: early-draft
+// stage: research-done
 // revision: 2
 // body: 974a7bb876f8
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

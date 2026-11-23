@@ -192,8 +192,9 @@ Writing the first version of this report turned up these 73 defects, from unsoun
   [#text(font: font-mono, size: 6.6pt, "xtask/src/kernel.rs:615-617".replace("/", "/\u{200B}").replace(",", ",\u{200B}"))], [The first verdict is final, so a PASS followed by a panic counts as passed.], [A later failure replaces a pass. `b6c6211`],
 )
 // chapter-status:begin
-// stage: early-draft
+// stage: research-done
 // revision: 4
 // body: 006fd4e57d7b
 // activity: 2026-11-22 | r4 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r4 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

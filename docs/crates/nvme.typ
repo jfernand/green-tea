@@ -199,8 +199,9 @@ the disk's 32 KiB are unchanged
 
 One queue pair, one page, one guard. @crate-bare is what puts these drivers on a machine.
 // chapter-status:begin
-// stage: early-draft
+// stage: research-done
 // revision: 2
 // body: 3ae0c85797bf
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

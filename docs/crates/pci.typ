@@ -102,8 +102,9 @@ PASS: read 64 sectors over virtio-PCI, and wrote one back
 
 A flat scan of a window the firmware set up. @crate-virtio is what the scan is looking for.
 // chapter-status:begin
-// stage: early-draft
+// stage: research-done
 // revision: 2
 // body: ee755159408d
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

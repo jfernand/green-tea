@@ -369,8 +369,9 @@ The kernels call the same `Context::new` and `swap_context` (@crate-bare).
 
 Three register sets, one contract. @crate-v2 builds tasks on it.
 // chapter-status:begin
-// stage: early-draft
+// stage: research-done
 // revision: 2
 // body: c4d72ee1fa32
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

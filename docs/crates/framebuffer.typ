@@ -105,8 +105,9 @@ The recordings are of the serial port, so they show the mode being accepted. The
 
 Rectangles, digits and a console that never looks back. @crate-ramfb is the first driver to hand it pixels.
 // chapter-status:begin
-// stage: early-draft
+// stage: research-done
 // revision: 1
 // body: 3290608877a3
 // activity: 2026-11-22 | r1 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r1 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

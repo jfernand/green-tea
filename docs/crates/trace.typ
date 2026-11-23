@@ -194,8 +194,9 @@ test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
 The kernel's `replay`, without the kernel. @crate-measure asks what the same traces cost in instructions and in time.
 // chapter-status:begin
-// stage: early-draft
+// stage: research-done
 // revision: 2
 // body: f43784850740
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

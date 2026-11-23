@@ -76,8 +76,9 @@ PASS: 2 serial interrupts woke the shell from 98 halts
 
 Two registers, three writes, and a CPU that can sleep. @crate-i8042 is the first device to use it.
 // chapter-status:begin
-// stage: early-draft
+// stage: research-done
 // revision: 1
 // body: 7e9a1c159658
 // activity: 2026-11-22 | r1 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r1 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

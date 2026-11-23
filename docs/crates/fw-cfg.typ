@@ -119,8 +119,9 @@ The selectors depend on the machine: `etc/ramfb` is `0x0026` on `x86_64`, where 
 
 A numbered list with a DMA door. @crate-ramfb goes through that door once, and @crate-framebuffer draws on what it sets up.
 // chapter-status:begin
-// stage: early-draft
+// stage: research-done
 // revision: 2
 // body: f0f04fb328cf
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

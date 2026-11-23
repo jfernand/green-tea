@@ -104,8 +104,9 @@ lights: this firmware isn't one whose lights we know, so nothing was sent
 
 Five bytes, written in the right order, on the one firmware that we have read. @crate-bare is what puts these drivers on a machine.
 // chapter-status:begin
-// stage: early-draft
+// stage: research-done
 // revision: 1
 // body: ee6e9b97e236
 // activity: 2026-11-22 | r1 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r1 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

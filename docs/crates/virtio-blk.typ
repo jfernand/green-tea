@@ -119,8 +119,9 @@ test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
 Three buffers per request, and a disk on every architecture. @crate-multiboot2 starts the drivers a physical PC needs.
 // chapter-status:begin
-// stage: early-draft
+// stage: research-done
 // revision: 2
 // body: 4c56f0cae64c
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

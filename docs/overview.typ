@@ -106,8 +106,9 @@ The kernels judge themselves. Each prints a line starting with `PASS:` or `FAIL:
 
 Every listing is from commit #raw(pinned), with its file and line numbers in the bar above it. Lines may be cut, which is marked `// …`, and nothing else is changed. Numbered badges refer to the notes under a listing. Every output is from a recorded run, and lines may be left out of it. @app-method says how both are checked.
 // chapter-status:begin
-// stage: early-draft
+// stage: research-done
 // revision: 4
 // body: 57b77c2dc27c
 // activity: 2026-11-22 | r4 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r4 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

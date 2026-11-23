@@ -260,8 +260,9 @@ The acquisitions are the same on every run. The waits and milliseconds are marke
 
 One flag, a list per class, and a lock taken 30 times less often. @crate-shard takes no lock at all.
 // chapter-status:begin
-// stage: early-draft
+// stage: research-done
 // revision: 2
 // body: d58a27d8dc70
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

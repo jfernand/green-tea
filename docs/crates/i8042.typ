@@ -124,8 +124,9 @@ keyboard 27, mouse 0, serial 0, backup timer 84, halts 111
 
 Two ports, two tables and an interrupt. @crate-xhci is the same job on a modern machine, and takes rather more.
 // chapter-status:begin
-// stage: early-draft
+// stage: research-done
 // revision: 2
 // body: 61f22577cb6f
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

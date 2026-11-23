@@ -68,8 +68,9 @@ PASS: read 64 sectors over virtio-PCI, and wrote one back
 
 One fence and five instructions. @crate-ns16550 is the first driver built on them.
 // chapter-status:begin
-// stage: early-draft
+// stage: research-done
 // revision: 2
 // body: f9af6e74f80b
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

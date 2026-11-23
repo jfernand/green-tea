@@ -1009,8 +1009,9 @@ PASS: 57 switches, as expected
 
 Four boards, one trait, and the parts of a kernel. @crate-coop puts them to work.
 // chapter-status:begin
-// stage: early-draft
+// stage: research-done
 // revision: 4
 // body: 160f87cf5648
 // activity: 2026-11-22 | r4 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r4 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

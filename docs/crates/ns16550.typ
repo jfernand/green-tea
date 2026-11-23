@@ -71,8 +71,9 @@ hello from the serial port
 
 A console in 67 lines. @crate-pl011 is the same job on Arm's UART.
 // chapter-status:begin
-// stage: early-draft
+// stage: research-done
 // revision: 3
 // body: 9acf37bbc352
 // activity: 2026-11-22 | r3 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r3 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

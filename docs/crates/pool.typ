@@ -147,8 +147,9 @@ All 1,000 tasks had their locals at the same address, because each reused the st
 
 Two pools, and one difference: where the bookkeeping lives. @crate-fit drops the requirement that every block be the same size.
 // chapter-status:begin
-// stage: early-draft
+// stage: research-done
 // revision: 1
 // body: 25b781e1ffc8
 // activity: 2026-11-22 | r1 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r1 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

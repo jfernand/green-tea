@@ -629,8 +629,9 @@ the clerk's second record is inside the logger's buffer: true
 
 Eighteen kernels, one binary, and a line that says `PASS`. @crate-preempt takes the `yield_now` away.
 // chapter-status:begin
-// stage: early-draft
+// stage: research-done
 // revision: 4
 // body: c30df18eb324
 // activity: 2026-11-22 | r4 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r4 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

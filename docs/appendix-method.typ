@@ -19,8 +19,9 @@ The coverage check is a floor. It proves each public item is named in its crate'
 
 The crates were written up in parallel by AI agents working from one brief, with `green-tea-pool` and `green-tea-fit` as models, and then read through as a whole. The defects of @app-issues were found in that first pass, at `7898396`, and each was checked a second time, independently of the section that found it, by reading the cited code and, wherever that was cheap, by running a small program. The same method of agents and checkers was used for the update.
 // chapter-status:begin
-// stage: early-draft
+// stage: research-done
 // revision: 3
 // body: a11bbf9b7deb
 // activity: 2026-11-22 | r3 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r3 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

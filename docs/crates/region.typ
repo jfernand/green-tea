@@ -244,8 +244,9 @@ Two regions turn 10,316 heap allocations into 16. The price is in the session's 
 
 Everything at once, and the types to prove it. @crate-smp makes an allocator usable from several CPUs.
 // chapter-status:begin
-// stage: early-draft
+// stage: research-done
 // revision: 2
 // body: 95916d5a98f8
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

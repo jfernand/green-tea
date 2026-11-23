@@ -448,8 +448,9 @@ Port 5 is the first USB 2 port: QEMU's controller numbers its USB 3 ports 1 to 4
 
 Six steps to read eight bytes. @crate-nvme is the other PC device with queues in memory.
 // chapter-status:begin
-// stage: early-draft
+// stage: research-done
 // revision: 3
 // body: 85f4d569bcbf
 // activity: 2026-11-22 | r3 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r3 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

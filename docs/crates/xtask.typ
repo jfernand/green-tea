@@ -383,8 +383,9 @@ test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
 Four commands, and one rule: the kernel says PASS or FAIL, and `xtask` believes it. @app-xtask lists every command and option.
 // chapter-status:begin
-// stage: early-draft
+// stage: research-done
 // revision: 4
 // body: a208b6192fd6
 // activity: 2026-11-22 | r4 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r4 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

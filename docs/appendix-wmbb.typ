@@ -103,8 +103,9 @@ The firmware also says what kind of keyboard this is. Its flags word, `PSF1`, re
 
 Running the driver on the laptop, one zone first, settles the first and the third.
 // chapter-status:begin
-// stage: early-draft
+// stage: research-done
 // revision: 2
 // body: b45649b7eeaa
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end
