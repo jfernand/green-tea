@@ -1,6 +1,6 @@
 [package]
 name = "green-tea-smr"
-description = "Safe memory reclamation: a lock-free stack and queue, and three answers to when a node they unlinked may be freed (never, after two epochs, when no hazard pointer names it)."
+description = "Safe memory reclamation: a lock-free stack and queue."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
