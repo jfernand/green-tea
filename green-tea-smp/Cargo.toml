@@ -1,6 +1,6 @@
 [package]
 name = "green-tea-smp"
-description = "Allocating from several CPUs: a spin lock, a heap behind one, and per-CPU caches of blocks in front of it."
+description = "Allocating from several CPUs."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
