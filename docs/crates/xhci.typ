@@ -447,3 +447,9 @@ Port 5 is the first USB 2 port: QEMU's controller numbers its USB 3 ports 1 to 4
 - Memory ordering uses `fence(SeqCst)`, which is enough on `x86_64`, the only board that uses the crate. It doesn't cover device I/O on `riscv64`, which is what `dma_fence` in @crate-io is for.
 
 Six steps to read eight bytes. @crate-nvme is the other PC device with queues in memory.
+// chapter-status:begin
+// stage: early-draft
+// revision: 3
+// body: 85f4d569bcbf
+// activity: 2026-11-22 | r3 | stage | green-tea | note | tracking started at early-draft
+// chapter-status:end

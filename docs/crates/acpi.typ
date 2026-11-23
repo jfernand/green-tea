@@ -164,3 +164,9 @@ type `help` for the commands
 - No AML. `dsdt_header` reads the DSDT's header and nothing else, so there is no power-off and no device discovery beyond these tables.
 
 A checksum, a walk and seven questions. @crate-ioapic uses the answers about interrupts.
+// chapter-status:begin
+// stage: early-draft
+// revision: 3
+// body: 069586533afe
+// activity: 2026-11-22 | r3 | stage | green-tea | note | tracking started at early-draft
+// chapter-status:end

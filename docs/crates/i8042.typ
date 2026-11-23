@@ -123,3 +123,9 @@ keyboard 27, mouse 0, serial 0, backup timer 84, halts 111
 - `Keyboard` takes no lock. The `pc` board guards it with a flag.
 
 Two ports, two tables and an interrupt. @crate-xhci is the same job on a modern machine, and takes rather more.
+// chapter-status:begin
+// stage: early-draft
+// revision: 2
+// body: 61f22577cb6f
+// activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// chapter-status:end

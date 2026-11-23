@@ -215,3 +215,9 @@ test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 - A task dropped before it finishes doesn't run the destructors of the locals on its stack.
 
 Fifteen instructions and a queue. @crate-arch takes the switch to three architectures.
+// chapter-status:begin
+// stage: early-draft
+// revision: 2
+// body: e4bf03048a99
+// activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// chapter-status:end

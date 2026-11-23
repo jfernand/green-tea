@@ -492,3 +492,9 @@ The binary form is 3.75 times smaller than the text.
 - `pages` on aarch64 reports only that there is no paging. The `resident` kernel doesn't run there.
 
 One task, twenty commands, and a trace of 20,483 events. @crate-trace does the same with programs from outside the kernel.
+// chapter-status:begin
+// stage: early-draft
+// revision: 3
+// body: 39ca63452cd2
+// activity: 2026-11-22 | r3 | stage | green-tea | note | tracking started at early-draft
+// chapter-status:end

@@ -18,3 +18,9 @@ At `7898396`, every recording script was run a second time from a fresh export, 
 The coverage check is a floor. It proves each public item is named in its crate's section, and can't prove that what the section says about it is right. Claims were checked against the code and the recordings as they were written.
 
 The crates were written up in parallel by AI agents working from one brief, with `green-tea-pool` and `green-tea-fit` as models, and then read through as a whole. The defects of @app-issues were found in that first pass, at `7898396`, and each was checked a second time, independently of the section that found it, by reading the cited code and, wherever that was cheap, by running a small program. The same method of agents and checkers was used for the update.
+// chapter-status:begin
+// stage: early-draft
+// revision: 3
+// body: a11bbf9b7deb
+// activity: 2026-11-22 | r3 | stage | green-tea | note | tracking started at early-draft
+// chapter-status:end

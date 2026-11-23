@@ -1008,3 +1008,9 @@ PASS: 57 switches, as expected
 - *The interrupt path hasn't run on physical hardware*, and the mouse's interrupt hasn't been exercised anywhere.
 
 Four boards, one trait, and the parts of a kernel. @crate-coop puts them to work.
+// chapter-status:begin
+// stage: early-draft
+// revision: 4
+// body: 160f87cf5648
+// activity: 2026-11-22 | r4 | stage | green-tea | note | tracking started at early-draft
+// chapter-status:end

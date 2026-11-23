@@ -61,3 +61,9 @@ hello from the serial port
 - No interrupts, and `putc` can spin forever.
 
 Three registers and a console. @crate-fw-cfg is the first device here that does DMA.
+// chapter-status:begin
+// stage: early-draft
+// revision: 2
+// body: 9c29d50606dd
+// activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// chapter-status:end

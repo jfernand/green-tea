@@ -70,3 +70,9 @@ hello from the serial port
 - `putc` can spin forever if the transmitter never empties.
 
 A console in 67 lines. @crate-pl011 is the same job on Arm's UART.
+// chapter-status:begin
+// stage: early-draft
+// revision: 3
+// body: 9acf37bbc352
+// activity: 2026-11-22 | r3 | stage | green-tea | note | tracking started at early-draft
+// chapter-status:end

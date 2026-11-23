@@ -112,3 +112,9 @@ type `help` for the commands
 - `free_end` adds a range's base and length unchecked, so a map entry that runs past the top of the address space overflows.
 
 Five tags tell a kernel what kind of machine it woke up on. @crate-acpi reads the one that points further.
+// chapter-status:begin
+// stage: early-draft
+// revision: 2
+// body: 2b4b5d0ac93f
+// activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// chapter-status:end

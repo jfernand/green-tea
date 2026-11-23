@@ -628,3 +628,9 @@ the clerk's second record is inside the logger's buffer: true
 - Lines marked `this run:` or `a time, not a count:` differ between runs, and no verdict depends on them, except that `incremental` needs a tick to be seen.
 
 Eighteen kernels, one binary, and a line that says `PASS`. @crate-preempt takes the `yield_now` away.
+// chapter-status:begin
+// stage: early-draft
+// revision: 4
+// body: c30df18eb324
+// activity: 2026-11-22 | r4 | stage | green-tea | note | tracking started at early-draft
+// chapter-status:end

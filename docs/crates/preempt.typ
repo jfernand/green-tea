@@ -162,3 +162,9 @@ PASS: 44 preemptions; every busy worker ran in several slices, and the sleeper u
 - With nothing runnable the scheduler spins (`runtime.rs:57` in `green-tea-bare`) instead of waiting for an interrupt.
 
 A timer, a short handler, and one rule about interrupts. @crate-shell goes back to one task, and gives it a keyboard.
+// chapter-status:begin
+// stage: early-draft
+// revision: 2
+// body: a3199af6c956
+// activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// chapter-status:end

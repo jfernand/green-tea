@@ -67,3 +67,9 @@ PASS: read 64 sectors over virtio-PCI, and wrote one back
 - No driver takes a lock. Where a kernel starts several CPUs, keeping them from using one device at once is the caller's job, as the crate's documentation says.
 
 One fence and five instructions. @crate-ns16550 is the first driver built on them.
+// chapter-status:begin
+// stage: early-draft
+// revision: 2
+// body: f9af6e74f80b
+// activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// chapter-status:end

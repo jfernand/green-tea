@@ -101,3 +101,9 @@ PASS: read 64 sectors over virtio-PCI, and wrote one back
 - The offset arguments are unchecked, and an unaligned one breaks the contract in the comment on line 50.
 
 A flat scan of a window the firmware set up. @crate-virtio is what the scan is looking for.
+// chapter-status:begin
+// stage: early-draft
+// revision: 2
+// body: ee755159408d
+// activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// chapter-status:end

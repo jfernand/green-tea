@@ -68,3 +68,9 @@ PASS: read 64 sectors over virtio-MMIO, and wrote one back
 - It exists only under QEMU: the `pc` board gets its screen from the bootloader instead, through @crate-multiboot2.
 
 Twenty-eight bytes buy a screen. @crate-pci is how `x86_64` finds its other devices.
+// chapter-status:begin
+// stage: early-draft
+// revision: 2
+// body: 3357de0903b0
+// activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// chapter-status:end

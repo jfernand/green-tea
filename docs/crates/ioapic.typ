@@ -75,3 +75,9 @@ PASS: 2 serial interrupts woke the shell from 98 halts
 - Message-signalled interrupts (MSI and MSI-X), which NVMe and xHCI would use, don't pass through this chip and aren't implemented.
 
 Two registers, three writes, and a CPU that can sleep. @crate-i8042 is the first device to use it.
+// chapter-status:begin
+// stage: early-draft
+// revision: 1
+// body: 7e9a1c159658
+// activity: 2026-11-22 | r1 | stage | green-tea | note | tracking started at early-draft
+// chapter-status:end

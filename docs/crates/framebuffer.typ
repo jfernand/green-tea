@@ -104,3 +104,9 @@ The recordings are of the serial port, so they show the mode being accepted. The
 - `Text` treats bytes one at a time, so a UTF-8 character shows as one space per byte.
 
 Rectangles, digits and a console that never looks back. @crate-ramfb is the first driver to hand it pixels.
+// chapter-status:begin
+// stage: early-draft
+// revision: 1
+// body: 3290608877a3
+// activity: 2026-11-22 | r1 | stage | green-tea | note | tracking started at early-draft
+// chapter-status:end

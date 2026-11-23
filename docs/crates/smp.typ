@@ -259,3 +259,9 @@ The acquisitions are the same on every run. The waits and milliseconds are marke
 - A block freed by another CPU goes to the freeing CPU's cache, so a producer and a consumer move every block through the central lock. @crate-shard is built around that case.
 
 One flag, a list per class, and a lock taken 30 times less often. @crate-shard takes no lock at all.
+// chapter-status:begin
+// stage: early-draft
+// revision: 2
+// body: d58a27d8dc70
+// activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// chapter-status:end

@@ -56,3 +56,9 @@ ok    coop-x86_64     57 switches, as expected
 ]
 
 @crate-coop, @crate-preempt and @crate-shell describe each in detail.
+// chapter-status:begin
+// stage: early-draft
+// revision: 4
+// body: 39b83381c276
+// activity: 2026-11-22 | r4 | stage | green-tea | note | tracking started at early-draft
+// chapter-status:end
