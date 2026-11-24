@@ -2,7 +2,7 @@
 
 = How this report was produced <app-method>
 
-The report describes one commit, #raw(pinned), read from a clean export so that uncommitted work can't leak into it. Its first version described an earlier commit, `7898396`, and it has been brought up to date since. At #raw(pinned), which added device interrupts and the keyboard lights, every listing was re-pinned by script and checked again. The outputs of the crates that changed, the host tests and both kernel suites were recorded again from #raw(pinned). Outputs of crates with no change since `79b31d6` are from that commit. Four scripts in `docs/` keep it honest, and each can be run again.
+The report describes one commit, #raw(pinned), read from a clean export so that uncommitted work can't leak into it. Its first version described an earlier commit, `7898396`, and it has been brought up to date since. At `0fa41b6`, which added device interrupts and the keyboard lights, every listing was re-pinned by script and checked again, and the outputs of the crates that changed, the host tests and both kernel suites were recorded again. #raw(pinned) changes only the keyboard lights, after a run on the laptop. Its listings were checked again, and the lights' outputs and the count of host tests were recorded from it. The other outputs are from `0fa41b6`, or from `79b31d6` for crates with no change since. Four scripts in `docs/` keep it honest, and each can be run again.
 
 #dtable(columns: (auto, 1fr), ("Script", "What it does"),
   [`record.sh`], [Exports the pinned commit, and runs the commands in `record.d/` to produce the outputs in `output/`],
@@ -20,8 +20,8 @@ The coverage check is a floor. It proves each public item is named in its crate'
 The crates were written up in parallel by AI agents working from one brief, with `green-tea-pool` and `green-tea-fit` as models, and then read through as a whole. The defects of @app-issues were found in that first pass, at `7898396`, and each was checked a second time, independently of the section that found it, by reading the cited code and, wherever that was cheap, by running a small program. The same method of agents and checkers was used for the update.
 // chapter-status:begin
 // stage: research-done
-// revision: 3
-// body: a11bbf9b7deb
+// revision: 4
+// body: bad0f9a4f264
 // activity: 2026-11-22 | r3 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r3 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

@@ -69,7 +69,7 @@ PASS: 2 serial interrupts woke the shell from 98 halts
 
 == Limits
 
-- Tested only against QEMU's IO APIC and a fake one, never on physical hardware.
+- Tested against QEMU's IO APIC and a fake one, and once on the laptop, where it delivered the keyboard's interrupt.
 - Fixed delivery to one physical APIC id of at most 255. On a CPU with a larger id the `pc` board stays polled.
 - An input is never masked again, and nothing reads an entry back.
 - Message-signalled interrupts (MSI and MSI-X), which NVMe and xHCI would use, don't pass through this chip and aren't implemented.
@@ -77,8 +77,8 @@ PASS: 2 serial interrupts woke the shell from 98 halts
 Two registers, three writes, and a CPU that can sleep. @crate-i8042 is the first device to use it.
 // chapter-status:begin
 // stage: research-done
-// revision: 1
-// body: 7e9a1c159658
+// revision: 2
+// body: 0045c208b90f
 // activity: 2026-11-22 | r1 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r1 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

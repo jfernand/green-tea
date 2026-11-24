@@ -2,7 +2,7 @@
 
 = Overview <overview>
 
-green-tea is a Rust workspace of 34 crates and 42,070 lines, in which every level of a small system is written by hand: a context switch, a scheduler, allocators, device drivers, kernels, a Lisp to allocate for, and the tools that measure the result. It began as green threads under Linux, and the kernels still run the same context switch. All of it is `MIT OR Apache-2.0`, and none of it is published as a crate.
+green-tea is a Rust workspace of 34 crates and 42,032 lines, in which every level of a small system is written by hand: a context switch, a scheduler, allocators, device drivers, kernels, a Lisp to allocate for, and the tools that measure the result. It began as green threads under Linux, and the kernels still run the same context switch. All of it is `MIT OR Apache-2.0`, and none of it is published as a crate.
 
 The kernels run in QEMU, on its `virt` machine for riscv64 and aarch64 and on `q35` for x86_64. A second x86_64 board, `pc`, is written for physical PCs: GRUB boots it from UEFI through Multiboot2, and it finds the machine from the boot information and ACPI. It has been run only in QEMU, under UEFI firmware, and @app-issues says what that leaves unproven.
 
@@ -45,11 +45,11 @@ Crates fall into five groups, which are the five parts of this report. Each grou
   [#link(<crate-i8042>)[`green-tea-i8042`]], [224], [A PS/2 keyboard controller, read when its interrupt says so],
   [#link(<crate-xhci>)[`green-tea-xhci`]], [1,443], [A polled xHCI (USB 3) controller, and a USB keyboard],
   [#link(<crate-nvme>)[`green-tea-nvme`]], [721], [A polled NVMe disk],
-  [#link(<crate-clevo-lights>)[`green-tea-clevo-lights`]], [315], [A Clevo laptop's keyboard lights],
+  [#link(<crate-clevo-lights>)[`green-tea-clevo-lights`]], [287], [A Clevo laptop's keyboard lights],
   [#link(<crate-bare>)[`green-tea-bare`]], [4,712], [Boot, platforms, heap, paging, CPUs, tasks, scheduler],
   [#link(<crate-coop>)[`green-tea-coop`]], [6,122], [The cooperative kernel and its test kernels],
   [#link(<crate-preempt>)[`green-tea-preempt`]], [240], [A kernel whose tasks are preempted by a timer],
-  [#link(<crate-shell>)[`green-tea-shell`]], [1,861], [A shell on the serial console],
+  [#link(<crate-shell>)[`green-tea-shell`]], [1,851], [A shell on the serial console],
   [#link(<crate-trace>)[`green-tea-trace`]], [595], [Replays a trace file on the host],
   [#link(<crate-measure>)[`green-tea-measure`]], [2,639], [One trace against every allocator],
   [#link(<crate-xtask>)[`xtask`]], [1,564], [Builds, boots and judges everything],
@@ -96,7 +96,7 @@ At the commit this report describes, the host tests pass:
 
 #output(title: "cargo test")[
 ```
-host tests: 564 passed, 0 failed, 0 ignored
+host tests: 563 passed, 0 failed, 0 ignored
 ```
 ]
 
@@ -107,8 +107,8 @@ The kernels judge themselves. Each prints a line starting with `PASS:` or `FAIL:
 Every listing is from commit #raw(pinned), with its file and line numbers in the bar above it. Lines may be cut, which is marked `// …`, and nothing else is changed. Numbered badges refer to the notes under a listing. Every output is from a recorded run, and lines may be left out of it. @app-method says how both are checked.
 // chapter-status:begin
 // stage: research-done
-// revision: 4
-// body: 57b77c2dc27c
+// revision: 5
+// body: 2cee896d2f85
 // activity: 2026-11-22 | r4 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r4 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

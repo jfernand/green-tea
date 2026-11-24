@@ -996,7 +996,7 @@ PASS: 57 switches, as expected
 
 == Limits <bare-limits>
 
-- *The `pc` board has run only in QEMU with UEFI firmware and under KVM, never on physical hardware.* The run above is QEMU with OVMF, emulated, as `xtask` starts it. The conditions a physical machine would bring were forced in QEMU: no HPET, xAPIC and x2APIC, sparse APIC ids, 12 CPUs with a limit of 16, memory mapped above 4 GiB, and PS/2 and USB keyboards at full and high speed. A local APIC at a non-default address is covered only by a host test of its parsing.
+- *The `pc` board has run on one physical machine, once.* A release build of the shell booted from a USB drive on the Clevo NP50PN laptop, and its keyboard interrupts and the lights' mailbox worked. Nothing else has been checked there: not USB keyboards, NVMe, several CPUs or the other kernels. The run above is QEMU with OVMF, emulated, as `xtask` starts it. The conditions a physical machine would bring were forced in QEMU: no HPET, xAPIC and x2APIC, sparse APIC ids, 12 CPUs with a limit of 16, memory mapped above 4 GiB, and PS/2 and USB keyboards at full and high speed. A local APIC at a non-default address is covered only by a host test of its parsing.
 - *Secure Boot must be off*, since the GRUB that `xtask` builds isn't signed.
 - *USB is a keyboard plugged straight into a controller's port before boot*: no hubs, no hot-plugging, and no USB storage. The disk the board drives is NVMe, and it has run only against QEMU's `nvme` device.
 - `pc` assumes the TSC runs at a constant rate and agrees between CPUs. It doesn't check CPUID for an invariant TSC.
@@ -1005,13 +1005,13 @@ PASS: 57 switches, as expected
 - *A regression in the guard pages wouldn't show in CI.* `unmap_heap` on riscv64 and x86_64 must not touch the stack pool's 2 MiB page when the heap starts on a 2 MiB boundary. Only a build with the heap on that boundary exercises this, and the builds CI runs don't have one.
 - *Only `pc`, and only its input, uses device interrupts.* The disks, USB and the three QEMU boards are polled. Those boards' idle wait is a busy loop.
 - *Device interrupts are taken only while idle.* Tasks run with interrupts off, so a handler runs only inside `wait_for_interrupt`. If one task is asleep while another waits for an event, the scheduler spins with interrupts off, and the waiter can't wake before the sleeper is due.
-- *The interrupt path hasn't run on physical hardware*, and the mouse's interrupt hasn't been exercised anywhere.
+- *On physical hardware, only the keyboard's interrupt has run.* On the laptop, `irq` counted keyboard interrupts as keys were pressed. The serial port's interrupt has run only in QEMU, and the mouse's hasn't been exercised anywhere.
 
 Four boards, one trait, and the parts of a kernel. @crate-coop puts them to work.
 // chapter-status:begin
 // stage: research-done
-// revision: 4
-// body: 160f87cf5648
+// revision: 5
+// body: b87a369dedf3
 // activity: 2026-11-22 | r4 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r4 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

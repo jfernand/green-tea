@@ -114,7 +114,7 @@ keyboard 27, mouse 0, serial 0, backup timer 84, halts 111
 
 == Limits
 
-- Tested only against QEMU's emulated i8042, never on physical hardware.
+- Tested against QEMU's emulated i8042, and once on the laptop's built-in keyboard, where its interrupts arrived.
 - No initialization: it sends the controller no commands, and relies on the firmware having left it enabled with translation to set 1 on. With translation off, the codes would decode as the wrong keys.
 - The interrupt only says that a byte is there. The byte waits in the controller until the woken task calls `getc`.
 - Mouse and touchpad bytes are read and thrown away.
@@ -125,8 +125,8 @@ keyboard 27, mouse 0, serial 0, backup timer 84, halts 111
 Two ports, two tables and an interrupt. @crate-xhci is the same job on a modern machine, and takes rather more.
 // chapter-status:begin
 // stage: research-done
-// revision: 2
-// body: 61f22577cb6f
+// revision: 3
+// body: 6a39778dabd2
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

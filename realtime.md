@@ -16,7 +16,8 @@ phase, and QEMU's timings are never reported as results.
 - No background services, so nothing runs that we didn't start.
 - Starting several CPUs, with their APIC ids from ACPI.
 - Keyboard, mouse and serial interrupts through the IO APIC on the `pc` board. They work in
-  QEMU and **haven't run on the laptop**, and the mouse interrupt hasn't been exercised.
+  QEMU, and the keyboard's interrupt has worked on the laptop. The serial port's hasn't run
+  there, and the mouse's hasn't been exercised anywhere.
 
 ## What stands in the way
 
@@ -65,8 +66,8 @@ Read from Linux on this machine (i7-12700H):
 ## Phases
 
 Each phase ends with something we can run and check, and every pass below is on the laptop.
-**Before phase 0:** the interrupts have to pass on the laptop, because the `latency` kernel
-depends on the same boot path and timer setup.
+The shell has booted on the laptop and taken keyboard interrupts there, so the boot path
+and timer setup that the `latency` kernel depends on work on the real machine.
 
 0. **Measure first.** A `latency` kernel asks for a timer tick thousands of times per second
    and records how late each one is, as a histogram, along with the SMIs it saw. QEMU can

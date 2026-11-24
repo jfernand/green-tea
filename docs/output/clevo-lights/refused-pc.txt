@@ -5,7 +5,7 @@ framebuffer: 1280x800 XRGB8888
 type `help` for the commands
 > lights
 lights: this firmware isn't one whose lights we know, so nothing was sent
-> lights left red
+> lights red
 lights: this firmware isn't one whose lights we know, so nothing was sent
 > lights nonsense
 unknown color `nonsense`: try red, green, blue, white, orange, yellow, cyan, purple, pink, or rrggbb

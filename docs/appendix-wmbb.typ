@@ -94,18 +94,20 @@ Writing one byte to the EC is a standard ACPI protocol over two I/O ports, `0x66
 
 The firmware also says what kind of keyboard this is. Its flags word, `PSF1`, reads `0x04690025` on this laptop. Bit `0x00400000`, which `tuxedo-drivers` reads as "three-zone RGB", is set, and bit `0x40000000`, "white only", is clear.
 
+On the laptop, the flags are wrong about the keyboard. Setting zone 0 changed the color of the whole keyboard, and zones 1 and 2 changed nothing: it has one zone (@crate-clevo-lights).
+
 #callout(kind: "note", [What we don't know yet])[
-  - *Whether it works.* The driver hasn't been run on the laptop, so the zones, the colors and the byte order are unconfirmed on the keyboard itself.
-  - *The keyboard type, from the EC.* `tuxedo-drivers` first asks the EC (its `KBTP` register), and uses `PSF1` as a fallback. We read only `PSF1`.
+  - *The keyboard type, from the EC.* `tuxedo-drivers` first asks the EC (its `KBTP` register), and uses `PSF1` as a fallback. We read only `PSF1`, which says three zones, so `KBTP` may be what says one.
+  - *The byte order and the brightness.* The mailbox works, but the colors' order and the brightness value haven't been checked on the keyboard.
   - *Timing.* The firmware writes the mailbox without waiting for the EC to finish, while holding a lock. Our driver leaves 10 ms between commands, and doesn't check that `FCMD` has cleared.
   - *Safety of other values.* The same mailbox serves other EC functions, so the driver sends only the combinations in the tables above, and refuses any firmware but this one.
 ]
 
-Running the driver on the laptop, one zone first, settles the first and the third.
+One run on the laptop settled that the mailbox works and that there is one zone.
 // chapter-status:begin
 // stage: research-done
-// revision: 2
-// body: b45649b7eeaa
+// revision: 3
+// body: 004b628d329a
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

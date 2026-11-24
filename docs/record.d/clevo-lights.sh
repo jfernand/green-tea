@@ -8,7 +8,7 @@ cp /usr/share/OVMF/OVMF_VARS_4M.fd "$pc/lights.vars"
 {
     for _ in $(seq 600); do grep -q '^> ' "$log" 2>/dev/null && break; sleep 0.1; done
     sleep 1
-    for line in lights 'lights left red' 'lights nonsense' 'lights bright 40'; do printf '%s\n' "$line"; sleep 0.7; done
+    for line in lights 'lights red' 'lights nonsense' 'lights bright 40'; do printf '%s\n' "$line"; sleep 0.7; done
     sleep 1
 } | timeout 90 qemu-system-x86_64 -machine q35 -cpu max -m 512M -vga std -net none \
     -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
