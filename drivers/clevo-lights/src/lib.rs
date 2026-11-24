@@ -17,9 +17,11 @@ const FBF1: u8 = 0xfb;
 const FBF2: u8 = 0xfc;
 /// The mailbox command that sets a color or the brightness.
 const SET_LIGHTS: u8 = 0xca;
-/// `FDAT` for the brightness. A zone's color is `FIRST_ZONE` plus the zone.
+/// `FDAT` for the keyboard's color, and for its brightness. The firmware also writes `04`
+/// and `05`, for the center and right of a three-zone keyboard. This laptop's keyboard has
+/// one zone: `03` colors all of it, and the other two change nothing, so we never send them.
+const COLOR: u8 = 0x03;
 const BRIGHTNESS: u8 = 0x06;
-const FIRST_ZONE: u8 = 0x03;
 
 /// The EC's standard command to write a byte of its address space.
 const EC_WRITE: u8 = 0x81;
@@ -46,15 +48,6 @@ pub struct Firmware {
 
 /// The firmwares whose AML we have read: a Clevo NP50PN at BIOS 1.07.12.
 pub const KNOWN_FIRMWARE: &[Firmware] = &[Firmware { table_id: *b"ADL-P-M\0", length: 480_126, checksum: 0x97 }];
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Zone {
-    Left = 0,
-    Center = 1,
-    Right = 2,
-}
-
-pub const ZONES: [Zone; 3] = [Zone::Left, Zone::Center, Zone::Right];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Color {
@@ -120,15 +113,10 @@ impl<P: EcPorts> Lights<P> {
         Ok(Lights { ports, delay_ms })
     }
 
-    pub fn set_zone(&mut self, zone: Zone, color: Color) -> Result<(), Error> {
+    /// The color of the whole keyboard.
+    pub fn set_color(&mut self, color: Color) -> Result<(), Error> {
         // The firmware's order: blue, red, green.
-        self.mailbox(FIRST_ZONE + zone as u8, color.blue, color.red, color.green)
-    }
-
-    pub fn set_all(&mut self, color: Color) -> Result<(), Error> {
-        ZONES
-            .iter()
-            .try_for_each(|&zone| self.set_zone(zone, color))
+        self.mailbox(COLOR, color.blue, color.red, color.green)
     }
 
     /// The brightness of the whole keyboard. 0 is off.
@@ -239,30 +227,14 @@ mod tests {
     const KNOWN: Firmware = KNOWN_FIRMWARE[0];
 
     #[test]
-    fn a_zone_color_is_the_five_writes_the_firmware_makes() {
+    fn a_color_is_the_five_writes_the_firmware_makes() {
         let mut ec = Fake::default();
         let mut lights = Lights::new(&mut ec, |_| {}, KNOWN).unwrap();
         lights
-            .set_zone(Zone::Left, Color::parse("orange").unwrap())
+            .set_color(Color::parse("orange").unwrap())
             .unwrap();
         assert_eq!(ec.writes, [(0xf9, 0x03), (0xfa, 0x00), (0xfb, 0xff), (0xfc, 0x80), (0xf8, 0xca)]);
         assert!(!ec.overrun, "every byte waited for the last");
-    }
-
-    #[test]
-    fn each_zone_has_its_own_number() {
-        let mut ec = Fake::default();
-        let mut lights = Lights::new(&mut ec, |_| {}, KNOWN).unwrap();
-        lights
-            .set_all(Color { red: 1, green: 2, blue: 3 })
-            .unwrap();
-        let zones: Vec<u8> = ec
-            .writes
-            .iter()
-            .filter(|w| w.0 == FDAT)
-            .map(|w| w.1)
-            .collect();
-        assert_eq!(zones, [3, 4, 5]);
     }
 
     #[test]

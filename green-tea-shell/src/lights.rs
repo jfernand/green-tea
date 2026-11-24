@@ -2,12 +2,11 @@
 
 use core::fmt::{self, Write};
 use green_tea_bare::Board;
-use green_tea_bare::clevo_lights::{Color, Error, Zone};
+use green_tea_bare::clevo_lights::{Color, Error};
 
 pub const HELP: &str = "\
 lights             whether this machine's keyboard lights can be set
-lights <color>     all of the keyboard: a name (red, orange, ...) or rrggbb
-lights left|center|right <color>   one zone
+lights <color>     the keyboard's color: a name (red, orange, ...) or rrggbb
 lights bright <n>  brightness, 0 to 255
 lights off         turn them off
 ";
@@ -20,18 +19,9 @@ pub fn command(args: &[&str], out: &mut impl Write) -> fmt::Result {
             Ok(n) => with_lights(|l| l.set_brightness(n)).map(|()| "brightness set"),
             Err(_) => return writeln!(out, "usage: lights bright <0 to 255>"),
         },
-        [zone @ ("left" | "center" | "right"), color] => {
-            let zone = match *zone {
-                "left" => Zone::Left,
-                "center" => Zone::Center,
-                _ => Zone::Right,
-            };
-            let Some(color) = Color::parse(color) else { return unknown(out, color) };
-            with_lights(|l| l.set_brightness(255).and_then(|()| l.set_zone(zone, color))).map(|()| "zone set")
-        }
         [color] => {
             let Some(parsed) = Color::parse(color) else { return unknown(out, color) };
-            with_lights(|l| l.set_brightness(255).and_then(|()| l.set_all(parsed))).map(|()| "color set")
+            with_lights(|l| l.set_brightness(255).and_then(|()| l.set_color(parsed))).map(|()| "color set")
         }
         _ => return out.write_str(HELP),
     };
