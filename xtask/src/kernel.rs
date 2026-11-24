@@ -196,6 +196,7 @@ const KERNELS: &[Kernel] = &[
     },
     Kernel { name: "region", package: "green-tea-shell", arches: ALL, test: None, disk: false, input: Some("\nregions\n") },
     Kernel { name: "gtt", package: "green-tea-shell", arches: ALL, test: None, disk: false, input: Some("\ntrace on\nsession\ntrace off\ntrace check\n") },
+    Kernel { name: "interrupts", package: "green-tea-shell", arches: &["x86_64"], test: None, disk: false, input: Some("\nirq\n\u{1}irq test\n") },
     Kernel {
         name: "resident",
         package: "green-tea-shell",
@@ -211,6 +212,9 @@ const ALL: &[&str] = &["riscv64", "aarch64", "x86_64"];
 /// The kernels that are given more than one CPU (`-smp`). Every other kernel runs on a
 /// machine with one.
 const SMP_KERNELS: &[(&str, usize)] = &[("smp", 4), ("shard", 4), ("smr", 4)];
+
+/// The kernels that only make sense on the `pc` board.
+const PC_KERNELS: &[&str] = &["interrupts"];
 
 struct Arch {
     name: &'static str,
@@ -444,6 +448,9 @@ fn parse(args: &[String]) -> Result<Options, String> {
         arches = ARCHES.iter().collect();
     }
     for kernel in kernels {
+        if options.board != Board::Pc && PC_KERNELS.contains(&kernel.name) {
+            continue;
+        }
         for &arch in &arches {
             if kernel.arches.contains(&arch.name) {
                 options.jobs.push(Job { kernel, arch });
@@ -775,9 +782,17 @@ impl Run {
             return;
         }
         let Some((socket, input)) = self.late_input.take() else { return };
+        let log = self.log.clone();
         thread::spawn(move || {
             if let Ok(mut stream) = UnixStream::connect(&socket) {
-                let _ = stream.write_all(input.as_bytes());
+                // What follows a \u{1} waits until the kernel has answered and is at its prompt
+                // again, so that it arrives while the kernel is waiting for input.
+                for (i, part) in input.split('\u{1}').enumerate() {
+                    if i > 0 {
+                        wait_for_prompt(&log);
+                    }
+                    let _ = stream.write_all(part.as_bytes());
+                }
                 // Held open until QEMU exits: closing it could lose what is still queued.
                 let _ = std::io::copy(&mut stream, &mut std::io::sink());
             }
@@ -803,6 +818,20 @@ impl Run {
             }
             judge(&mut self.outcome, line);
         }
+    }
+}
+
+/// Wait until the log ends at a prompt with at least one answered command before it, and
+/// a moment more for the kernel to go back to waiting. Gives up after 30 seconds.
+fn wait_for_prompt(log: &Path) {
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(30) {
+        let text = fs::read(log).unwrap_or_default();
+        if text.ends_with(b"> ") && text.windows(5).any(|w| w == b"halts") {
+            thread::sleep(Duration::from_millis(200));
+            return;
+        }
+        thread::sleep(Duration::from_millis(20));
     }
 }
 
@@ -956,11 +985,21 @@ mod tests {
     fn expected(only: Option<&str>) -> Vec<String> {
         let mut labels = Vec::new();
         for kernel in super::KERNELS {
+            if super::PC_KERNELS.contains(&kernel.name) {
+                continue;
+            }
             for arch in super::ALL.iter().filter(|a| kernel.arches.contains(a) && only.is_none_or(|only| only == **a)) {
                 labels.push(format!("{}-{arch}", kernel.name));
             }
         }
         labels
+    }
+
+    #[test]
+    fn the_interrupts_kernel_runs_only_on_the_pc_board() {
+        assert!(!labels(&[]).contains(&"interrupts-x86_64".to_string()));
+        let pc = parse(&["--board".to_string(), "pc".to_string()]).unwrap();
+        assert!(pc.jobs.iter().any(|j| j.kernel.name == "interrupts"));
     }
 
     #[test]

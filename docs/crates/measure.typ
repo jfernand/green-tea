@@ -442,3 +442,10 @@ time --only tlsf,pools, run 100 times: FAIL in 0
 - Timings are of one machine under whatever load it had, which is why each table prints the load average.
 
 Bytes, instructions and nanoseconds, on the same trace. @crate-xtask is what boots the kernel that recorded it.
+// chapter-status:begin
+// stage: research-done
+// revision: 2
+// body: 5b203dee1b17
+// activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
+// chapter-status:end

@@ -8,7 +8,7 @@
   ("Source", [#repo("drivers/xhci/src/"), 4 files, 1,413 lines]),
   ("Depends on", [nothing; `no_std`]),
   ("Used by", [`green-tea-bare` (the `pc` board)]),
-  ("Tests", [34 host tests of the rings, descriptors, reports, arena, handoff and endpoint recovery; a typed line in QEMU]),
+  ("Tests", [35 host tests of the rings, descriptors, reports, arena, handoff and endpoint recovery; a typed line in QEMU]),
 )
 
 #dtable(columns: (auto, 1fr), ("Module", "What it holds"),
@@ -223,7 +223,7 @@ It can't be the kernel's heap. The `pc` board demand-pages its heap, and a devic
 
 On a PC the firmware may be using the controller, to offer a USB keyboard at its setup screen, with system management interrupts behind the operating system's back. xHCI has an extended capability for asking for it:
 
-#srcfile("drivers/xhci/src/lib.rs", lines: ((569, 589),), notes: ((570, [`offset` is the first extended capability, in dwords, from `HCCPARAMS1`.]), (574, [Setting the OS-owned bit asks. The firmware answers by clearing its own.]), (575, [We wait up to a second.]), (577, [A firmware that hasn't let go by then loses the controller anyway.]), (580, [Turns the SMIs off, and clears any pending events, which clear on a write of 1.]),))[```rust
+#srcfile("drivers/xhci/src/lib.rs", lines: ((576, 596),), notes: ((577, [`offset` is the first extended capability, in dwords, from `HCCPARAMS1`.]), (581, [Setting the OS-owned bit asks. The firmware answers by clearing its own.]), (582, [We wait up to a second.]), (584, [A firmware that hasn't let go by then loses the controller anyway.]), (587, [Turns the SMIs off, and clears any pending events, which clear on a write of 1.]),))[```rust
 fn take_from_firmware(base: usize, mut offset: usize, delay_ms: fn(u64)) {
     while offset != 0 {
         let at = base + offset * 4;
@@ -301,7 +301,7 @@ The heart of the driver is `try_port`, which walks the sequence the xHCI specifi
 + *Address Device*: an input context describes the slot (speed, port) and endpoint 0, and the command gives the device its USB address.
 + *Read the packet size*: the first 8 bytes of the device descriptor say how big endpoint 0's packets are, and if that differs from the default, an *Evaluate Context* command updates it.
 + *Read the configuration*: 9 bytes for the total length, then the whole descriptor, up to 512 bytes, for `find_boot_keyboard`.
-+ *Configure*: `SET_CONFIGURATION`, then `SET_PROTOCOL` to the boot protocol, then `SET_IDLE`, so that the keyboard reports only on a change. A keyboard may refuse the last one, and the driver carries on.
++ *Configure*: `SET_CONFIGURATION`, then `SET_PROTOCOL` to the boot protocol, then `SET_IDLE`, so that the keyboard reports only on a change. A keyboard may refuse the last one by stalling the request. `request_idle` then resets endpoint 0 and moves it past the refused request, so that later requests still work.
 + *Configure Endpoint*: a command adds the keyboard's interrupt endpoint to the slot, and the first transfer is queued.
 
 #srcfile("drivers/xhci/src/lib.rs", lines: ((458, 474),), size: 6.4pt, notes: ((458, [The input control context's add flags: the slot context, and endpoint 0.]), (459, [Speed, and "one endpoint" in the slot context's entry count.]), (462, [After this the device answers at its own address.]), (469, [USB 3 gives the size as a power of two, and the rest as a byte count.]),))[```rust
@@ -326,7 +326,7 @@ if max_packet != default_max_packet(speed) && max_packet >= 8 {
 
 Once the keyboard is configured, `start_keyboard` adds its endpoint. The endpoint's index in the device context is twice its number plus one for IN, and the slot context, copied from what the controller holds, has its entry count raised to match:
 
-#srcfile("drivers/xhci/src/lib.rs", lines: ((531, 548),), size: 6.4pt, notes: ((531, [Adds the slot context and this one endpoint.]), (534, [The entry count is the highest endpoint index in use.]), (542, [Three retries, type Interrupt IN, and the packet size.]), (547, [The first read. It completes when the keyboard next has something to say.]),))[```rust
+#srcfile("drivers/xhci/src/lib.rs", lines: ((538, 555),), size: 6.4pt, notes: ((538, [Adds the slot context and this one endpoint.]), (541, [The entry count is the highest endpoint index in use.]), (549, [Three retries, type Interrupt IN, and the packet size.]), (554, [The first read. It completes when the keyboard next has something to say.]),))[```rust
 write32(self.context(input, 0, 1), 1 | 1 << endpoint);
 // The slot context as the controller has it, with more endpoints.
 let first = read32(self.context(output, 0, 0));
@@ -413,7 +413,7 @@ The host tests cover what doesn't need a controller: TRB encoding, a ring's link
 
 #output(title: "cargo test -p green-tea-xhci")[
 ```
-test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 ]
 
@@ -434,16 +434,23 @@ Port 5 is the first USB 2 port: QEMU's controller numbers its USB 3 ports 1 to 4
 == Limits
 
 - Tested only against QEMU's `qemu-xhci` with `usb-kbd`, never on physical hardware. The firmware handoff, the scratchpads and endpoint recovery have run only in host tests, against fake registers and a fake controller, because QEMU's controller exercises none of them.
-- Polled: no interrupts. A key waits in the event ring until someone calls `poll`.
+- Polled: no interrupts. A key waits in the event ring until someone calls `poll`, which the `pc` board's backup timer does every 2 ms while the CPU would otherwise halt.
 - Root ports only: no hubs. A keyboard behind a hub isn't found.
 - No hot-plugging: the keyboard has to be attached at boot.
 - A keyboard only: no USB storage, and nothing else is driven. A device that isn't a keyboard is left addressed in its slot, with its memory still allocated.
 - Only the first keyboard, on the first controller that has one, and only in the device's first configuration.
 - The arena is reclaimed only when a controller without a keyboard halts. One that won't halt, or whose `new` fails, keeps what it took, out of 6 MiB shared by every controller.
-- Endpoint 0 isn't recovered. A keyboard that stalls the refused `SET_IDLE` leaves it halted, and a later recovery's `CLEAR_FEATURE` on it then fails, which gives the keyboard up. Recovery also blocks `poll` for up to a second per command.
+- Recovery blocks `poll` for up to a second per command.
 - The transfer length in an event is ignored (line 333), so a report shorter than 8 bytes is decoded with the tail of the previous one.
 - A device whose configuration descriptor reports a total length of 0 gets a setup TRB that says "no data", followed by a data TRB (lines 480 and 481).
 - `poll` queues at most six characters between calls, and drops the rest.
 - Memory ordering uses `fence(SeqCst)`, which is enough on `x86_64`, the only board that uses the crate. It doesn't cover device I/O on `riscv64`, which is what `dma_fence` in @crate-io is for.
 
 Six steps to read eight bytes. @crate-nvme is the other PC device with queues in memory.
+// chapter-status:begin
+// stage: research-done
+// revision: 3
+// body: 85f4d569bcbf
+// activity: 2026-11-22 | r3 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r3 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
+// chapter-status:end

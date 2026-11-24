@@ -2,7 +2,7 @@
 
 = Overview <overview>
 
-green-tea is a Rust workspace of 32 crates and 40,850 lines, in which every level of a small system is written by hand: a context switch, a scheduler, allocators, device drivers, kernels, a Lisp to allocate for, and the tools that measure the result. It began as green threads under Linux, and the kernels still run the same context switch. All of it is `MIT OR Apache-2.0`, and none of it is published as a crate.
+green-tea is a Rust workspace of 34 crates and 42,032 lines, in which every level of a small system is written by hand: a context switch, a scheduler, allocators, device drivers, kernels, a Lisp to allocate for, and the tools that measure the result. It began as green threads under Linux, and the kernels still run the same context switch. All of it is `MIT OR Apache-2.0`, and none of it is published as a crate.
 
 The kernels run in QEMU, on its `virt` machine for riscv64 and aarch64 and on `q35` for x86_64. A second x86_64 board, `pc`, is written for physical PCs: GRUB boots it from UEFI through Multiboot2, and it finds the machine from the boot information and ACPI. It has been run only in QEMU, under UEFI firmware, and @app-issues says what that leaves unproven.
 
@@ -31,7 +31,7 @@ Crates fall into five groups, which are the five parts of this report. Each grou
   [#link(<crate-smr>)[`green-tea-smr`]], [1,496], [Lock-free structures, epochs, hazard pointers, RCU],
   [#link(<crate-lisp>)[`green-tea-lisp`]], [6,878], [A Lisp on counted, traced, generational and incremental heaps],
   [#link(<crate-io>)[`green-tea-io`]], [76], [`dma_fence` and x86 port I/O],
-  [#link(<crate-ns16550>)[`green-tea-ns16550`]], [54], [16550 UART],
+  [#link(<crate-ns16550>)[`green-tea-ns16550`]], [67], [16550 UART],
   [#link(<crate-pl011>)[`green-tea-pl011`]], [42], [Arm PL011 UART],
   [#link(<crate-fw-cfg>)[`green-tea-fw-cfg`]], [245], [QEMU's firmware configuration device],
   [#link(<crate-framebuffer>)[`green-tea-framebuffer`]], [294], [Drawing on a linear framebuffer, and a text console],
@@ -40,17 +40,19 @@ Crates fall into five groups, which are the five parts of this report. Each grou
   [#link(<crate-virtio>)[`green-tea-virtio`]], [991], [Virtio: negotiation, split virtqueues, two transports],
   [#link(<crate-virtio-blk>)[`green-tea-virtio-blk`]], [339], [A virtio disk],
   [#link(<crate-multiboot2>)[`green-tea-multiboot2`]], [245], [The boot information GRUB hands over],
-  [#link(<crate-acpi>)[`green-tea-acpi`]], [405], [The CPUs and clocks in the firmware's ACPI tables],
-  [#link(<crate-i8042>)[`green-tea-i8042`]], [176], [A polled PS/2 keyboard controller],
-  [#link(<crate-xhci>)[`green-tea-xhci`]], [1,413], [A polled xHCI (USB 3) controller, and a USB keyboard],
-  [#link(<crate-nvme>)[`green-tea-nvme`]], [654], [A polled NVMe disk],
-  [#link(<crate-bare>)[`green-tea-bare`]], [4,360], [Boot, platforms, heap, paging, CPUs, tasks, scheduler],
-  [#link(<crate-coop>)[`green-tea-coop`]], [6,125], [The cooperative kernel and its test kernels],
+  [#link(<crate-acpi>)[`green-tea-acpi`]], [540], [The CPUs, clocks and interrupt routes in the firmware's ACPI tables],
+  [#link(<crate-ioapic>)[`green-tea-ioapic`]], [143], [The IO APIC, which routes device interrupts to a CPU],
+  [#link(<crate-i8042>)[`green-tea-i8042`]], [224], [A PS/2 keyboard controller, read when its interrupt says so],
+  [#link(<crate-xhci>)[`green-tea-xhci`]], [1,443], [A polled xHCI (USB 3) controller, and a USB keyboard],
+  [#link(<crate-nvme>)[`green-tea-nvme`]], [721], [A polled NVMe disk],
+  [#link(<crate-clevo-lights>)[`green-tea-clevo-lights`]], [287], [A Clevo laptop's keyboard lights],
+  [#link(<crate-bare>)[`green-tea-bare`]], [4,712], [Boot, platforms, heap, paging, CPUs, tasks, scheduler],
+  [#link(<crate-coop>)[`green-tea-coop`]], [6,122], [The cooperative kernel and its test kernels],
   [#link(<crate-preempt>)[`green-tea-preempt`]], [240], [A kernel whose tasks are preempted by a timer],
-  [#link(<crate-shell>)[`green-tea-shell`]], [1,780], [A shell on the serial console],
+  [#link(<crate-shell>)[`green-tea-shell`]], [1,851], [A shell on the serial console],
   [#link(<crate-trace>)[`green-tea-trace`]], [595], [Replays a trace file on the host],
   [#link(<crate-measure>)[`green-tea-measure`]], [2,639], [One trace against every allocator],
-  [#link(<crate-xtask>)[`xtask`]], [1,525], [Builds, boots and judges everything],
+  [#link(<crate-xtask>)[`xtask`]], [1,564], [Builds, boots and judges everything],
 )
 
 Line counts include each crate's tests and examples.
@@ -70,6 +72,7 @@ The boards differ in what they offer, and the differences recur throughout:
   [Serial port], [16550, memory-mapped], [PL011], [16550, port `0x3f8`], [16550 at `0x3f8`, if there is one],
   [Screen], [`ramfb`], [`ramfb`], [`ramfb`], [GRUB's framebuffer],
   [Input], [serial], [serial], [serial], [serial, PS/2, USB],
+  [Waiting for input], [polled], [polled], [polled], [halted, until an interrupt],
   [Paging], [identity map], [MMU off], [identity map], [identity map],
   [Guard pages], [yes], [no], [yes], [yes],
   [Demand paging], [yes], [no], [yes], [yes],
@@ -93,12 +96,19 @@ At the commit this report describes, the host tests pass:
 
 #output(title: "cargo test")[
 ```
-host tests: 546 passed, 0 failed, 0 ignored
+host tests: 563 passed, 0 failed, 0 ignored
 ```
 ]
 
-The kernels judge themselves. Each prints a line starting with `PASS:` or `FAIL:`, and `xtask` reads it from the serial log. @app-kernels lists all 25, which make 72 runs across the three architectures, and 24 more on the `pc` board, where all but `disk` run.
+The kernels judge themselves. Each prints a line starting with `PASS:` or `FAIL:`, and `xtask` reads it from the serial log. @app-kernels lists all 26. Twenty-five of them make 72 runs across the three architectures, and all 26 run on the `pc` board.
 
 == Conventions in this report
 
 Every listing is from commit #raw(pinned), with its file and line numbers in the bar above it. Lines may be cut, which is marked `// …`, and nothing else is changed. Numbered badges refer to the notes under a listing. Every output is from a recorded run, and lines may be left out of it. @app-method says how both are checked.
+// chapter-status:begin
+// stage: research-done
+// revision: 5
+// body: 2cee896d2f85
+// activity: 2026-11-22 | r4 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r4 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
+// chapter-status:end

@@ -109,11 +109,13 @@ version = "0.1.0"
 dependencies = [
  "green-tea-acpi",
  "green-tea-arch",
+ "green-tea-clevo-lights",
  "green-tea-fit",
  "green-tea-framebuffer",
  "green-tea-fw-cfg",
  "green-tea-i8042",
  "green-tea-io",
+ "green-tea-ioapic",
  "green-tea-kmem",
  "green-tea-multiboot2",
  "green-tea-ns16550",
@@ -127,6 +129,10 @@ dependencies = [
  "green-tea-virtio-blk",
  "green-tea-xhci",
 ]
+
+[[package]]
+name = "green-tea-clevo-lights"
+version = "0.1.0"
 
 [[package]]
 name = "green-tea-coop"
@@ -159,6 +165,10 @@ version = "0.1.0"
 
 [[package]]
 name = "green-tea-io"
+version = "0.1.0"
+
+[[package]]
+name = "green-tea-ioapic"
 version = "0.1.0"
 
 [[package]]

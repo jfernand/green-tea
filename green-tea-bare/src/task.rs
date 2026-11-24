@@ -16,6 +16,7 @@
 //! Nothing here knows about interrupts. green-tea-preempt calls `yield_now` from its timer
 //! handler, and keeps interrupts off whenever a switch is under way.
 
+use crate::event::Event;
 use crate::global::Global;
 use crate::kmem::{Cache, KernelCache};
 use crate::platform::{Board, Platform};
@@ -39,7 +40,7 @@ static TASKS: KernelCache = KernelCache::new("task", size_of::<Inner>(), align_o
 /// Fails if the pool has no stack left.
 fn construct(record: *mut u8) -> bool {
     let Some(stack) = Stack::try_take() else { return false };
-    let inner = Inner { context: Context::default(), caller: Context::default(), func: None, done: false, id: 0, wake_at: None, stack };
+    let inner = Inner { context: Context::default(), caller: Context::default(), func: None, done: false, id: 0, wake_at: None, waits_for: None, stack };
     // SAFETY: the cache hands the constructor memory of the size and alignment of an `Inner`.
     unsafe { record.cast::<Inner>().write(inner) };
     true
@@ -76,6 +77,8 @@ struct Inner {
     id: usize,
     /// Set by `sleep_until` just before the task yields: don't run it again before this.
     wake_at: Option<u64>,
+    /// Set by `wait_event` just before the task yields: don't run it until this is set.
+    waits_for: Option<&'static Event>,
     stack: Stack,
 }
 
@@ -94,6 +97,7 @@ impl Task {
             (*inner).done = false;
             (*inner).id = id;
             (*inner).wake_at = None;
+            (*inner).waits_for = None;
             Task { inner: NonNull::new_unchecked(inner) }
         }
     }
@@ -109,6 +113,11 @@ impl Task {
     /// If the task went to sleep when it last yielded, until when. Taking it clears it.
     pub fn take_wake_at(&mut self) -> Option<u64> {
         unsafe { (*self.inner.as_ptr()).wake_at.take() }
+    }
+
+    /// If the task is waiting for an event since it last yielded, which. Taking it clears it.
+    pub fn take_waits_for(&mut self) -> Option<&'static Event> {
+        unsafe { (*self.inner.as_ptr()).waits_for.take() }
     }
 
     /// Run the task until it yields or finishes.
@@ -170,6 +179,20 @@ pub fn sleep_until(deadline: u64) {
     assert!(!inner.is_null(), "sleep_until called outside a task");
     unsafe { (*inner).wake_at = Some(deadline) };
     yield_now();
+}
+
+/// Suspend the current task until `event` is set. Returns at once if it already is. The
+/// event stays set: clearing it is the caller's.
+///
+/// # Panics
+/// If called outside a task.
+pub fn wait_event(event: &'static Event) {
+    let inner = CURRENT.get();
+    assert!(!inner.is_null(), "wait_event called outside a task");
+    if !event.is_set() {
+        unsafe { (*inner).waits_for = Some(event) };
+        yield_now();
+    }
 }
 
 /// `sleep_until`, `ms` milliseconds from now.

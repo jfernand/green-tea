@@ -46,7 +46,9 @@ green-tea-pl011 = { path = "../drivers/pl011" }
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 green-tea-acpi = { path = "../drivers/acpi" }
+green-tea-clevo-lights = { path = "../drivers/clevo-lights" }
 green-tea-i8042 = { path = "../drivers/i8042" }
+green-tea-ioapic = { path = "../drivers/ioapic" }
 green-tea-multiboot2 = { path = "../drivers/multiboot2" }
 green-tea-nvme = { path = "../drivers/nvme" }
 green-tea-xhci = { path = "../drivers/xhci" }

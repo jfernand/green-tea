@@ -40,6 +40,22 @@ fn u64_at(b: &[u8], at: usize) -> Option<u64> {
     Some(u64::from_le_bytes(b.get(at..at + 8)?.try_into().ok()?))
 }
 
+/// An IO APIC, from the MADT.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct IoApicEntry {
+    pub address: u32,
+    /// The global system interrupt of its first input.
+    pub first_gsi: u32,
+}
+
+/// Where a legacy ISA interrupt goes, and how it signals.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IsaRoute {
+    pub gsi: u32,
+    pub active_low: bool,
+    pub level: bool,
+}
+
 /// The root table: where it is, and how wide its pointers are.
 pub struct Acpi<M> {
     memory: M,
@@ -140,6 +156,57 @@ impl<M: Memory> Acpi<M> {
         Some(address)
     }
 
+    /// Put the machine's IO APICs in `out`, and return how many there are.
+    pub fn io_apics(&self, out: &mut [IoApicEntry]) -> usize {
+        const IO_APIC: u8 = 1;
+        let mut buf = [0u8; MAX_TABLE];
+        let Some(madt) = self.find(b"APIC").and_then(|a| self.table(a, &mut buf)) else { return 0 };
+        let mut count = 0;
+        let mut at = HEADER + 8;
+        while let (Some(&kind), Some(&len)) = (madt.get(at), madt.get(at + 1)) {
+            if len < 2 {
+                break;
+            }
+            if kind == IO_APIC
+                && count < out.len()
+                && let (Some(address), Some(first_gsi)) = (u32_at(madt, at + 4), u32_at(madt, at + 8))
+            {
+                out[count] = IoApicEntry { address, first_gsi };
+                count += 1;
+            }
+            at += len as usize;
+        }
+        count
+    }
+
+    /// Where ISA interrupt `irq` goes: to the same-numbered input, rising edge, unless the
+    /// MADT has an override for it.
+    pub fn isa_route(&self, irq: u8) -> IsaRoute {
+        const OVERRIDE: u8 = 2;
+        const ISA_BUS: u8 = 0;
+        const LOW: u16 = 3; // in the polarity field; 0 and 1 are the bus's default and high
+        const LEVEL: u16 = 3; // in the trigger field
+        let default = IsaRoute { gsi: u32::from(irq), active_low: false, level: false };
+        let mut buf = [0u8; MAX_TABLE];
+        let Some(madt) = self.find(b"APIC").and_then(|a| self.table(a, &mut buf)) else { return default };
+        let mut at = HEADER + 8;
+        while let (Some(&kind), Some(&len)) = (madt.get(at), madt.get(at + 1)) {
+            if len < 2 {
+                break;
+            }
+            if kind == OVERRIDE
+                && madt.get(at + 2) == Some(&ISA_BUS)
+                && madt.get(at + 3) == Some(&irq)
+                && let (Some(gsi), Some(flags)) =
+                    (u32_at(madt, at + 4), madt.get(at + 8..at + 10).map(|f| u16::from_le_bytes([f[0], f[1]])))
+            {
+                return IsaRoute { gsi, active_low: flags & 3 == LOW, level: flags >> 2 & 3 == LEVEL };
+            }
+            at += len as usize;
+        }
+        default
+    }
+
     /// PCI segment 0's ECAM window: the address bus 0 would be at, and the buses it covers.
     pub fn ecam(&self) -> Option<(u64, core::ops::RangeInclusive<u8>)> {
         let mut buf = [0u8; MAX_TABLE];
@@ -156,6 +223,16 @@ impl<M: Memory> Acpi<M> {
         let table = self.table(self.find(b"HPET")?, &mut buf)?;
         // A generic address at offset 40: space id 0 is memory, and its address is 4 on.
         (*table.get(40)? == 0).then(|| u64_at(table, 44)).flatten().filter(|&a| a != 0)
+    }
+
+    /// The DSDT's 36-byte header, which identifies the firmware: the FADT's 64-bit pointer
+    /// to the table if it has one, and its 32-bit one if not.
+    pub fn dsdt_header(&self) -> Option<[u8; HEADER]> {
+        let mut buf = [0u8; MAX_TABLE];
+        let fadt = self.table(self.find(b"FACP")?, &mut buf)?;
+        let address = u64_at(fadt, 140).filter(|&a| a != 0).or_else(|| u32_at(fadt, 40).map(u64::from))?;
+        let mut header = [0u8; HEADER];
+        (self.memory.read(address, &mut header) && &header[..4] == b"DSDT").then_some(header)
     }
 
     /// The I/O port of the power management timer, which counts at 3.579545 MHz.
@@ -394,6 +471,64 @@ mod tests {
         fadt[176..184].copy_from_slice(&0xfed0_0000u64.to_le_bytes());
         let fake = with(&[(0x3000, table(b"FACP", &fadt))]);
         assert_eq!(Acpi::new(&fake, &rsdp_v2(0x1000)).unwrap().pm_timer_port(), Some(0x608));
+    }
+
+    fn io_apic(address: u32, first: u32) -> Vec<u8> {
+        let mut e = std::vec![1, 12, 0, 0];
+        e.extend(address.to_le_bytes());
+        e.extend(first.to_le_bytes());
+        e
+    }
+
+    fn isa_override(irq: u8, gsi: u32, flags: u16) -> Vec<u8> {
+        let mut e = std::vec![2, 10, 0, irq];
+        e.extend(gsi.to_le_bytes());
+        e.extend(flags.to_le_bytes());
+        e
+    }
+
+    #[test]
+    fn finds_the_io_apics() {
+        let m = madt(&[lapic(0, 1), io_apic(0xfec0_0000, 0), io_apic(0xfec1_0000, 24)]);
+        let fake = with(&[(0x2000, m)]);
+        let mut out = [IoApicEntry::default(); 4];
+        assert_eq!(Acpi::new(&fake, &rsdp_v2(0x1000)).unwrap().io_apics(&mut out), 2);
+        assert_eq!(out[1], IoApicEntry { address: 0xfec1_0000, first_gsi: 24 });
+    }
+
+    #[test]
+    fn an_isa_interrupt_without_an_override_keeps_its_number() {
+        let fake = with(&[(0x2000, madt(&[lapic(0, 1), isa_override(0, 2, 0)]))]);
+        let route = Acpi::new(&fake, &rsdp_v2(0x1000)).unwrap().isa_route(1);
+        assert_eq!(route, IsaRoute { gsi: 1, active_low: false, level: false });
+    }
+
+    #[test]
+    fn an_override_moves_an_isa_interrupt_and_sets_how_it_signals() {
+        let fake = with(&[(0x2000, madt(&[isa_override(4, 20, 0b1111)]))]);
+        let route = Acpi::new(&fake, &rsdp_v2(0x1000)).unwrap().isa_route(4);
+        assert_eq!(route, IsaRoute { gsi: 20, active_low: true, level: true });
+    }
+
+    #[test]
+    fn the_dsdt_header_comes_from_the_64_bit_pointer_first() {
+        let mut fadt = std::vec![0u8; 112];
+        fadt[4..8].copy_from_slice(&0x5000u32.to_le_bytes());
+        fadt[104..112].copy_from_slice(&0x6000u64.to_le_bytes());
+        let mut fake = with(&[(0x3000, table(b"FACP", &fadt))]);
+        fake.0.insert(0x5000, table(b"DSDT", b"old"));
+        fake.0.insert(0x6000, table(b"DSDT", b"new one"));
+        let header = Acpi::new(&fake, &rsdp_v2(0x1000)).unwrap().dsdt_header().unwrap();
+        assert_eq!(u32::from_le_bytes(header[4..8].try_into().unwrap()), HEADER as u32 + 7);
+    }
+
+    #[test]
+    fn a_fadt_pointing_at_something_else_has_no_dsdt() {
+        let mut fadt = std::vec![0u8; 8];
+        fadt[4..8].copy_from_slice(&0x5000u32.to_le_bytes());
+        let mut fake = with(&[(0x3000, table(b"FACP", &fadt))]);
+        fake.0.insert(0x5000, table(b"SSDT", b""));
+        assert_eq!(Acpi::new(&fake, &rsdp_v2(0x1000)).unwrap().dsdt_header(), None);
     }
 
     #[test]

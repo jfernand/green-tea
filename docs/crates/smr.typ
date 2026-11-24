@@ -388,3 +388,10 @@ if it covers more than 256 numbers:
 - A `read` or `update` whose closure panics never calls `exit`. Under epochs the thread stays announced until its `Local` is dropped, and until then the epoch can't advance.
 
 Four answers to when, and what each costs. @crate-lisp is a program whose heap answers it by tracing.
+// chapter-status:begin
+// stage: research-done
+// revision: 2
+// body: f3583831f4a5
+// activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
+// chapter-status:end

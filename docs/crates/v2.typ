@@ -316,3 +316,10 @@ exit status 101
 - On aarch64, the floating-point status register `fpsr` is shared between tasks (@crate-arch).
 
 One switch, a coroutine and a queue. @crate-bare ports them to a machine with no operating system.
+// chapter-status:begin
+// stage: research-done
+// revision: 2
+// body: 1a57d0d979b0
+// activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
+// chapter-status:end

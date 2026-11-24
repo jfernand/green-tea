@@ -5,14 +5,14 @@
 `green-tea-bare` is what every kernel in the workspace stands on. It boots four boards, three of them QEMU machines (`virt` on riscv64 and aarch64, `q35` on x86_64) and the fourth a PC booted by GRUB (`pc`, on x86_64, chosen at build time), hides each behind one trait, and provides a heap, page frames, task stacks, a console, a screen, cooperative tasks, a round-robin scheduler, and a way to start the other CPUs. A kernel is a `#![no_std] #![no_main]` binary that defines `kmain` and calls in.
 
 #spec(
-  ("Source", [#repo("green-tea-bare/src/"), 20 files, 4,226 lines; #repo("green-tea-bare/linker.ld"), #repo("green-tea-bare/build.rs")]),
+  ("Source", [#repo("green-tea-bare/src/"), 21 files, 4,676 lines; #repo("green-tea-bare/linker.ld"), #repo("green-tea-bare/build.rs")]),
   ("Depends on", [`green-tea-arch`, `-pool`, `-fit`, `-kmem`, `-smp`, and the drivers `io`, `fw-cfg`, `framebuffer`, `ramfb`, `pci`, `virtio`, `virtio-blk`, with `ns16550` (riscv64, x86_64) or `pl011` (aarch64), and on x86_64 `acpi`, `i8042`, `multiboot2` and `xhci`]),
   ("Used by", [`green-tea-coop`, `green-tea-preempt`, `green-tea-shell`]),
   ("Tests", [none of its own (`test = false`): it builds only for the three bare-metal targets. The kernels of @crate-coop, @crate-preempt and @crate-shell exercise it]),
 )
 
 #dtable(columns: (auto, 1fr), ("Module", "What it holds"),
-  [crate root], [`boot`, `delay_ms`, the panic handler, and re-exports: `Board`, `Platform`, `TimerInterrupt`, `VirtioBus`, `Qemu` (not on `pc`), `Framebuffer`, `Global`, `fit`, `fw_cfg`, `pci`, `pool`, `ramfb`, `smp`, `virtio`, `virtio_blk`],
+  [crate root], [`boot`, `delay_ms`, the panic handler, and re-exports: `Board`, `Platform`, `TimerInterrupt`, `VirtioBus`, `Qemu` (not on `pc`), `Framebuffer`, `Global`, on `pc` `InterruptCounts`, `EcPort`, `clevo_lights` and `nvme`, and `fit`, `fw_cfg`, `pci`, `pool`, `ramfb`, `smp`, `virtio`, `virtio_blk`],
   [`platform`], [the traits `Platform`, `VirtioBus` and `TimerInterrupt`; `qemu`, with the trait `Qemu`; `aarch64`, `riscv64`, and `x86_64` with its boards `q35` and `pc`],
   [`memory`], [`Section`, `sections`, `section_of`, `kernel`],
   [`heap`], [the global allocator, `NAME`, `align_up`, `Recording`, `record`, `stop_recording`, `is_recording`, `with`, `used`, `capacity`, `lock_counts`],
@@ -20,7 +20,8 @@
   [`kmem`], [page frames and slab caches: `REGION`, `PAGES`, `TABLE_PAGES`, `region`, `with_frames`, `KernelCache`],
   [`stack`], [the stack pool: `PAGE`, `STACK_SIZE`, `SLOT`, `REGION`, `SLOTS`, `Stack`, `region_start`, `free_slots`, `guard_pages`, `guard_slot`, `on_overflow`, `overflowed`],
   [`arena`], [`Arena`, a bump allocator that can be reset],
-  [`task`], [`Task`, `yield_now`, `sleep_until`, `sleep_ms`, `in_task`, `current_guard`, `cache`, `reap`],
+  [`event`], [`Event`, with `signal`, `clear` and `is_set`: something a task can wait for, set from an interrupt handler],
+  [`task`], [`Task`, `yield_now`, `sleep_until`, `sleep_ms`, `wait_event`, `in_task`, `current_guard`, `cache`, `reap`],
   [`runtime`], [`run`, `spawn`, `Switch`],
   [`cpus`], [`MAX`, `count`, `start_all`, `run`, `park`, `enter`],
   [`console`], [`Console`, `read_byte`, `print!`, `println!`],
@@ -31,7 +32,7 @@
 
 `boot` is the first call of every `kmain`. It initialises the board, prints the banner that `cargo xtask kernel` waits for, and asks the board for its display:
 
-#srcfile("green-tea-bare/src/lib.rs", lines: ((67, 74),), notes: ((68, [Per board: paging on riscv64 and x86_64, the UART and the exception vectors on aarch64.]), (70, [On QEMU's boards, `ramfb` through `fw_cfg`. On `pc`, the framebuffer GRUB set up. A QEMU board with no display it can use panics on the next line but one. `pc` never returns an error here.]),))[```rust
+#srcfile("green-tea-bare/src/lib.rs", lines: ((74, 81),), notes: ((75, [Per board: paging on riscv64 and x86_64, the UART and the exception vectors on aarch64.]), (77, [On QEMU's boards, `ramfb` through `fw_cfg`. On `pc`, the framebuffer GRUB set up. A QEMU board with no display it can use panics on the next line but one. `pc` never returns an error here.]),))[```rust
 pub fn boot(kernel: &str) -> Framebuffer {
     Board::init();
     println!("{kernel} on {}", Board::NAME);
@@ -230,27 +231,27 @@ The `memmap` kernel prints the result and checks it from inside. On riscv64:
 ```
 kernel: 0x80200000..0x80c00000, 10240 KiB
   section      start        end      bytes    align
-  .text    0x80200000 0x802eefbc    978876        2
-  .rodata  0x802eefc0 0x8031ac6b    179371       16
-  .data    0x8031bd70 0x8031be70       256       16
-  .bss     0x8031c000 0x80472000   1400832       16
-  .stack   0x80472000 0x80482000     65536     4096
-  .heap    0x80482000 0x80882000   4194304     4096
-  (gap)                            1564672
+  .text    0x80200000 0x802f04c4    984260        2
+  .rodata  0x802f04d0 0x8031c24b    179579       16
+  .data    0x8031d350 0x8031d450       256       16
+  .bss     0x8031e000 0x80474000   1400832       16
+  .stack   0x80474000 0x80484000     65536     4096
+  .heap    0x80484000 0x80884000   4194304     4096
+  (gap)                            1556480
   .stacks  0x80a00000 0x80c00000   2097152  2097152
 PASS: 7 sections in order and aligned; 8 addresses where they should be
 ```
 ]
 
-The 1,564,672-byte gap is the alignment of `.stacks` to 2 MiB. The load addresses differ by board, and so do the sizes:
+The 1,556,480-byte gap is the alignment of `.stacks` to 2 MiB. The load addresses differ by board, and so do the sizes:
 
 #output(title: "cargo xtask kernel --kernel memmap --target aarch64, then x86_64")[
 ```
 kernel: 0x40200000..0x40c00000, 10240 KiB
-  .heap    0x404d4000 0x408d4000   4194304     4096
+  .heap    0x404d5000 0x408d5000   4194304     4096
   .stacks  0x40a00000 0x40c00000   2097152  2097152
 kernel: 0x100000..0xc00000, 11264 KiB
-  .heap    0x00419000 0x00819000   4194304     4096
+  .heap    0x0041a000 0x0081a000   4194304     4096
   .stacks  0x00a00000 0x00c00000   2097152  2097152
 ```
 ]
@@ -265,7 +266,9 @@ Each build targets one machine, so nothing here is dynamic. `Board` is a type al
   [`DEMAND_PAGING`], [whether the heap's pages start unmapped (default `false`)],
   [`set_mapped`, `is_mapped`, `walk`], [the heap's page table entries, and a software walk (defaults: always mapped, no walk)],
   [`init`], [what the rest needs; called once, first],
-  [`putc`, `getc`], [the serial console; `getc` is polled],
+  [`putc`, `getc`], [the console; `getc` returns at once, with a byte or without],
+  [`input_event`], [what's signalled when input may have arrived; `None`, the default, means polling],
+  [`wait_for_interrupt`], [stop until an interrupt has been handled (default: one spin-loop hint)],
   [`ticks`, `ticks_per_ms`], [a free-running counter],
   [`halt`], [stop for good],
   [`cpu`, `start_cpu`], [this CPU's number, and starting another (defaults: CPU 0, and an error)],
@@ -367,7 +370,7 @@ The local APIC is reached in one of two modes. In *xAPIC* mode its registers are
 
 The local APIC timer counts at a rate of its own, which `init_timer` measures against `Board::ticks` over 10 ms: the HPET on `q35`, the TSC on `pc`. It can't take back an interrupt it has raised, so a tick can be stale, or a little early from the conversion. The handler checks, and re-arms:
 
-#srcfile("green-tea-bare/src/platform/x86_64/mod.rs", lines: ((665, 681),), notes: ((667, [Acknowledge first: `on_tick` may not come back for a long time.]), (673, [A stale or early tick: wait for the deadline that is armed now.]),))[```rust
+#srcfile("green-tea-bare/src/platform/x86_64/mod.rs", lines: ((686, 702),), notes: ((688, [Acknowledge first: `on_tick` may not come back for a long time.]), (694, [A stale or early tick: wait for the deadline that is armed now.]),))[```rust
 extern "C" fn green_tea_timer() {
     // Acknowledge first: on_tick may switch tasks and not come back for a long time.
     lapic_write(LAPIC_EOI, 0);
@@ -442,7 +445,7 @@ pub fn fault(addr: usize) -> bool {
 
 The heap can straddle three 2 MiB pages, so each board keeps three tables of 4 KiB entries, `HEAP_4K`, mapping what else shares those 2 MiB as before and leaving the heap's pages out:
 
-#srcfile("green-tea-bare/src/platform/x86_64/mod.rs", lines: ((778, 792),), notes: ((786, [Only the tables the heap reaches. A heap on a 2 MiB boundary needs two, and the third entry, the stack pool's, stays as `enable_guard_pages` left it.]),))[```rust
+#srcfile("green-tea-bare/src/platform/x86_64/mod.rs", lines: ((811, 825),), notes: ((819, [Only the tables the heap reaches. A heap on a 2 MiB boundary needs two, and the third entry, the stack pool's, stays as `enable_guard_pages` left it.]),))[```rust
 pub fn unmap_heap() {
     let heap = pages::heap_range();
     let base = heap.start & !(MIB2 - 1);
@@ -481,17 +484,17 @@ The rest of the module observes. `stats` returns a `Stats` of `reserved`, `mappe
 
 #output(title: "cargo xtask kernel --kernel pages --target riscv64")[
 ```
-  0x80482000, the heap's first page
-    entry   2  0x00000000200cfc01  the next table, at 0x8033f000
-    entry   2  0x00000000200d0001  the next table, at 0x80340000
-    entry 130  0x00000000201208cf  a page of 4 KiB, in the frame at 0x80482000
-  0x80483000, the heap's second page
-    entry   2  0x00000000200cfc01  the next table, at 0x8033f000
-    entry   2  0x00000000200d0001  the next table, at 0x80340000
-    entry 131  0x0000000000000000  not valid: an access faults
+  0x80484000, the heap's first page
+    entry   2  0x00000000200d0401  the next table, at 0x80341000
+    entry   2  0x00000000200d0801  the next table, at 0x80342000
+    entry 132  0x00000000201210cf  a page of 4 KiB, in the frame at 0x80484000
+  0x80485000, the heap's second page
+    entry   2  0x00000000200d0401  the next table, at 0x80341000
+    entry   2  0x00000000200d0801  the next table, at 0x80342000
+    entry 133  0x0000000000000000  not valid: an access faults
   0x80a00000, the guard page of the first task stack
-    entry   2  0x00000000200cfc01  the next table, at 0x8033f000
-    entry   5  0x00000000200d1001  the next table, at 0x80344000
+    entry   2  0x00000000200d0401  the next table, at 0x80341000
+    entry   5  0x00000000200d1801  the next table, at 0x80346000
     entry   0  0x0000000000000000  not valid: an access faults
 ```
 ]
@@ -563,7 +566,7 @@ fn start_cpu(cpu: usize, stack_top: usize) -> Result<(), &'static str> {
 
 `wake_cpu`, which both x86_64 boards share, sends INIT and then STARTUP twice, as Intel's startup sequence says:
 
-#srcfile("green-tea-bare/src/platform/x86_64/mod.rs", lines: ((540, 547),), notes: ((544, [The vector is the page the CPU starts at.]), (547, [A CPU that took the first STARTUP ignores this one.]),))[```rust
+#srcfile("green-tea-bare/src/platform/x86_64/mod.rs", lines: ((561, 568),), notes: ((565, [The vector is the page the CPU starts at.]), (568, [A CPU that took the first STARTUP ignores this one.]),))[```rust
 lapic_write(LAPIC_SPURIOUS, APIC_ENABLE | SPURIOUS_VECTOR as u32);
 send_ipi(apic_id, INIT);
 crate::delay_ms(10);
@@ -668,10 +671,19 @@ unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
 
 == The console
 
-`Console` implements `fmt::Write` over `Board::putc`, turning each `\n` into `\r\n`, and the `print!` and `println!` macros write to it. Input is polled: a task waiting in `read_byte` sleeps a millisecond at a time, so that other tasks run:
+`Console` implements `fmt::Write` over `Board::putc`, turning each `\n` into `\r\n`, and the `print!` and `println!` macros write to it. A task waiting in `read_byte` takes one of two paths. On a board with input interrupts it waits on the board's `Event`, and on the others it polls, sleeping a millisecond at a time so that other tasks run:
 
-#srcfile("green-tea-bare/src/console.rs", lines: ((16, 23),))[```rust
+#srcfile("green-tea-bare/src/console.rs", lines: ((16, 32),), notes: ((19, [Cleared before the look, so that a byte arriving after it still ends the wait.]), (23, [Returns at once if the event is set again.]), (26, [The polled path, for the boards with no input interrupts.]),))[```rust
 pub fn read_byte() -> u8 {
+    if let Some(input) = Board::input_event() {
+        loop {
+            input.clear(); // before looking, so that a byte arriving after the look still wakes us
+            if let Some(byte) = Board::getc() {
+                return byte;
+            }
+            task::wait_event(input);
+        }
+    }
     loop {
         if let Some(byte) = Board::getc() {
             return byte;
@@ -689,7 +701,7 @@ pub fn read_byte() -> u8 {
 
 `task` is `green-tea-v2`'s task (@crate-v2), ported. A `Task` is an asymmetric coroutine: someone `resume`s it, it runs until it yields or finishes, and control returns to whoever resumed it. The switch is `green-tea-arch`'s `swap_context` (@crate-arch):
 
-#srcfile("green-tea-bare/src/task.rs", lines: ((115, 121), (147, 151),), notes: ((118, [`CURRENT` is a `Global`, where v2 had a `thread_local!`.]),))[```rust
+#srcfile("green-tea-bare/src/task.rs", lines: ((124, 130), (156, 160),), notes: ((127, [`CURRENT` is a `Global`, where v2 had a `thread_local!`.]),))[```rust
     pub fn resume(&mut self) {
         let inner = self.inner.as_ptr();
         assert!(!self.is_done(), "resumed a task that has already finished");
@@ -707,7 +719,7 @@ pub fn yield_now() {
 
 A task starts in `task_entry`, on its own stack, runs its closure, marks itself done, and switches back for the last time:
 
-#srcfile("green-tea-bare/src/task.rs", lines: ((182, 192),))[```rust
+#srcfile("green-tea-bare/src/task.rs", lines: ((205, 215),))[```rust
 extern "C" fn task_entry(arg: *mut ()) -> ! {
     let inner: *mut Inner = arg.cast();
     unsafe {
@@ -721,11 +733,11 @@ extern "C" fn task_entry(arg: *mut ()) -> ! {
 }
 ```]
 
-A task's record comes from a slab cache, `TASKS`, and a constructed record *keeps its stack*. So a task that is created takes a stack from the pool only when the cache has to make a new slab, and a thousand tasks run one after another use one stack. `reap` destroys the records no task is using, which returns their stacks and pages, and `cache` looks at the cache. `id`, `is_done` and `take_wake_at` read a task's state; `in_task` says whether a task is running; `current_guard` is its guard page. `sleep_until` sets a wake time and yields, and `sleep_ms` is the same with a relative time.
+A task's record comes from a slab cache, `TASKS`, and a constructed record *keeps its stack*. So a task that is created takes a stack from the pool only when the cache has to make a new slab, and a thousand tasks run one after another use one stack. `reap` destroys the records no task is using, which returns their stacks and pages, and `cache` looks at the cache. `id`, `is_done`, `take_wake_at` and `take_waits_for` read a task's state; `in_task` says whether a task is running; `current_guard` is its guard page. `sleep_until` sets a wake time and yields, and `sleep_ms` is the same with a relative time. `wait_event` yields until an `Event` is set, and returns at once if it already is.
 
 `runtime` is the round-robin scheduler:
 
-#srcfile("green-tea-bare/src/runtime.rs", lines: ((48, 69),), notes: ((52, [A separate statement, so the queue's borrow ends before the task runs: the task may call `spawn`.]), (57, [Everything is asleep: the scheduler spins until the first deadline.]), (60, [The hook sees each `Switch`: `To(id)`, or `Idle`. The demos draw here, and `green-tea-preempt` arms its time slice.]),))[```rust
+#srcfile("green-tea-bare/src/runtime.rs", lines: ((54, 85),), notes: ((58, [A separate statement, so the queue's borrow ends before the task runs: the task may call `spawn`.]), (65, [Every task is waiting for an event, so only an interrupt can change anything.]), (70, [Someone is asleep: spin until the first deadline.]), (75, [The hook sees each `Switch`: `To(id)`, or `Idle`. The demos draw here, and `green-tea-preempt` arms its time slice.]),))[```rust
 loop {
     runtime.wake(Board::ticks());
     // A separate statement, so the queue borrow ends before the task runs: the task
@@ -733,9 +745,18 @@ loop {
     let next = runtime.queue.borrow_mut().pop_front();
     let Some(mut task) = next else {
         let first_due = runtime.sleeping.borrow().iter().map(|&(due, _)| due).min();
-        let Some(due) = first_due else { break }; // nothing runnable or asleep: done
-        on_switch(Switch::Idle);
-        while Board::ticks() < due {}
+        match first_due {
+            // Every task is waiting for an event: only an interrupt can change that.
+            None if !runtime.waiting.borrow().is_empty() => {
+                on_switch(Switch::Idle);
+                Board::wait_for_interrupt();
+            }
+            None => break, // nothing runnable, asleep or waiting: done
+            Some(due) => {
+                on_switch(Switch::Idle);
+                while Board::ticks() < due && !runtime.any_event_set() {}
+            }
+        }
         continue;
     };
     on_switch(Switch::To(task.id()));
@@ -743,14 +764,15 @@ loop {
     if task.is_done() {
         continue;
     }
-    match task.take_wake_at() {
-        Some(due) => runtime.sleeping.borrow_mut().push((due, task)),
-        None => runtime.queue.borrow_mut().push_back(task),
+    match (task.take_wake_at(), task.take_waits_for()) {
+        (Some(due), _) => runtime.sleeping.borrow_mut().push((due, task)),
+        (None, Some(event)) => runtime.waiting.borrow_mut().push((event, task)),
+        (None, None) => runtime.queue.borrow_mut().push_back(task),
     }
 }
 ```]
 
-`run` takes the first task and a hook, and returns when no task is left. `spawn` adds to the back of the queue, from `run`'s `main` or any task. A sleeping task is off the queue, so it costs no time slices.
+`run` takes the first task and a hook, and returns when no task is left. `spawn` adds to the back of the queue, from `run`'s `main` or any task. A sleeping or waiting task is off the queue, so it costs no time slices. `wake` moves a sleeper back when it is due, and a waiter when its event is set. If every task is waiting for an event, the scheduler calls `wait_for_interrupt`, which on `pc` halts the CPU.
 
 == The `pc` board <bare-pc>
 
@@ -767,6 +789,7 @@ loop {
   [Local APIC], [xAPIC], [x2APIC if the CPU has it],
   [Console], [COM1], [the screen, and COM1 if it answers],
   [Keyboard], [the serial port], [the serial port, USB and PS/2],
+  [Waiting for input], [polled], [halted, until an interrupt],
   [Disk], [virtio-blk], [NVMe],
   [Test to run], [fw_cfg file], [`test=` on GRUB's command line],
 )
@@ -775,7 +798,7 @@ loop {
 
 GRUB looks for a Multiboot2 header in the first 32 KiB of the file. The linker script puts the section `.multiboot2` first:
 
-#srcfile("green-tea-bare/src/platform/x86_64/pc.rs", lines: ((42, 53),), notes: ((47, [Tag 5, the framebuffer, with the flag that makes it optional.]), (49, [Any width and height, 32 bits per pixel.]),))[```rust
+#srcfile("green-tea-bare/src/platform/x86_64/pc.rs", lines: ((45, 56),), notes: ((50, [Tag 5, the framebuffer, with the flag that makes it optional.]), (52, [Any width and height, 32 bits per pixel.]),))[```rust
 mb2_start:
     .long 0xe85250d6
     .long 0
@@ -792,7 +815,7 @@ mb2_end:
 
 GRUB enters `_start` in 32-bit protected mode with paging off, as PVH does, with a magic number in `eax` and the address of its boot information in `ebx`. The kernel is linked at 32 MiB because UEFI firmware keeps data of its own a few MiB up, where a kernel at 1 MiB would overlap it. From the memory map, `init` keeps the end of the free RAM the kernel is in, for the check in `kmem`, and whether the page at `0x8000` is free, since `start_cpu` refuses to start a CPU if it isn't. Then it turns to ACPI:
 
-#srcfile("green-tea-bare/src/platform/x86_64/pc.rs", lines: ((325, 332), (340, 342),), notes: ((326, [Before the first `delay_ms`.]), (329, [Uncached, in the page tables.]), (331, [Before `init_cpus`, which reads this CPU's APIC id.]),))[```rust
+#srcfile("green-tea-bare/src/platform/x86_64/pc.rs", lines: ((494, 501), (517, 519),), notes: ((495, [Before the first `delay_ms`.]), (498, [Uncached, in the page tables.]), (500, [Before `init_cpus`, which reads this CPU's APIC id.]),))[```rust
 let acpi = info.rsdp().and_then(|rsdp| Acpi::new(Identity4G, rsdp));
 TSC_PER_MS.store(measure_tsc(acpi.as_ref()), Ordering::Relaxed);
 if let Some(address) = acpi.as_ref().and_then(|a| a.lapic_address()) {
@@ -815,7 +838,7 @@ Unlike QEMU's, a physical machine's RAM doesn't start out zero, so `init` also c
 
 A screen is optional. With no framebuffer, or one that isn't XRGB, the kernels draw into 640×480 of plain memory and report through the serial port:
 
-#srcfile("green-tea-bare/src/platform/x86_64/pc.rs", lines: ((413, 424),), notes: ((418, [A static, so that every kernel has somewhere to draw.]),))[```rust
+#srcfile("green-tea-bare/src/platform/x86_64/pc.rs", lines: ((613, 624),), notes: ((618, [A static, so that every kernel has somewhere to draw.]),))[```rust
 fn display() -> Result<Framebuffer, &'static str> {
     // SAFETY: only `init` writes it, before this can be called.
     let Some(fb) = (unsafe { (&raw const SCREEN).read() }) else {
@@ -834,7 +857,7 @@ fn display() -> Result<Framebuffer, &'static str> {
 
 The TSC is the counter `ticks` reads, and nothing says how fast it runs, so `measure_tsc` times it for 10 ms against a clock whose rate ACPI (@crate-acpi) gives. That is the HPET if the firmware lists one below 4 GiB, and otherwise the ACPI power management timer, at 3,579,545 Hz, of which only 24 bits are sure to exist:
 
-#srcfile("green-tea-bare/src/platform/x86_64/pc.rs", lines: ((161, 169),))[```rust
+#srcfile("green-tea-bare/src/platform/x86_64/pc.rs", lines: ((199, 207),))[```rust
 } else if let Some(port) = acpi.pm_timer_port() {
     const MASK: u32 = 0x00ff_ffff; // 24 bits is all a timer is sure to have
     let wait = (PM_TIMER_HZ * CALIBRATE_MS / 1000) as u32;
@@ -850,7 +873,7 @@ The TSC is the counter `ticks` reads, and nothing says how fast it runs, so `mea
 
 The MADT lists the local APICs, and on a physical machine their ids can have gaps. So a CPU's number is its position in a list, with the boot CPU first:
 
-#srcfile("green-tea-bare/src/platform/x86_64/pc.rs", lines: ((244, 254),), notes: ((249, [At most `MAX` ids, in the MADT's order, leaving out the boot CPU's, which is already first.]),))[```rust
+#srcfile("green-tea-bare/src/platform/x86_64/pc.rs", lines: ((358, 368),), notes: ((363, [At most `MAX` ids, in the MADT's order, leaving out the boot CPU's, which is already first.]),))[```rust
 fn init_cpus(acpi: Option<&Acpi<Identity4G>>) {
     let boot = apic_id();
     APIC_IDS[0].store(boot, Ordering::Relaxed);
@@ -870,7 +893,7 @@ fn init_cpus(acpi: Option<&Acpi<Identity4G>>) {
 
 `_start` maps everything write-back. On a PC the firmware's MTRRs normally make device registers uncached, and we don't rely on them: `map_device` sets `PCD` and `PWT` on the 2 MiB pages a device is in. With the PAT at its reset value, that combination selects uncacheable. The board calls it for the HPET, the local APIC, the ECAM window and each controller's BAR. A page that holds any part of the kernel is refused:
 
-#srcfile("green-tea-bare/src/platform/x86_64/mod.rs", lines: ((840, 866),), size: 6.4pt, notes: ((841, [Bits 3 and 4 of a page entry.]), (847, [A device above 4 GiB gets new entries, with the same bits.]), (858, [A heap or stack page has already been split into a table, and it counts as the kernel too.]),))[```rust
+#srcfile("green-tea-bare/src/platform/x86_64/mod.rs", lines: ((873, 899),), size: 6.4pt, notes: ((874, [Bits 3 and 4 of a page entry.]), (880, [A device above 4 GiB gets new entries, with the same bits.]), (891, [A heap or stack page has already been split into a table, and it counts as the kernel too.]),))[```rust
 pub fn map_device(addr: usize, len: usize) -> Result<(), &'static str> {
     const UNCACHED: u64 = 1 << 3 | 1 << 4;
     const PAGE_SIZE: u64 = 1 << 7;
@@ -904,11 +927,56 @@ In QEMU's page tables, after a boot, the local APIC's page reads `--P-ACT-W`, wh
 
 === The keyboards
 
-`getc` polls three sources in order: COM1 if it answered, then a USB keyboard, then a PS/2 one. `init_usb` finds the xHCI controllers through ACPI's MCFG table and keeps the first with a boot keyboard on one of its own ports (@crate-xhci). PS/2 is `green-tea-i8042` (@crate-i8042), which is what most laptops' built-in keyboards are. Neither takes an interrupt.
+`getc` polls three sources in order: COM1 if it answered, then a USB keyboard, then a PS/2 one. `init_usb` finds the xHCI controllers through ACPI's MCFG table and keeps the first with a boot keyboard on one of its own ports (@crate-xhci). PS/2 is `green-tea-i8042` (@crate-i8042), which is what most laptops' built-in keyboards are.
+
+=== Device interrupts <bare-interrupts>
+
+A shell spends nearly all its time waiting for a key. On `pc`, that wait halts the CPU, and the device wakes it. The path of one key press is:
+
++ *At the first wait*, `input_event` calls `start_input_interrupts`. It routes ISA interrupts 1 (keyboard), 12 (mouse) and 4 (serial) to vectors 49, 51 and 50 on the boot CPU, through the IO APIC that ACPI names (@crate-acpi, @crate-ioapic), and turns on each device's interrupt.
++ *The task waits.* `read_byte` clears the event, looks for a byte, and finding none calls `wait_event`. With nothing runnable, the scheduler halts.
++ *A key is pressed.* The IO APIC sends the vector, and a stub in `mod.rs` saves the registers and calls `green_tea_device`, which runs the board's handler and acknowledges the interrupt.
++ *The handler counts it and signals the event.* It doesn't touch the device.
++ *The scheduler wakes the task*, which reads the byte in ordinary code.
+
+#srcfile("green-tea-bare/src/platform/x86_64/pc.rs", lines: ((284, 292),), notes: ((290, [The counts are what the shell's `irq` command prints.]), (291, [The whole of the handler's work. The task reads the device, so the handler needs no lock on it.]),))[```rust
+fn on_input_interrupt(vector: usize) {
+    let count = match vector {
+        KEYBOARD_VECTOR => &KEYBOARD_IRQS,
+        SERIAL_VECTOR => &SERIAL_IRQS,
+        _ => &MOUSE_IRQS,
+    };
+    count.fetch_add(1, Ordering::Relaxed);
+    INPUT.signal();
+}
+```]
+
+The order in `read_byte` is what keeps a key from being lost. It clears the event *before* it looks. A byte that arrives after the look sets the event again, and `wait_event` returns at once.
+
+The halt has a subtlety of its own. If an interrupt arrived between the last check and the `hlt`, the CPU would sleep through it. `sti` takes effect one instruction late, so `sti; hlt` has no such gap:
+
+#srcfile("green-tea-bare/src/platform/x86_64/pc.rs", lines: ((534, 543),), notes: ((537, [50 ms, or 2 ms with a USB keyboard, which is polled and raises no interrupt.]), (538, [The backup timer. If a machine's interrupts don't work, its keyboard is slow, and never dead.]), (541, [Interrupts are on only for this instant, and handlers run here.]),))[```rust
+fn wait_for_interrupt() {
+    // SAFETY: only `init` writes USB, before this can be called.
+    let usb = unsafe { (&raw const USB).as_ref() }.is_some_and(Option::is_some);
+    let wait = if usb { BACKUP_USB_MS } else { BACKUP_MS };
+    Self::set_deadline(rdtsc() + wait * Self::ticks_per_ms());
+    HALTS.fetch_add(1, Ordering::Relaxed);
+    // SAFETY: handlers save everything, and the scheduler is ready for them to run here.
+    unsafe { asm!("sti", "hlt", "cli", options(nomem, nostack)) };
+    Self::set_deadline(u64::MAX);
+}
+```]
+
+The `irq` shell command prints `Pc::interrupt_counts`, and tells the two cases apart: a rising `keyboard` count means a real interrupt, and a rising `backup timer` count alone means the routing failed and the timer is carrying the keyboard. The `interrupts` kernel checks the serial path in QEMU, and @crate-ioapic shows a run.
 
 === The disk
 
-`Pc::find_nvme` walks the ECAM window that `init_usb` kept for the first function of class `0x010802`, maps its BAR with `map_device`, enables it, and returns a started `Nvme` (@crate-nvme). It can be called once, and only while one CPU is running, since it changes the page tables. Only the `disk` kernel calls it.
+`Pc::find_nvme(serial)` walks the ECAM window that `init_usb` kept for functions of class `0x010802`, up to eight. It maps and enables each in turn, starts it, returns the one with that serial number, and turns the others off (@crate-nvme). It can be called once, and only while one CPU is running, since it changes the page tables. Only the `disk` kernel calls it.
+
+=== The keyboard lights
+
+`Pc::keyboard_lights` builds a `Firmware` from the DSDT header that `init` kept, and passes it with `EcPort`, the EC's ports `0x66` and `0x62`, to `Lights::new`, which refuses any firmware it doesn't know (@crate-clevo-lights).
 
 === A run
 
@@ -928,13 +996,22 @@ PASS: 57 switches, as expected
 
 == Limits <bare-limits>
 
-- *The `pc` board has run only in QEMU with UEFI firmware and under KVM, never on physical hardware.* The run above is QEMU with OVMF, emulated, as `xtask` starts it. The conditions a physical machine would bring were forced in QEMU: no HPET, xAPIC and x2APIC, sparse APIC ids, 12 CPUs with a limit of 16, memory mapped above 4 GiB, and PS/2 and USB keyboards at full and high speed. A local APIC at a non-default address is covered only by a host test of its parsing.
+- *The `pc` board has run on one physical machine, once.* A release build of the shell booted from a USB drive on the Clevo NP50PN laptop, and its keyboard interrupts and the lights' mailbox worked. Nothing else has been checked there: not USB keyboards, NVMe, several CPUs or the other kernels. The run above is QEMU with OVMF, emulated, as `xtask` starts it. The conditions a physical machine would bring were forced in QEMU: no HPET, xAPIC and x2APIC, sparse APIC ids, 12 CPUs with a limit of 16, memory mapped above 4 GiB, and PS/2 and USB keyboards at full and high speed. A local APIC at a non-default address is covered only by a host test of its parsing.
 - *Secure Boot must be off*, since the GRUB that `xtask` builds isn't signed.
 - *USB is a keyboard plugged straight into a controller's port before boot*: no hubs, no hot-plugging, and no USB storage. The disk the board drives is NVMe, and it has run only against QEMU's `nvme` device.
 - `pc` assumes the TSC runs at a constant rate and agrees between CPUs. It doesn't check CPUID for an invariant TSC.
 - The framebuffer stays write-back, and `map_device` works in 2 MiB pages, so anything else in a device's page becomes uncached with it.
 - *`q35` and the two `virt` boards assume their QEMU machine.* Addresses are constants, and `q35` needs fw_cfg for the CPU count and the display. It uses the CPU number as an APIC id (`q35.rs:107`), and aarch64 takes it from `MPIDR_EL1`'s low byte (`aarch64.rs:125`), which holds on QEMU, whose ids run 0, 1, 2, ….
 - *A regression in the guard pages wouldn't show in CI.* `unmap_heap` on riscv64 and x86_64 must not touch the stack pool's 2 MiB page when the heap starts on a 2 MiB boundary. Only a build with the heap on that boundary exercises this, and the builds CI runs don't have one.
-- The scheduler's idle wait is a busy loop (`runtime.rs:57`), and the serial port is polled.
+- *Only `pc`, and only its input, uses device interrupts.* The disks, USB and the three QEMU boards are polled. Those boards' idle wait is a busy loop.
+- *Device interrupts are taken only while idle.* Tasks run with interrupts off, so a handler runs only inside `wait_for_interrupt`. If one task is asleep while another waits for an event, the scheduler spins with interrupts off, and the waiter can't wake before the sleeper is due.
+- *On physical hardware, only the keyboard's interrupt has run.* On the laptop, `irq` counted keyboard interrupts as keys were pressed. The serial port's interrupt has run only in QEMU, and the mouse's hasn't been exercised anywhere.
 
 Four boards, one trait, and the parts of a kernel. @crate-coop puts them to work.
+// chapter-status:begin
+// stage: research-done
+// revision: 5
+// body: b87a369dedf3
+// activity: 2026-11-22 | r4 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r4 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
+// chapter-status:end

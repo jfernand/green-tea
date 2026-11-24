@@ -2,13 +2,13 @@
 
 = green-tea-acpi <crate-acpi>
 
-`green-tea-acpi` reads enough of the firmware's ACPI tables to learn a machine's CPUs and clocks: the local APICs from the MADT, the PCI window from the MCFG, the HPET's address and the power management timer's port. It verifies every table's checksum before using it, and it interprets no AML.
+`green-tea-acpi` reads enough of the firmware's ACPI tables to learn a machine's CPUs and clocks: the local APICs and the interrupt routes from the MADT, the PCI window from the MCFG, the HPET's address and the power management timer's port. It verifies every table's checksum before using it, and it interprets no AML.
 
 #spec(
-  ("Source", [#repo("drivers/acpi/src/lib.rs"), 405 lines]),
+  ("Source", [#repo("drivers/acpi/src/lib.rs"), 540 lines]),
   ("Depends on", [nothing; `no_std`]),
   ("Used by", [`green-tea-bare` (the `pc` board)]),
-  ("Tests", [17 host tests, on tables in a fake memory; every `pc` boot]),
+  ("Tests", [22 host tests, on tables in a fake memory; every `pc` boot]),
 )
 
 #dtable(columns: (auto, 1fr), ("Item", "What it does"),
@@ -20,13 +20,16 @@
   [`ecam()`], [PCI segment 0's ECAM window: its base, and the buses it covers],
   [`hpet()`], [the HPET's address],
   [`pm_timer_port()`], [the I/O port of the power management timer],
+  [`io_apics(out)`, `IoApicEntry`], [the machine's IO APICs: each one's address and first interrupt],
+  [`isa_route(irq)`, `IsaRoute`], [where a legacy interrupt goes, and how its line signals],
+  [`dsdt_header()`], [the 36-byte header of the DSDT, which identifies the firmware],
 )
 
 == From the root pointer to a table
 
 The firmware publishes a *root pointer*, the RSDP, and the bootloader passes a copy (@crate-multiboot2). It names a root table, which is a list of pointers to all the others. There are two forms: the 32-bit RSDT, and from ACPI 2.0 the 64-bit XSDT, which we prefer when we can read it.
 
-#srcfile("drivers/acpi/src/lib.rs", lines: ((52, 66),), notes: ((53, [The checksum of the first 20 bytes, which every revision has: they have to sum to 0 modulo 256.]), (56, [The RSDT, unless something better turns up. `entry` is the width of a pointer in the root table.]), (57, [The XSDT needs a revision of 2 or more and the extended 36-byte checksum.]), (61, [And it has to be readable, with a good checksum. An XSDT we can't reach leaves the RSDT in place.]),))[```rust
+#srcfile("drivers/acpi/src/lib.rs", lines: ((68, 82),), notes: ((69, [The checksum of the first 20 bytes, which every revision has: they have to sum to 0 modulo 256.]), (72, [The RSDT, unless something better turns up. `entry` is the width of a pointer in the root table.]), (73, [The XSDT needs a revision of 2 or more and the extended 36-byte checksum.]), (77, [And it has to be readable, with a good checksum. An XSDT we can't reach leaves the RSDT in place.]),))[```rust
 pub fn new(memory: M, rsdp: &[u8]) -> Option<Acpi<M>> {
     if rsdp.get(..8)? != b"RSD PTR " || sum(rsdp.get(..20)?) != 0 {
         return None;
@@ -46,7 +49,7 @@ pub fn new(memory: M, rsdp: &[u8]) -> Option<Acpi<M>> {
 
 Every table starts with the same 36-byte header. Its signature is at offset 0 and its length at offset 4, and all its bytes sum to 0.
 
-#srcfile("drivers/acpi/src/lib.rs", lines: ((69, 79),), notes: ((71, [`Memory::read` says `false` for what it can't reach.]), (75, [The length comes from the firmware, so it is bounded before it is used. `MAX_TABLE` is 8 KiB.]), (78, [A table with a bad checksum reads as absent.]),))[```rust
+#srcfile("drivers/acpi/src/lib.rs", lines: ((85, 95),), notes: ((87, [`Memory::read` says `false` for what it can't reach.]), (91, [The length comes from the firmware, so it is bounded before it is used. `MAX_TABLE` is 8 KiB.]), (94, [A table with a bad checksum reads as absent.]),))[```rust
 fn table<'b>(&self, addr: u64, buf: &'b mut [u8; MAX_TABLE]) -> Option<&'b [u8]> {
     let mut header = [0u8; HEADER];
     if !self.memory.read(addr, &mut header) {
@@ -71,7 +74,7 @@ The MADT (signature `APIC`) has the local APICs' address at offset 36, and from 
   [9], [x2APIC], [`u32` at byte 4], [`u32` at byte 8],
 )
 
-#srcfile("drivers/acpi/src/lib.rs", lines: ((99, 121),), notes: ((99, [The boot CPU goes first, whatever its place in the table.]), (103, [A length under 2 would never advance.]), (113, [Bit 0, Enabled. Bit 1, Online Capable, on its own describes a CPU that could be added later, so it doesn't count.]), (114, [Bounded by the caller's slice, and an id seen twice is kept once.]),))[```rust
+#srcfile("drivers/acpi/src/lib.rs", lines: ((115, 137),), notes: ((115, [The boot CPU goes first, whatever its place in the table.]), (119, [A length under 2 would never advance.]), (129, [Bit 0, Enabled. Bit 1, Online Capable, on its own describes a CPU that could be added later, so it doesn't count.]), (130, [Bounded by the caller's slice, and an id seen twice is kept once.]),))[```rust
 *first = boot;
 let mut count = 1;
 let mut at = HEADER + 8;
@@ -99,6 +102,20 @@ count
 
 The ids can have gaps, so the `pc` board numbers its CPUs by their position in this list rather than by APIC id. `lapic_address` reads the 32-bit address at offset 36, and lets an entry of type 5, the 64-bit override, replace it.
 
+=== Interrupt routes
+
+The MADT also lists the IO APICs (entry type 1), and any *override* (type 2) for the sixteen legacy ISA interrupts. Without an override, ISA interrupt `n` arrives at input `n`, on a rising edge. An override can move it, and can make it active-low or level-triggered. `isa_route` applies these rules, and the `pc` board passes the answer to @crate-ioapic.
+
+#srcfile("drivers/acpi/src/lib.rs", lines: ((184, 190),), notes: ((189, [The default, for a machine with no MADT or no override for this interrupt.]),))[```rust
+pub fn isa_route(&self, irq: u8) -> IsaRoute {
+    const OVERRIDE: u8 = 2;
+    const ISA_BUS: u8 = 0;
+    const LOW: u16 = 3; // in the polarity field; 0 and 1 are the bus's default and high
+    const LEVEL: u16 = 3; // in the trigger field
+    let default = IsaRoute { gsi: u32::from(irq), active_low: false, level: false };
+    let mut buf = [0u8; MAX_TABLE];
+```]
+
 == MCFG, HPET and FADT
 
 `ecam` reads the MCFG, whose 16-byte entries from offset 44 each hold a base address, a segment, and a first and last bus. It returns segment 0's. The address is where bus 0 would be, even if the first bus is higher, which is how the ECAM formula in @crate-pci expects it.
@@ -113,7 +130,7 @@ The tests build tables in a fake memory, with real headers and checksums. They c
 
 #output(title: "cargo test -p green-tea-acpi")[
 ```
-test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 ]
 
@@ -144,6 +161,13 @@ type `help` for the commands
 - A table over 8 KiB reads as absent, so a very large MADT means no CPUs beyond the boot one.
 - `find` returns the first table with a signature. If that one has a bad checksum, a second copy isn't tried.
 - A power management timer in memory space, which hardware-reduced ACPI allows, isn't supported: `X_PM_TMR_BLK` counts only as an I/O port.
-- No AML, so nothing that needs the DSDT: no power-off, no device discovery beyond these tables.
+- No AML. `dsdt_header` reads the DSDT's header and nothing else, so there is no power-off and no device discovery beyond these tables.
 
-A checksum, a walk and four questions. @crate-i8042 is what the machine's keyboard looks like without USB.
+A checksum, a walk and seven questions. @crate-ioapic uses the answers about interrupts.
+// chapter-status:begin
+// stage: research-done
+// revision: 3
+// body: 069586533afe
+// activity: 2026-11-22 | r3 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r3 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
+// chapter-status:end

@@ -23,25 +23,25 @@ ramfb: 640x480 XRGB8888
 kernel: 0x100000..0xc00000, 11264 KiB
   section      start        end      bytes    align
   (gap)                                 32
-  .text    0x00100020 0x0027ec6f   1567823        1
+  .text    0x00100020 0x00280ecf   1576623        1
   (gap)                                  1
-  .rodata  0x0027ec70 0x002aad33    180419       16
-  (gap)                                461
-  .data    0x002aaf00 0x002ac5a0      5792       16
-  (gap)                               2656
-  .bss     0x002ad000 0x00409000   1425408       16
-  .stack   0x00409000 0x00419000     65536     4096
-  .heap    0x00419000 0x00819000   4194304     4096
-  (gap)                            1994752
+  .rodata  0x00280ed0 0x002ad0ab    180699       16
+  (gap)                                453
+  .data    0x002ad270 0x002ae910      5792       16
+  (gap)                               1776
+  .bss     0x002af000 0x0040a000   1421312       16
+  .stack   0x0040a000 0x0041a000     65536     4096
+  .heap    0x0041a000 0x0081a000   4194304     4096
+  (gap)                            1990656
   .stacks  0x00a00000 0x00c00000   2097152  2097152
   address    in       what
-  0x00107180 .text    a function
-  0x00285908 .rodata  a constant static
-  0x002aaf18 .data    an initialised static
-  0x002ad028 .bss     a zeroed static
-  0x00414fef .stack   a local of kmain's
-  0x00419010 .heap    a Box<u64>
-  0x0041a000 .heap    a Box<Page>
+  0x001a1050 .text    a function
+  0x0028e028 .rodata  a constant static
+  0x002ad288 .data    an initialised static
+  0x002b0930 .bss     a zeroed static
+  0x00415fef .stack   a local of kmain's
+  0x0041a010 .heap    a Box<u64>
+  0x0041b000 .heap    a Box<Page>
   0x00a04f46 .stacks  a local of a task's
 PASS: 7 sections in order and aligned; 8 addresses where they should be
 halting

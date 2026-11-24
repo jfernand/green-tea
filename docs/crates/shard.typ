@@ -398,3 +398,10 @@ All 38,400 blocks went home through `thread_free`, 135 CAS attempts failed, and 
 - The stack needs a 64-bit atomic.
 
 One owner per page, and a list for everyone else. @crate-smr deals with freeing what another thread may still be reading.
+// chapter-status:begin
+// stage: research-done
+// revision: 2
+// body: e078fe7f498b
+// activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
+// chapter-status:end

@@ -340,3 +340,10 @@ PASS: read 64 sectors over virtio-PCI, and wrote one back
 - The waits have no timeout: the reset loop in `negotiate` spins until the device answers.
 
 One device model, two transports, three machines. @crate-virtio-blk puts a disk on it.
+// chapter-status:begin
+// stage: research-done
+// revision: 2
+// body: c1287b826d3d
+// activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
+// chapter-status:end

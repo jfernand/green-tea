@@ -409,3 +409,10 @@ the kernel's cache of task records: a record is 488 bytes, a buffer 496, and a s
 - A cache given a destructor and no constructor runs the destructor at `reap` on objects nothing ever constructed.
 
 Pages from a table, objects from pages. @crate-region allocates without freeing anything one block at a time.
+// chapter-status:begin
+// stage: research-done
+// revision: 2
+// body: eb09f3914473
+// activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
+// chapter-status:end

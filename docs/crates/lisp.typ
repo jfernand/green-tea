@@ -1189,3 +1189,10 @@ PASS: five programs on three heaps that trace: 160 collections traced 25698 obje
 - A `.` is a syntax error only where a list element could start. Outside a list, and right after a dot, the reader takes it for a symbol: `'.` is that symbol, and `'(1 . .)` is a pair whose `cdr` is that symbol.
 
 One language, six heaps, and the numbers to compare them. @crate-io starts the drivers.
+// chapter-status:begin
+// stage: research-done
+// revision: 2
+// body: c39e43d160a2
+// activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
+// chapter-status:end

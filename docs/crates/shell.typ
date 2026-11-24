@@ -5,10 +5,10 @@
 `green-tea-shell` is a kernel with a shell on the serial console. It is one task that reads a line, runs it as a command, and repeats, and it never stops allocating, which makes it the workspace's source of a real allocation trace. It can take each command's memory from the heap or from an arena, record every allocation and free, replay the recording against each allocator, and write it out as a trace file.
 
 #spec(
-  ("Source", [#repo("green-tea-shell/src/"), 6 files, 1,773 lines]),
+  ("Source", [#repo("green-tea-shell/src/"), 8 files, 1,854 lines]),
   ("Depends on", [`green-tea-bare` (@crate-bare), `green-tea-region` (@crate-region)]),
   ("Used by", [nothing: it is a binary. `cargo xtask trace` reads what it writes (@crate-xtask)]),
-  ("Tests", [the `shell`, `trace`, `harden`, `region`, `gtt` and `resident` kernels, which type at it]),
+  ("Tests", [the `shell`, `trace`, `harden`, `region`, `gtt`, `resident` and `interrupts` kernels, which type at it]),
 )
 
 #dtable(columns: (auto, 1fr), ("Module", "What it holds"),
@@ -18,6 +18,8 @@
   [`region`], [`regions`: the script with its memory in two regions],
   [`pages`], [`pages`, `pages trim`, `pages replay`],
   [`dump`], [`trace dump` and `trace check`, through `dump` and `check`],
+  [`irq`], [the `irq` command and its `HELP`, on the `pc` board],
+  [`lights`], [the `lights` command and its `HELP`, on the `pc` board],
 )
 
 == The commands
@@ -42,6 +44,8 @@
   [`harden`], [replays it against the hardened allocator],
   [`regions`], [runs the session from regions, and compares],
   [`pages [trim|replay]`], [the heap's pages; gives back the idle ones; replays the recording and counts the pages it touches],
+  [`irq [test]`], [on `pc`: how many device interrupts have arrived, and how often the CPU halted (@bare-interrupts)],
+  [`lights ...`], [on `pc`: the keyboard's colors and brightness, on a known firmware (@crate-clevo-lights)],
   [`halt`], [stops],
 )
 
@@ -61,20 +65,20 @@ commands run: 10, now from the arena
 heap:     65952 of 4194288 bytes used; 1 free blocks, the largest 4128336 bytes
 arena:      296 of 65536 bytes used, peak 1373
 > heap
-0x803f6008       48 bytes allocated
-0x803f6038    65552 bytes allocated
-0x80406048       80 bytes allocated
-0x80406098       32 bytes allocated
-0x804060b8       32 bytes allocated
-0x804060d8      208 bytes allocated
-0x804061a8  4128336 bytes free
+0x803f7008       48 bytes allocated
+0x803f7038    65552 bytes allocated
+0x80407048       80 bytes allocated
+0x80407098       32 bytes allocated
+0x804070b8       32 bytes allocated
+0x804070d8      208 bytes allocated
+0x804071a8  4128336 bytes free
 > map
-.text    0x80200000..0x8027cfde    511966 bytes
-.rodata  0x8027cfe0..0x8028fdd3     77299 bytes
-.data    0x80290a30..0x80290b00       208 bytes
-.bss     0x80291000..0x803e6000   1396736 bytes
-.stack   0x803e6000..0x803f6000     65536 bytes
-.heap    0x803f6000..0x807f6000   4194304 bytes
+.text    0x80200000..0x8027d8de    514270 bytes
+.rodata  0x8027d8e0..0x802907fb     77595 bytes
+.data    0x80291450..0x80291520       208 bytes
+.bss     0x80292000..0x803e7000   1396736 bytes
+.stack   0x803e7000..0x803f7000     65536 bytes
+.heap    0x803f7000..0x807f7000   4194304 bytes
 .stacks  0x80800000..0x80a00000   2097152 bytes
 ```
 ]
@@ -85,7 +89,7 @@ The block of 65,552 bytes is the arena: 64 KiB and its two tags.
 
 `kmain` boots, blanks the display, and runs one task. The task's loop is the whole shell:
 
-#srcfile("green-tea-shell/src/main.rs", lines: ((114, 121),))[```rust
+#srcfile("green-tea-shell/src/main.rs", lines: ((118, 125),))[```rust
 let mut line = [0u8; LINE_MAX];
 loop {
     print!("> ");
@@ -98,7 +102,7 @@ loop {
 
 `read_line` echoes what it reads into a buffer of `LINE_MAX` (120) bytes. Backspace works, bytes that aren't printable are ignored, and typing past the end does nothing:
 
-#srcfile("green-tea-shell/src/main.rs", lines: ((126, 146),))[```rust
+#srcfile("green-tea-shell/src/main.rs", lines: ((130, 150),))[```rust
 fn read_line(line: &mut [u8]) -> usize {
     let mut len = 0;
     loop {
@@ -124,7 +128,7 @@ fn read_line(line: &mut [u8]) -> usize {
 
 `Shell::line` handles the commands that run whole commands or need the shell mutably (`repeat`, `test`, `trace`, `session`, `replay`, `harden`, `regions`, `pages`), and passes the rest to `command`, where the source of memory is chosen:
 
-#srcfile("green-tea-shell/src/main.rs", lines: ((183, 204),), notes: ((186, [`Global` here is `alloc::alloc::Global`, the heap.]), (189, [An arena gets all of a command's memory back by moving one pointer.]),))[```rust
+#srcfile("green-tea-shell/src/main.rs", lines: ((187, 208),), notes: ((190, [`Global` here is `alloc::alloc::Global`, the heap.]), (193, [An arena gets all of a command's memory back by moving one pointer.]),))[```rust
 fn command(&mut self, text: &str) -> Next {
     self.commands += 1;
     let next = match self.source {
@@ -151,7 +155,7 @@ fn command(&mut self, text: &str) -> Next {
 
 `execute` is generic over the `Allocator`, so the same code runs both ways. It makes three allocations of its own before it looks at the command: a copy of the line, the list of words, and a buffer for what it prints.
 
-#srcfile("green-tea-shell/src/main.rs", lines: ((428, 439),), notes: ((428, [`Copy`: both the global allocator and `&Arena` are.]),))[```rust
+#srcfile("green-tea-shell/src/main.rs", lines: ((432, 443),), notes: ((432, [`Copy`: both the global allocator and `&Arena` are.]),))[```rust
 fn execute<A: Allocator + Copy>(text: &str, memory: A, shell: &Shell) -> Next {
     let mut line = Vec::new_in(memory);
     line.extend_from_slice(text.as_bytes());
@@ -203,7 +207,7 @@ PASS: 1000 commands made 8000 heap allocations and freed them all, or none from 
 
 `trace on` asks `green-tea-bare`'s heap to record into a buffer of `TRACE_EVENTS` (65,536) events, a mebibyte, taken from the heap *before* the recording starts. A recording already under way is stopped first, and its buffer freed, so that the free isn't in the new trace:
 
-#srcfile("green-tea-shell/src/main.rs", lines: ((257, 268),), notes: ((264, [The runtime allocates its list of sleepers the first time a task sleeps, which is whenever the console first has nothing to read. Sleeping here keeps that allocation out of the trace, so that a trace doesn't depend on timing.]), (265, [What the heap has counted so far. `replay` later checks the trace against the heap's own count.]),))[```rust
+#srcfile("green-tea-shell/src/main.rs", lines: ((261, 272),), notes: ((268, [The runtime allocates its list of sleepers the first time a task sleeps, which is whenever the console first has nothing to read. Sleeping here keeps that allocation out of the trace, so that a trace doesn't depend on timing.]), (269, [What the heap has counted so far. `replay` later checks the trace against the heap's own count.]),))[```rust
 "on" => {
     drop(heap::stop_recording()); // one under way: its buffer's free isn't in the new one
     self.trace = None; // frees the last trace's buffer
@@ -484,7 +488,14 @@ The binary form is 3.75 times smaller than the text.
 == Limits
 
 - Variables are a list searched from the front, and the session's region never reuses the memory of a changed or unset variable.
-- A line is at most 120 bytes, and input is polled.
+- A line is at most 120 bytes. Waiting for input halts the CPU on `pc`, and is polled on the other boards.
 - `pages` on aarch64 reports only that there is no paging. The `resident` kernel doesn't run there.
 
 One task, twenty commands, and a trace of 20,483 events. @crate-trace does the same with programs from outside the kernel.
+// chapter-status:begin
+// stage: research-done
+// revision: 3
+// body: 39ca63452cd2
+// activity: 2026-11-22 | r3 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r3 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
+// chapter-status:end

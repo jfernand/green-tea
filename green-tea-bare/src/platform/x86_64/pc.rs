@@ -13,16 +13,19 @@
 //! serial port is how the tests read the result. Input comes from either, and from a PS/2
 //! keyboard. It also runs in QEMU with UEFI firmware: `cargo xtask kernel --board pc`.
 
-use super::{apic_id, enable_x2apic_if_available, paging, set_lapic_base, traps, wake_cpu};
+use super::{ON_DEVICE, apic_id, enable_x2apic_if_available, paging, set_lapic_base, traps, wake_cpu};
 use crate::cpus::MAX;
-use crate::platform::Platform;
+use crate::event::Event;
+use crate::platform::{Platform, TimerInterrupt};
 use crate::{Framebuffer, pages};
 use core::arch::{asm, global_asm};
 use core::ptr::{read_volatile, write_volatile};
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use green_tea_acpi::{Acpi, Identity4G};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use green_tea_acpi::{Acpi, Identity4G, IoApicEntry, IsaRoute};
+use green_tea_clevo_lights::{EcPorts, Firmware, Lights};
 use green_tea_framebuffer::Text;
 use green_tea_i8042::Keyboard;
+use green_tea_ioapic::{IoApic, Mmio, Route};
 use green_tea_io::port::{inb, inl, outb};
 use green_tea_multiboot2::{BOOT_MAGIC, Info};
 use green_tea_nvme::Nvme;
@@ -106,6 +109,39 @@ static mut NVME_MEMORY: green_tea_nvme::Memory = green_tea_nvme::Memory::new();
 static NVME_TAKEN: AtomicBool = AtomicBool::new(false);
 /// How many NVMe controllers `find_nvme` looks through.
 const MAX_NVME: usize = 8;
+/// The input interrupts: the vectors of the devices that can wake a waiting console.
+const KEYBOARD_VECTOR: usize = 49;
+const SERIAL_VECTOR: usize = 50;
+const MOUSE_VECTOR: usize = 51;
+const IRQ_KEYBOARD: u8 = 1;
+const IRQ_SERIAL: u8 = 4;
+const IRQ_MOUSE: u8 = 12;
+const MAX_IO_APICS: usize = 4;
+/// How long a halted CPU waits before looking for input anyway. If the interrupts don't
+/// work on some machine the keyboard is slow, and never dead. A USB keyboard is polled, so
+/// with one attached the wait is short.
+const BACKUP_MS: u64 = 50;
+const BACKUP_USB_MS: u64 = 2;
+/// What the ACPI tables say about the routes, kept from `init` for the first read.
+struct InputRoutes {
+    apics: [IoApicEntry; MAX_IO_APICS],
+    count: usize,
+    keyboard: IsaRoute,
+    serial: IsaRoute,
+    mouse: IsaRoute,
+}
+static mut INPUT_ROUTES: Option<InputRoutes> = None;
+static INPUT: Event = Event::new();
+static INPUT_STARTED: AtomicBool = AtomicBool::new(false);
+static KEYBOARD_IRQS: AtomicU64 = AtomicU64::new(0);
+static SERIAL_IRQS: AtomicU64 = AtomicU64::new(0);
+static MOUSE_IRQS: AtomicU64 = AtomicU64::new(0);
+static BACKUP_TICKS: AtomicU64 = AtomicU64::new(0);
+static HALTS: AtomicU64 = AtomicU64::new(0);
+/// The DSDT's table id, length and checksum, which say which firmware this is.
+static DSDT_TABLE_ID: AtomicU64 = AtomicU64::new(0);
+static DSDT_LENGTH: AtomicU32 = AtomicU32::new(0);
+static DSDT_CHECKSUM: AtomicU8 = AtomicU8::new(0);
 static KEYBOARD_BUSY: AtomicBool = AtomicBool::new(false);
 static mut KEYBOARD: Keyboard = Keyboard::new();
 /// The test named on the command line.
@@ -243,6 +279,82 @@ fn init_usb(acpi: Option<&Acpi<Identity4G>>) {
     unsafe { USB = found };
 }
 
+/// A device has something: wake whoever waits for input. The task reads the device, so
+/// the handler doesn't need to, and stays this short.
+fn on_input_interrupt(vector: usize) {
+    let count = match vector {
+        KEYBOARD_VECTOR => &KEYBOARD_IRQS,
+        SERIAL_VECTOR => &SERIAL_IRQS,
+        _ => &MOUSE_IRQS,
+    };
+    count.fetch_add(1, Ordering::Relaxed);
+    INPUT.signal();
+}
+
+fn on_backup_tick() {
+    BACKUP_TICKS.fetch_add(1, Ordering::Relaxed);
+    INPUT.signal();
+}
+
+/// Send one ISA interrupt to this CPU, through whichever IO APIC has its input.
+fn route_irq(routes: &InputRoutes, irq: IsaRoute, vector: usize, destination: u8) -> bool {
+    routes.apics[..routes.count].iter().any(|apic| {
+        if paging::map_device(apic.address as usize, 0x1000).is_err() {
+            return false;
+        }
+        let route = Route { vector: vector as u8, destination, active_low: irq.active_low, level: irq.level };
+        IoApic::new(Mmio(apic.address as usize), apic.first_gsi).route(irq.gsi, route)
+    })
+}
+
+/// Turn on the input interrupts, the first time something waits for input.
+fn start_input_interrupts() -> bool {
+    // SAFETY: only `init` writes it, before this can be called.
+    let Some(routes) = (unsafe { (&raw const INPUT_ROUTES).as_ref() }).and_then(Option::as_ref) else { return false };
+    let Ok(destination) = u8::try_from(apic_id()) else { return false }; // an IO APIC has 8 bits for it
+    Pc::init_timer(on_backup_tick);
+    ON_DEVICE.set(Some(on_input_interrupt));
+    // SAFETY: on the boot CPU, with interrupts off, so nothing else uses the keyboard.
+    if unsafe { (&raw mut KEYBOARD).as_mut() }.is_some_and(Keyboard::enable_interrupts) {
+        let keyboard = route_irq(routes, routes.keyboard, KEYBOARD_VECTOR, destination);
+        let mouse = route_irq(routes, routes.mouse, MOUSE_VECTOR, destination);
+        if !keyboard || !mouse {
+            crate::println!("interrupts: no IO APIC input for the keyboard");
+        }
+    }
+    if HAS_SERIAL.load(Ordering::Relaxed) && route_irq(routes, routes.serial, SERIAL_VECTOR, destination) {
+        Ns16550Port(COM1).enable_receive_interrupt();
+    }
+    true
+}
+
+fn init_input_routes(acpi: Option<&Acpi<Identity4G>>) {
+    let Some(acpi) = acpi else { return };
+    let mut apics = [IoApicEntry::default(); MAX_IO_APICS];
+    let count = acpi.io_apics(&mut apics);
+    if count > 0 {
+        let routes = InputRoutes {
+            apics,
+            count,
+            keyboard: acpi.isa_route(IRQ_KEYBOARD),
+            serial: acpi.isa_route(IRQ_SERIAL),
+            mouse: acpi.isa_route(IRQ_MOUSE),
+        };
+        // SAFETY: at boot, on the only CPU.
+        unsafe { INPUT_ROUTES = Some(routes) };
+    }
+}
+
+/// What the input interrupts have done so far.
+#[derive(Clone, Copy, Debug)]
+pub struct InterruptCounts {
+    pub keyboard: u64,
+    pub mouse: u64,
+    pub serial: u64,
+    pub backup_timer: u64,
+    pub halts: u64,
+}
+
 fn init_cpus(acpi: Option<&Acpi<Identity4G>>) {
     let boot = apic_id();
     APIC_IDS[0].store(boot, Ordering::Relaxed);
@@ -255,7 +367,47 @@ fn init_cpus(acpi: Option<&Acpi<Identity4G>>) {
     CPU_COUNT.store(count, Ordering::Release);
 }
 
+/// The embedded controller's standard I/O ports.
+pub struct EcPort;
+
+impl EcPorts for EcPort {
+    fn status(&mut self) -> u8 {
+        // SAFETY: reading the EC's status has no effect.
+        unsafe { inb(0x66) }
+    }
+
+    fn command(&mut self, value: u8) {
+        // SAFETY: `Lights::new` has checked that this firmware's EC is the one it expects.
+        unsafe { outb(0x66, value) }
+    }
+
+    fn data(&mut self, value: u8) {
+        // SAFETY: as for `command`.
+        unsafe { outb(0x62, value) }
+    }
+}
+
 impl Pc {
+    pub fn interrupt_counts() -> InterruptCounts {
+        InterruptCounts {
+            keyboard: KEYBOARD_IRQS.load(Ordering::Relaxed),
+            mouse: MOUSE_IRQS.load(Ordering::Relaxed),
+            serial: SERIAL_IRQS.load(Ordering::Relaxed),
+            backup_timer: BACKUP_TICKS.load(Ordering::Relaxed),
+            halts: HALTS.load(Ordering::Relaxed),
+        }
+    }
+
+    /// The keyboard lights, if this is a firmware whose lights we know.
+    pub fn keyboard_lights() -> Result<Lights<EcPort>, green_tea_clevo_lights::Error> {
+        let firmware = Firmware {
+            table_id: DSDT_TABLE_ID.load(Ordering::Relaxed).to_le_bytes(),
+            length: DSDT_LENGTH.load(Ordering::Relaxed),
+            checksum: DSDT_CHECKSUM.load(Ordering::Relaxed),
+        };
+        Lights::new(EcPort, crate::delay_ms, firmware)
+    }
+
     /// Start the NVMe controller whose serial number is `serial`. Finding it means starting
     /// each controller to ask, and turning off the ones that don't match. Nothing is read
     /// from or written to their disks. Can be called once, and only while one CPU is
@@ -347,6 +499,14 @@ impl Platform for Pc {
         }
         enable_x2apic_if_available();
         init_cpus(acpi.as_ref());
+        if let Some(header) = acpi.as_ref().and_then(Acpi::dsdt_header) {
+            let table_id = u64::from_le_bytes([
+                header[16], header[17], header[18], header[19], header[20], header[21], header[22], header[23],
+            ]);
+            DSDT_TABLE_ID.store(table_id, Ordering::Relaxed);
+            DSDT_LENGTH.store(u32::from_le_bytes([header[4], header[5], header[6], header[7]]), Ordering::Relaxed);
+            DSDT_CHECKSUM.store(header[9], Ordering::Relaxed);
+        }
 
         // SAFETY: the linker's symbols bound the heap and the stack pool, which nothing
         // uses yet; the boot stack is below them.
@@ -357,6 +517,29 @@ impl Platform for Pc {
         paging::enable_guard_pages();
         paging::unmap_heap();
         init_usb(acpi.as_ref());
+        init_input_routes(acpi.as_ref());
+    }
+
+    /// The first call turns the input interrupts on. A machine without an IO APIC is polled.
+    fn input_event() -> Option<&'static Event> {
+        static AVAILABLE: AtomicBool = AtomicBool::new(false);
+        if !INPUT_STARTED.swap(true, Ordering::AcqRel) {
+            AVAILABLE.store(start_input_interrupts(), Ordering::Release);
+        }
+        AVAILABLE.load(Ordering::Acquire).then_some(&INPUT)
+    }
+
+    /// Halt until an interrupt, with a timer set in case none comes. `sti` takes effect
+    /// after the next instruction, so an interrupt can't slip in before the `hlt`.
+    fn wait_for_interrupt() {
+        // SAFETY: only `init` writes USB, before this can be called.
+        let usb = unsafe { (&raw const USB).as_ref() }.is_some_and(Option::is_some);
+        let wait = if usb { BACKUP_USB_MS } else { BACKUP_MS };
+        Self::set_deadline(rdtsc() + wait * Self::ticks_per_ms());
+        HALTS.fetch_add(1, Ordering::Relaxed);
+        // SAFETY: handlers save everything, and the scheduler is ready for them to run here.
+        unsafe { asm!("sti", "hlt", "cli", options(nomem, nostack)) };
+        Self::set_deadline(u64::MAX);
     }
 
     fn putc(byte: u8) {

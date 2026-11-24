@@ -2,9 +2,9 @@
 
 = The keyboard lights and `WMBB` <app-wmbb>
 
-The keyboard of our test laptop, a Clevo NP50PN, is lit by colored LEDs. No green-tea code drives them yet. This appendix explains how they are controlled, starting from nothing, because the path runs through four pieces of PC firmware that the rest of this report barely mentions. `WMBB` is the name of one of them: the function in the laptop's firmware that the operating system calls to change the lights.
+The keyboard of our test laptop, a Clevo NP50PN, is lit by colored LEDs. @crate-clevo-lights is the driver for them. This appendix explains how they are controlled, starting from nothing, because the path runs through four pieces of PC firmware that the rest of this report barely mentions. `WMBB` is the name of one of them: the function in the laptop's firmware that the operating system calls to change the lights.
 
-Everything here comes from reading the firmware's tables on that laptop, and the open-source `tuxedo-drivers` for Clevo machines. We have sent no command to the lights, so the procedure below is a reading of the firmware and has not been tried.
+Everything here comes from reading the firmware's tables on that laptop, and the open-source `tuxedo-drivers` for Clevo machines. The driver follows the procedure below, and has been tested against a fake EC. It has not yet sent a command to the real one, so the procedure is still a reading of the firmware.
 
 == The pieces
 
@@ -84,7 +84,7 @@ EC[0xF8] = 0xCA    go
 
 == What this means for green-tea
 
-We expected to need an AML interpreter, a large piece of software, to run `WMBB`. For the lights we don't. The AML does no more than compute those five values, so a green-tea driver can write them to the EC itself.
+We expected to need an AML interpreter, a large piece of software, to run `WMBB`. For the lights we don't. The AML does no more than compute those five values, so the green-tea driver writes them to the EC itself.
 
 Writing one byte to the EC is a standard ACPI protocol over two I/O ports, `0x66` for commands and status and `0x62` for data. The firmware's tables confirm these ports on this laptop. The driver waits until bit 1 of the status port is clear, meaning the EC has taken the last byte, before each of three writes:
 
@@ -94,11 +94,20 @@ Writing one byte to the EC is a standard ACPI protocol over two I/O ports, `0x66
 
 The firmware also says what kind of keyboard this is. Its flags word, `PSF1`, reads `0x04690025` on this laptop. Bit `0x00400000`, which `tuxedo-drivers` reads as "three-zone RGB", is set, and bit `0x40000000`, "white only", is clear.
 
+On the laptop, the flags are wrong about the keyboard. Setting zone 0 changed the color of the whole keyboard, and zones 1 and 2 changed nothing: it has one zone (@crate-clevo-lights).
+
 #callout(kind: "note", [What we don't know yet])[
-  - *Whether it works.* No command has been sent, so the zones, the colors and the byte order are unconfirmed on the keyboard itself.
-  - *The keyboard type, from the EC.* `tuxedo-drivers` first asks the EC (its `KBTP` register), and uses `PSF1` as a fallback. We read only `PSF1`.
-  - *Timing.* The firmware writes the mailbox without waiting for the EC to finish, while holding a lock. A driver sending commands back to back may need to wait for `FCMD` to clear.
-  - *Safety of other values.* The same mailbox serves other EC functions, so a driver should send only the combinations in the tables above, and never experiment with `FCMD`.
+  - *The keyboard type, from the EC.* `tuxedo-drivers` first asks the EC (its `KBTP` register), and uses `PSF1` as a fallback. We read only `PSF1`, which says three zones, so `KBTP` may be what says one.
+  - *The byte order and the brightness.* The mailbox works, but the colors' order and the brightness value haven't been checked on the keyboard.
+  - *Timing.* The firmware writes the mailbox without waiting for the EC to finish, while holding a lock. Our driver leaves 10 ms between commands, and doesn't check that `FCMD` has cleared.
+  - *Safety of other values.* The same mailbox serves other EC functions, so the driver sends only the combinations in the tables above, and refuses any firmware but this one.
 ]
 
-A driver of a few dozen lines, tried first on one zone, settles the first three.
+One run on the laptop settled that the mailbox works and that there is one zone.
+// chapter-status:begin
+// stage: research-done
+// revision: 3
+// body: 004b628d329a
+// activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
+// chapter-status:end

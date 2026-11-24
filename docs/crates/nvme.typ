@@ -5,14 +5,15 @@
 `green-tea-nvme` is a polled driver for an NVMe disk, the kind in most PCs of the last decade. It resets the controller, finds its first namespace, creates one I/O queue, and offers read, write and flush on whole blocks. It does one command at a time and takes no interrupts.
 
 #spec(
-  ("Source", [#repo("drivers/nvme/src/lib.rs"), 654 lines]),
+  ("Source", [#repo("drivers/nvme/src/lib.rs"), 721 lines]),
   ("Depends on", [nothing; `no_std`]),
   ("Used by", [`green-tea-bare` (the `pc` board), for the `disk` kernel]),
-  ("Tests", [10 host tests, against a fake controller; the `disk` kernel on QEMU's `nvme`]),
+  ("Tests", [12 host tests, against a fake controller; the `disk` kernel on QEMU's `nvme`]),
 )
 
 #dtable(columns: (auto, 1fr), ("Item", "What it does"),
   [`Nvme::new(base, memory, delay_ms)`], [resets the controller, identifies it, and creates the I/O queues],
+  [`Nvme::disable(base, delay_ms)`], [turns a controller off, so that it stops using its memory],
   [`capacity()`, `block_size()`], [the namespace's size in blocks, and the size of a block],
   [`serial()`], [the controller's serial number, without its padding],
   [`read(block, buf)`, `write(block, buf)`], [whole blocks, from a buffer of any alignment],
@@ -67,7 +68,7 @@ fn block_size(identify: &[u8]) -> Option<usize> {
 
 `run` writes the 16 dwords at the tail, moves the tail, rings the doorbell and polls:
 
-#srcfile("drivers/nvme/src/lib.rs", lines: ((327, 351),), size: 6.4pt, notes: ((334, [The identifier comes back in the completion.]), (342, [The controller may start at once, so the fence above comes first.]), (349, [It may still write to our memory later, so we send it nothing more.]),))[```rust
+#srcfile("drivers/nvme/src/lib.rs", lines: ((329, 353),), size: 6.4pt, notes: ((336, [The identifier comes back in the completion.]), (344, [The controller may start at once, so the fence above comes first.]), (351, [It may still write to our memory later, so we send it nothing more.]),))[```rust
 fn run(&mut self, queue: usize, mut c: [u32; 16]) -> Result<(), Error> {
     if self.dead {
         return Err(Error::Timeout);
@@ -97,7 +98,7 @@ fn run(&mut self, queue: usize, mut c: [u32; 16]) -> Result<(), Error> {
 
 A completion is new when its *phase bit* differs from what the slot held before. The controller flips the bit each time it wraps, as xHCI does with its cycle bit (@crate-xhci):
 
-#srcfile("drivers/nvme/src/lib.rs", lines: ((354, 378),), size: 6.4pt, notes: ((358, [Bit 16 of the last dword is the phase.]), (368, [Tells the controller the slot is free.]), (370, [With one command at a time, any other id means the controller is confused.]),))[```rust
+#srcfile("drivers/nvme/src/lib.rs", lines: ((356, 380),), size: 6.4pt, notes: ((360, [Bit 16 of the last dword is the phase.]), (370, [Tells the controller the slot is free.]), (372, [With one command at a time, any other id means the controller is confused.]),))[```rust
 fn completion(&mut self, queue: usize, id: u16) -> Option<Result<(), Error>> {
     let q = &mut self.queues[queue];
     let entry = q.cq + usize::from(q.head) * CQ_ENTRY;
@@ -129,7 +130,7 @@ fn completion(&mut self, queue: usize, id: u16) -> Option<Result<(), Error>> {
 
 Data goes through the driver's own page, so a caller's buffer can be anywhere, including the demand-paged heap, which a device couldn't fault in. A transfer is split into commands of at most one page:
 
-#srcfile("drivers/nvme/src/lib.rs", lines: ((268, 277),), notes: ((269, [Whole blocks, and inside the namespace, before anything is sent.]), (273, [`transfer` puts the block number in `cdw10` and `cdw11`, and the count, minus one, in `cdw12`.]),))[```rust
+#srcfile("drivers/nvme/src/lib.rs", lines: ((270, 279),), notes: ((271, [Whole blocks, and inside the namespace, before anything is sent.]), (275, [`transfer` puts the block number in `cdw10` and `cdw11`, and the count, minus one, in `cdw12`.]),))[```rust
 pub fn read(&mut self, block: u64, buf: &mut [u8]) -> Result<(), Error> {
     self.check(block, buf.len())?;
     let per_command = PAGE / self.block_size * self.block_size;
@@ -148,24 +149,21 @@ The host tests run the driver against a fake controller in memory, which does it
 
 #output(title: "cargo test -p green-tea-nvme")[
 ```
-test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 ]
 
-The `disk` kernel on the `pc` board runs the same checks as on virtio (@crate-coop), on QEMU's `nvme` device. That test overwrites a sector, and this board can meet a disk that holds someone's data. So before it reads or writes anything, it compares the serial number:
+The `disk` kernel on the `pc` board runs the same checks as on virtio (@crate-coop), on QEMU's `nvme` device. That test overwrites a sector, and this board can meet a disk that holds someone's data. So `Pc::find_nvme` takes the serial number it wants, starts each controller on the bus to ask it, and turns off the ones that don't match. No block of any of them is read or written:
 
-#srcfile("green-tea-coop/src/main.rs", lines: ((312, 325),), size: 6.4pt, notes: ((320, [`xtask` gives its test image this serial. A real disk fails here, and nothing has been read or written.]),))[```rust
-let mut disk = match Board::find_nvme() {
+#srcfile("green-tea-coop/src/main.rs", lines: ((312, 322),), size: 6.4pt, notes: ((312, [`DISK_ID` is the serial `xtask` gives its test image. A drive with any other serial is turned off, and nothing has been read or written.]),))[```rust
+let mut disk = match Board::find_nvme(DISK_ID) {
     Ok(Some(disk)) => disk,
-    Ok(None) => return println!("FAIL: no NVMe disk"),
+    Ok(None) => return println!("FAIL: no NVMe disk is the test disk, so none was touched"),
     Err(e) => return println!("FAIL: {e}"),
 };
 let sectors = disk.capacity();
 let serial = core::str::from_utf8(disk.serial()).unwrap_or("?");
 println!("nvme: {sectors} blocks of {} bytes, serial {serial:?}", disk.block_size());
-if disk.serial() != DISK_ID {
-    return println!("FAIL: not the test disk, so it was left alone");
-}
 if disk.block_size() != SECTOR_SIZE {
     return println!("FAIL: the test expects {SECTOR_SIZE}-byte blocks");
 }
@@ -182,8 +180,8 @@ We then booted the same image with a 32 KiB drive of random bytes and another se
 
 #output(title: "docs/record.d/nvme.sh: an NVMe drive with another serial")[
 ```
-nvme: 64 blocks of 512 bytes, serial "somebodys-ssd"
-FAIL: not the test disk, so it was left alone
+nvme: passing over "somebodys-ssd"
+FAIL: no NVMe disk is the test disk, so none was touched
 the disk's 32 KiB are unchanged
 ```
 ]
@@ -192,10 +190,18 @@ the disk's 32 KiB are unchanged
 
 - Tested only against QEMU's `nvme` device and a fake controller, never on a physical drive.
 - One command at a time, polled, through one page: every transfer is copied, and a large one takes a command per 4 KiB.
-- Only the first NVMe controller on the bus, and only its first active namespace. On a machine with two drives, the guard refuses the first even if the second is the test disk.
+- At most eight controllers, and only each one's first active namespace.
+- Looking for the test disk resets every NVMe controller up to the one that matches, and leaves the others off. Their data isn't touched, but the kernel can't use them afterwards.
 - Blocks of 512 bytes to 4 KiB, with no metadata. Other formats are refused.
 - `read` and `write` have no partition table or file system above them: they address the whole namespace.
-- A controller already in a fatal state (`CSTS.CFS`) with `CC.EN` set is reported as an error, and `new` doesn't try to reset it.
+- A controller in a fatal state (`CSTS.CFS`) is reset, the only way out of that state, and has only the controller's own timeout to recover. If the flag stays set, enabling it reports the error.
 - A write protected namespace reports an error status only when a write is attempted.
 
 One queue pair, one page, one guard. @crate-bare is what puts these drivers on a machine.
+// chapter-status:begin
+// stage: research-done
+// revision: 2
+// body: 3ae0c85797bf
+// activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
+// chapter-status:end

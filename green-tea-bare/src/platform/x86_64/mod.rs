@@ -43,7 +43,7 @@ mod pc;
 #[cfg(not(feature = "board-pc"))]
 mod q35;
 #[cfg(feature = "board-pc")]
-pub use pc::Pc;
+pub use pc::{EcPort, InterruptCounts, Pc};
 #[cfg(not(feature = "board-pc"))]
 pub use q35::Q35;
 
@@ -322,6 +322,21 @@ green_tea_timer_entry:
     .endr
     iretq                       # restores rflags, and with it IF: interrupts back on
 
+    # A device's interrupt, saved the same way, with its vector as the handler's argument.
+    .irp v, 49,50,51
+    .globl green_tea_device_\v
+green_tea_device_\v:
+    .irp r, rax,rbx,rcx,rdx,rsi,rdi,rbp,r8,r9,r10,r11,r12,r13,r14,r15
+    push %\r
+    .endr
+    mov $\v, %edi
+    call green_tea_device
+    .irp r, r15,r14,r13,r12,r11,r10,r9,r8,rbp,rdi,rsi,rdx,rcx,rbx,rax
+    pop %\r
+    .endr
+    iretq
+    .endr
+
     # Needs neither an EOI nor anything else.
     .globl green_tea_spurious_entry
 green_tea_spurious_entry:
@@ -342,6 +357,9 @@ unsafe extern "C" {
     static green_tea_exception_stubs: [u64; 32];
     fn green_tea_timer_entry();
     fn green_tea_spurious_entry();
+    fn green_tea_device_49();
+    fn green_tea_device_50();
+    fn green_tea_device_51();
 }
 
 /// The GDT, the TSS and the IDT: what the CPU needs to take an interrupt in long mode.
@@ -486,6 +504,9 @@ mod traps {
             (*idt)[TIMER_VECTOR] = Gate::to(super::green_tea_timer_entry as *const () as u64, 0);
             (*idt)[SPURIOUS_VECTOR] =
                 Gate::to(super::green_tea_spurious_entry as *const () as u64, 0);
+            (*idt)[49] = Gate::to(super::green_tea_device_49 as *const () as u64, 0);
+            (*idt)[50] = Gate::to(super::green_tea_device_50 as *const () as u64, 0);
+            (*idt)[51] = Gate::to(super::green_tea_device_51 as *const () as u64, 0);
             let pointer = Pointer { limit: size_of::<[Gate; 256]>() as u16 - 1, base: idt as u64 };
             asm!("lidt [{}]", in(reg) &raw const pointer, options(readonly, nostack));
 
@@ -678,6 +699,18 @@ extern "C" fn green_tea_timer() {
     if let Some(on_tick) = ON_TICK.get() {
         on_tick();
     }
+}
+
+/// What runs when a device interrupts, if a board has asked for any.
+static ON_DEVICE: Global<Option<fn(usize)>> = Global::new(None);
+
+/// Called by a `green_tea_device_*` stub, with interrupts off.
+#[unsafe(no_mangle)]
+extern "C" fn green_tea_device(vector: usize) {
+    if let Some(on_device) = ON_DEVICE.get() {
+        on_device(vector);
+    }
+    lapic_write(LAPIC_EOI, 0);
 }
 
 impl TimerInterrupt for Board {

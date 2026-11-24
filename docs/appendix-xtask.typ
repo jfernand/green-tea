@@ -40,3 +40,10 @@ Its QEMU run differs from a default one in five ways: OVMF is the firmware, with
 == The environment
 
 `GREEN_TEA_MAX_CPUS` sets `cpus::MAX`, the most CPUs a kernel will start, at build time: a number from 1 to 256, and 8 if it isn't set. `green-tea-bare`'s build script checks it.
+// chapter-status:begin
+// stage: research-done
+// revision: 3
+// body: ff91049841ea
+// activity: 2026-11-22 | r3 | stage | green-tea | note | tracking started at early-draft
+// activity: 2026-11-23 | r3 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
+// chapter-status:end

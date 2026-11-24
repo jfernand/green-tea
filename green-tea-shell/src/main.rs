@@ -29,6 +29,10 @@
 extern crate alloc;
 
 mod harden;
+#[cfg(feature = "board-pc")]
+mod irq;
+#[cfg(feature = "board-pc")]
+mod lights;
 mod region;
 mod dump;
 mod pages;
@@ -438,7 +442,14 @@ fn execute<A: Allocator + Copy>(text: &str, memory: A, shell: &Shell) -> Next {
     // Writing to `out` can't fail: it only appends to a Vec.
     let _ = match words.as_slice() {
         [] => Ok(()),
+        #[cfg(not(feature = "board-pc"))]
         ["help"] => out.write_str(HELP),
+        #[cfg(feature = "board-pc")]
+        ["help"] => out.write_str(HELP).and_then(|()| out.write_str(irq::HELP)).and_then(|()| out.write_str(lights::HELP)),
+        #[cfg(feature = "board-pc")]
+        ["irq", args @ ..] => irq::command(args, &mut out),
+        #[cfg(feature = "board-pc")]
+        ["lights", args @ ..] => lights::command(args, &mut out),
         ["echo", rest @ ..] => {
             let vars = shell.vars.borrow();
             for (i, word) in rest.iter().enumerate() {
