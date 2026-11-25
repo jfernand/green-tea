@@ -13,5 +13,5 @@ publish.workspace = true
 # threads: cargo test -p green-tea-shard
 
 [dependencies]
-green-tea-fit = { path = "../green-tea-fit" }
-green-tea-smp = { path = "../green-tea-smp" }
+green-tea-fit = { path = "../fit" }
+green-tea-smp = { path = "../smp" }

@@ -12,4 +12,4 @@ publish.workspace = true
 # The kernel's `replay` command, without the kernel:
 #   cargo run --release -p green-tea-trace -- replay shell.gtt
 [dependencies]
-green-tea-fit = { path = "../green-tea-fit" }
+green-tea-fit = { path = "../allocators/fit" }

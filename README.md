@@ -14,22 +14,23 @@ With minimal help from R. Claude and R. Junie
 ## Layout
 
 The workspace has two versions side by side, so you can compare them, and three bare-metal
-kernels built on the same context switch:
+kernels built on the same context switch. Its allocators are grouped under `allocators/`, like
+the device drivers under `drivers/`:
 
 | crate | what it shows |
 |---|---|
 | [`green-tea-v1`](green-tea-v1) | The first working version, x86_64 only. One global `MAIN` context, `static mut` state, and a `VecDeque` `run()` scheduler. Its git history goes through the bugs: a shadowed `static`, a missing `done` flag, and a stack misaligned for the SysV ABI. |
 | [`green-tea-v2`](green-tea-v2) | The same ideas split into layers: `arch` (save/restore registers, prime a stack) → `Task` (an asymmetric coroutine that switches back to whoever resumed it) → `run`/`spawn` (a round-robin scheduler on a thread-local run queue). No `static mut`. Runs on x86_64, aarch64 (including Apple Silicon) and riscv64. |
 | [`green-tea-arch`](green-tea-arch) | The `arch` layer on its own: `Context` and `swap_context` for each architecture. `no_std`, so v2 and the kernels share it. |
-| [`green-tea-pool`](green-tea-pool) | Pools of fixed-size blocks, two ways: a bitmap and an intrusive free list. `no_std`; the kernels' task stacks come from one. |
-| [`green-tea-fit`](green-tea-fit) | An allocator for blocks of any size: a free list searched first-fit, next-fit or best-fit, with boundary tags to merge freed neighbours. `no_std`. Also a binary buddy system and TLSF, which is the kernels' heap, and replays recorded traces of allocations against each policy, and measures the fragmentation. |
-| [`green-tea-kmem`](green-tea-kmem) | What a kernel allocates for itself with: page frames from a buddy system that keeps its records in a table, apart from the pages, and slab caches of constructed objects on top. `no_std`; the kernels' task records come from one. |
-| [`green-tea-region`](green-tea-region) | Regions: a bump allocator over chunks taken from the heap, freed all at once. `alloc` returns a reference that lives as long as the borrow of the region, so the borrow checker refuses a use after the region is dropped or reset, and a pointer from a long-lived region into a short-lived one. `no_std`. |
+| [`green-tea-pool`](allocators/pool) | Pools of fixed-size blocks, two ways: a bitmap and an intrusive free list. `no_std`; the kernels' task stacks come from one. |
+| [`green-tea-fit`](allocators/fit) | An allocator for blocks of any size: a free list searched first-fit, next-fit or best-fit, with boundary tags to merge freed neighbours. `no_std`. Also a binary buddy system and TLSF, which is the kernels' heap, and replays recorded traces of allocations against each policy, and measures the fragmentation. |
+| [`green-tea-kmem`](allocators/kmem) | What a kernel allocates for itself with: page frames from a buddy system that keeps its records in a table, apart from the pages, and slab caches of constructed objects on top. `no_std`; the kernels' task records come from one. |
+| [`green-tea-region`](allocators/region) | Regions: a bump allocator over chunks taken from the heap, freed all at once. `alloc` returns a reference that lives as long as the borrow of the region, so the borrow checker refuses a use after the region is dropped or reset, and a pointer from a long-lived region into a short-lived one. `no_std`. |
 | [`green-tea-trace`](green-tea-trace) | A command for the host that reads a trace file (`green-tea-fit`'s `tracefile` module: a text form and a binary form) and replays it against each allocator, as the shell's `replay` does in the kernel. `cargo xtask trace` gets such a file out of the kernel, over its serial console. |
 | [`green-tea-measure`](green-tea-measure) | A command for the host that replays one trace file against every allocator here that one thread can use, and prints what each needed: bytes, free blocks searched, instructions (counted by valgrind's callgrind) and time as a distribution. Also the Lisp's programs with explicit frees placed by an oracle, against the same programs on its garbage-collected heaps. |
-| [`green-tea-smp`](green-tea-smp) | Allocating from several CPUs: a spin lock, and a cache of free blocks for each CPU in front of a heap behind the lock. `no_std`; its tests run on the host with real threads. |
+| [`green-tea-smp`](allocators/smp) | Allocating from several CPUs: a spin lock, and a cache of free blocks for each CPU in front of a heap behind the lock. `no_std`; its tests run on the host with real threads. |
 | [`green-tea-lisp`](green-tea-lisp) | A small Lisp: a reader, an evaluator and a printer, over a heap it reaches only through the ten operations of a trait. The first heap counts references. `no_std`; `--kernel lisp` runs it. |
-| [`green-tea-shard`](green-tea-shard) | Allocating from several CPUs with no lock, after mimalloc: pages of one size class each, a free list in every page, and a second list in every page that other CPUs push to with a compare-and-swap. `no_std`; its tests run on the host with real threads. |
+| [`green-tea-shard`](allocators/shard) | Allocating from several CPUs with no lock, after mimalloc: pages of one size class each, a free list in every page, and a second list in every page that other CPUs push to with a compare-and-swap. `no_std`; its tests run on the host with real threads. |
 | [`green-tea-smr`](green-tea-smr) | Safe memory reclamation: a lock-free stack and queue with their nodes on the heap, and when a node they have unlinked may be freed, by epochs and by hazard pointers. `no_std`; its tests run on the host with real threads. |
 | [`drivers/`](drivers) | The device drivers, one crate each, which know their device but not the machine: serial ports (16550, PL011), QEMU's fw_cfg and ramfb, drawing on a framebuffer, PCI through ECAM, virtio (MMIO and PCI transports, split virtqueues), virtio-blk, and for physical PCs Multiboot2, ACPI, a PS/2 keyboard, a USB keyboard over xHCI and an NVMe disk. |
 | [`green-tea-bare`](green-tea-bare) | What the kernels share: boot code per board behind the `Platform` and `TimerInterrupt` traits (timers, interrupts, paging, and where each device is), a port of v2's `Task` and scheduler, and a heap. |
@@ -210,7 +211,7 @@ places itself: `.eh_frame`, and on x86_64 `.got` and the PVH note.
 ### Pools
 
 Task stacks are all one size, so the pool they come from needs no search: it only has to
-remember which slots are free. [`green-tea-pool`](green-tea-pool) does that two ways behind
+remember which slots are free. [`green-tea-pool`](allocators/pool) does that two ways behind
 one trait. `Bitmap` keeps a bit per slot, apart from the slots, takes the lowest free one,
 and notices a slot given back twice. `FreeList` threads a list through the free slots
 themselves, takes the one most recently given back, and can check nothing: given a slot
@@ -223,7 +224,7 @@ The crate's own tests run on the host: `cargo test -p green-tea-pool`.
 
 ### A heap that frees
 
-The kernels' heap is a [`green-tea-fit`](green-tea-fit) allocator over the 4 MiB linker.ld
+The kernels' heap is a [`green-tea-fit`](allocators/fit) allocator over the 4 MiB linker.ld
 reserves. Every block has a word at each end, a header and a footer, holding its size and
 whether it is allocated (Knuth's boundary tags), and the free blocks are on a doubly linked
 list threaded through themselves. `allocate` searches the list and splits the block it
@@ -247,13 +248,13 @@ the footprint against what the program had allocated at its peak is how much the
 allocator's placement cost.
 
 `--kernel frag` first shows a region that is half free and refuses a request a fifth its
-size. Then it runs an [adversary](green-tea-fit/src/adversary.rs), a program that looks at
+size. Then it runs an [adversary](allocators/fit/src/adversary.rs), a program that looks at
 where its blocks are and frees whichever leave holes too small for what it asks for next.
 Holding 64 KiB, it makes every policy need 5.93 times that. Last, it replays the `fit`
 test's random workload against each policy.
 
 The heap can record what is asked of it (`heap::record`), as a
-[trace](green-tea-fit/src/trace.rs): an address and a size per allocation, an address per
+[trace](allocators/fit/src/trace.rs): an address and a size per allocation, an address per
 free. `--kernel trace` has the shell record itself running a script of 1,970 commands
 that set, read and unset variables, and then replay the trace against all six
 combinations of policy and list order. It replays it twice more: with the same sizes and
@@ -264,9 +265,9 @@ lifetimes dealt out at random, and with the long-lived blocks in a region of the
 First fit by address, which the heap used to be, walks a list: with 8,000 holes in the way
 it looks at 8,001 free blocks to allocate and passes 8,000 to free, with interrupts off.
 green-tea-fit has two allocators that keep a list for each size instead.
-[`Buddy`](green-tea-fit/src/buddy.rs) allows only powers of two, splits a block only in
+[`Buddy`](allocators/fit/src/buddy.rs) allows only powers of two, splits a block only in
 half, and merges a freed block only with the half it was split from, which it finds with
-an exclusive or. [`Tlsf`](green-tea-fit/src/tlsf.rs), two-level segregated fit, keeps
+an exclusive or. [`Tlsf`](allocators/fit/src/tlsf.rs), two-level segregated fit, keeps
 `Fit`'s blocks and boundary tags and replaces the one free list by a table of lists, one
 for each size below 256 bytes and sixteen for each power of two above, with two bitmaps
 that say which lists have a block. An allocation is two masks and two counts of trailing
@@ -280,7 +281,7 @@ long as it can be.
 ### Page frames, and a slab cache
 
 Under the heap the kernel has two allocators of its own, from
-[`green-tea-kmem`](green-tea-kmem). The first hands out page frames: the 16 MiB of RAM
+[`green-tea-kmem`](allocators/kmem). The first hands out page frames: the 16 MiB of RAM
 after the kernel's last section, in blocks of 1 to 1,024 pages, by a binary buddy system.
 It keeps a 12-byte record per frame in a table (in the region's first 12 pages) and
 nothing in the pages, so it never touches a free page, knows the order of every allocated
@@ -305,7 +306,7 @@ run on the host: `cargo test -p green-tea-kmem`.
 
 ### A hardened heap
 
-[`green-tea-fit/src/hardened.rs`](green-tea-fit/src/hardened.rs) is the first-fit allocator
+[`allocators/fit/src/hardened.rs`](allocators/fit/src/hardened.rs) is the first-fit allocator
 again, with five defences that can each be switched on: safe unlinking (a block's
 neighbours on the free list must point back at it before it is taken off), links stored
 XORed with a secret, a canary word after the caller's bytes, a quarantine that holds freed
@@ -328,7 +329,7 @@ first access to a page faults, the fault handler maps it
 ([pages.rs](green-tea-bare/src/pages.rs)), and the instruction runs again. The map is
 still the identity. `pages::release` zeroes a page and unmaps it, and `pages::trim` does
 that for the pages of the heap's free blocks that hold no header, link or footer
-([green-tea-fit's pages.rs](green-tea-fit/src/pages.rs) says which those are). aarch64
+([allocators/fit's pages.rs](allocators/fit/src/pages.rs) says which those are). aarch64
 runs with the MMU off, and has every page all the time.
 ```sh
 cargo xtask kernel --kernel pages      # riscv64, x86_64
@@ -361,7 +362,7 @@ multiprocessing there is. The scheduler, tasks, the console and every `Global` s
 to the boot CPU, and a started CPU runs with interrupts off. What is safe from every CPU is
 the heap: each operation takes a spin lock as well as turning interrupts off.
 
-[`green-tea-smp`](green-tea-smp) has the lock, and a `Cache`: one CPU's free blocks, in
+[`green-tea-smp`](allocators/smp) has the lock, and a `Cache`: one CPU's free blocks, in
 twelve size classes, filled from and emptied into a `Central` (a heap, and a depot of
 spare batches) eight blocks at a time, so that the lock is taken once per batch. The test
 has four CPUs add to a counter with and without a lock, then make 80,128 allocations and
@@ -392,7 +393,7 @@ the two programs that make cycles in a heap too small for what they leak. Every 
 a count, the same on each architecture, but for the bytes of stack the recursion used. The
 crate's own tests run on the host: `cargo test -p green-tea-lisp`.
 
-[`green-tea-shard`](green-tea-shard) does without the lock. An `Arena` is a region cut
+[`green-tea-shard`](allocators/shard) does without the lock. An `Arena` is a region cut
 into pages of 16 KiB, and each CPU has a `Heap` that owns some of them. A page holds
 blocks of one size class and has three free lists in its header: one the owner allocates
 from, one for the blocks the owner frees, and one that other CPUs push to with a
@@ -491,7 +492,7 @@ because on riscv64 the first byte typed before the kernel is up doesn't arrive.)
 
 ### Regions
 
-[`green-tea-region`](green-tea-region) is the arena again with its lifetimes in the types.
+[`green-tea-region`](allocators/region) is the arena again with its lifetimes in the types.
 A `Region` takes chunks from the heap as it fills, and gives them all back when it is
 dropped; `reset` keeps one chunk to fill again. `region.alloc(value)` returns `&mut T`
 borrowed from the region, `Vec::new_in(&region)` grows in it, and `scope` is a region that

@@ -14,4 +14,4 @@ publish.workspace = true
 # cargo test -p green-tea-region
 
 [dev-dependencies]
-green-tea-fit = { path = "../green-tea-fit" }
+green-tea-fit = { path = "../fit" }

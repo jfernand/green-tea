@@ -14,9 +14,9 @@ publish.workspace = true
 # It has no dependencies outside the workspace. Instruction counts come from valgrind,
 # which it runs itself if it is installed.
 [dependencies]
-green-tea-fit = { path = "../green-tea-fit" }
-green-tea-pool = { path = "../green-tea-pool" }
-green-tea-kmem = { path = "../green-tea-kmem" }
-green-tea-smp = { path = "../green-tea-smp" }
-green-tea-shard = { path = "../green-tea-shard" }
+green-tea-fit = { path = "../allocators/fit" }
+green-tea-pool = { path = "../allocators/pool" }
+green-tea-kmem = { path = "../allocators/kmem" }
+green-tea-smp = { path = "../allocators/smp" }
+green-tea-shard = { path = "../allocators/shard" }
 green-tea-lisp = { path = "../green-tea-lisp" }

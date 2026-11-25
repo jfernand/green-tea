@@ -13,4 +13,4 @@ publish.workspace = true
 # threads: cargo test -p green-tea-smp
 
 [dependencies]
-green-tea-fit = { path = "../green-tea-fit" }
+green-tea-fit = { path = "../fit" }

@@ -23,4 +23,4 @@ board-pc = ["green-tea-bare/board-pc"]
 
 [dependencies]
 green-tea-bare = { path = "../green-tea-bare" }
-green-tea-region = { path = "../green-tea-region" }
+green-tea-region = { path = "../allocators/region" }
