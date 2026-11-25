@@ -53,6 +53,8 @@ pub fn range(row: usize, column: usize) -> (usize, usize) {
     }
 }
 
+/// A two-level segregated fit (TLSF) allocator, using size-class free lists and
+/// bitmaps to find suitable blocks in bounded time.
 pub struct Tlsf {
     /// The header of the first block, and one past the last: see `Fit`.
     first: usize,
