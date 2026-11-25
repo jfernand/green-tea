@@ -33,7 +33,9 @@ under `allocators/`, `drivers/` and `kernels/`, respectively:
 | [`green-tea-shard`](allocators/shard) | Allocating from several CPUs with no lock, after mimalloc: pages of one size class each, a free list in every page, and a second list in every page that other CPUs push to with a compare-and-swap. `no_std`; its tests run on the host with real threads. |
 | [`green-tea-smr`](green-tea-smr) | Safe memory reclamation: a lock-free stack and queue with their nodes on the heap, and when a node they have unlinked may be freed, by epochs and by hazard pointers. `no_std`; its tests run on the host with real threads. |
 | [`drivers/`](drivers) | The device drivers, one crate each, which know their device but not the machine: serial ports (16550, PL011), QEMU's fw_cfg and ramfb, drawing on a framebuffer, PCI through ECAM, virtio (MMIO and PCI transports, split virtqueues), virtio-blk, and for physical PCs Multiboot2, ACPI, a PS/2 keyboard, a USB keyboard over xHCI and an NVMe disk. |
-| [`green-tea-bare`](green-tea-bare) | What the kernels share: boot code per board behind the `Platform` and `TimerInterrupt` traits (timers, interrupts, paging, and where each device is), a port of v2's `Task` and scheduler, and a heap. |
+| [`green-tea-bare`](green-tea-bare) | What the images share below their schedulers: boot code per board behind the `Platform` and `TimerInterrupt` traits (timers, interrupts, paging, and where each device is), plus a heap, task stacks, and platform services. |
+| [`green-tea-scheduler-coop`](schedulers/coop) | Bare-metal task records, cooperative task operations, a round-robin runtime, and scheduler-aware console input. It depends on `green-tea-bare`; the bare-metal support crate does not depend on it. |
+| [`green-tea-scheduler-preempt`](schedulers/preempt) | Timer-preemptive `run`, `spawn`, `sleep_ms`, and `yield_now` operations layered on the cooperative scheduler, with interrupt-safe task transitions and per-slice timer management. |
 | [`green-tea-coop`](kernels/coop) | A bare-metal kernel for QEMU on riscv64, aarch64 and x86_64 whose tasks yield to each other, so you can watch the context switches on screen. |
 | [`green-tea-preempt`](kernels/preempt) | The same, but the tasks never yield: a timer interrupt preempts them. One task sleeps instead, and costs no time slices. |
 | [`green-tea-shell`](kernels/shell) | A kernel with a small shell on the serial console. Each command allocates its working memory from the heap, block by block, or from an arena that is reset after every command. |
@@ -129,8 +131,9 @@ yields. Before each resume, the scheduler outlines the column of the task about 
 bumps the switch counter at the top. When all tasks finish, the status bar turns green and
 the serial console prints the total, which should be 57; `cargo xtask kernel` checks it.
 
-Everything but [`green-tea-bare/src/platform`](green-tea-bare/src/platform) is shared;
-the drivers it picks are in [`drivers/`](drivers). Per architecture:
+The scheduler is shared in [`schedulers/coop`](schedulers/coop), while
+[`green-tea-bare/src/platform`](green-tea-bare/src/platform) supplies the machine-specific
+parts; the drivers it picks are in [`drivers/`](drivers). Per architecture:
 
 | | riscv64 (`virt`) | aarch64 (`virt`) | x86_64 (`q35`) |
 |---|---|---|---|
