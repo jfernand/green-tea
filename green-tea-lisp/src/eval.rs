@@ -145,16 +145,25 @@ impl<H: Heap> Lisp<H> {
     }
 
     /// Evaluate the expression in the root slot below the top, in the environment on top.
-    /// Both are replaced by the value.
-    pub fn eval(&mut self) -> Result<(), Error> {
+    /// On success, both slots are replaced by the value. On error, temporary roots are
+    /// removed and the root-stack length is restored; callers must abandon the input slots.
+    pub(crate) fn eval(&mut self) -> Result<(), Error> {
         if self.depth == MAX_DEPTH {
             return Err(Error::TooDeep);
         }
+        let roots = self.heap.roots();
+        let base = roots - 2;
         self.depth += 1;
         self.deepest = self.deepest.max(self.depth);
-        let base = self.heap.roots() - 2;
-        self.eval_at(base)?; // on an error, `run` empties the root stack
+        let result = self.eval_at(base);
         self.depth -= 1;
+        if let Err(error) = result {
+            assert!(self.heap.roots() >= roots, "evaluation popped a caller-owned root");
+            while self.heap.roots() > roots {
+                self.heap.pop();
+            }
+            return Err(error);
+        }
         // The value is on top. Put it where the expression was, and drop the rest.
         self.heap.set_root(base, self.heap.top());
         while self.heap.roots() > base + 1 {

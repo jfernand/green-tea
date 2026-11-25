@@ -45,6 +45,33 @@ fn atoms_evaluate_to_themselves() {
 }
 
 #[test]
+fn repeated_direct_evaluation_errors_restore_roots_and_depth() {
+    let mut lisp = lisp();
+    let missing = lisp.intern("missing");
+    let environment = lisp.heap.root(0);
+    let caller_root = Value::int(99);
+    lisp.heap.push(caller_root);
+
+    for _ in 0..2 {
+        lisp.heap.push(Value::sym(missing));
+        lisp.heap.push(environment);
+        assert_eq!(lisp.eval(), Err(Error::Unbound(missing)));
+        assert_eq!(lisp.heap.roots(), 4);
+        assert_eq!(lisp.heap.root(1), caller_root);
+        lisp.heap.pop();
+        lisp.heap.pop();
+    }
+    assert_eq!(lisp.deepest(), 1);
+
+    lisp.heap.push(Value::int(42));
+    lisp.heap.push(environment);
+    assert_eq!(lisp.eval(), Ok(()));
+    assert_eq!(lisp.heap.roots(), 3);
+    assert_eq!(lisp.heap.root(1), caller_root);
+    assert_eq!(lisp.heap.root(2), Value::int(42));
+}
+
+#[test]
 fn quote_returns_its_argument_unevaluated() {
     assert_eq!(value("(quote (a b (c 1) nil))"), "(a b (c 1) nil)");
     assert_eq!(value("'(1 . 2)"), "(1 . 2)");
