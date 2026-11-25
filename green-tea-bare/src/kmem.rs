@@ -107,7 +107,10 @@ impl KernelCache {
     /// An object in its constructed state, or `None` if there is none to be had.
     pub fn allocate(&self) -> Option<usize> {
         // SAFETY: inside `locked`, so this is the only reference to the cache.
-        locked(|frames| unsafe { &mut *self.0.get() }.allocate(frames))
+        locked(|frames| {
+            // SAFETY: exclusive under `locked`; the kernel page allocator outlives this cache.
+            unsafe { (&mut *self.0.get()).allocate(frames) }
+        })
     }
 
     /// Take an object back, in its constructed state.
@@ -123,7 +126,10 @@ impl KernelCache {
     /// Returns how many there were.
     pub fn reap(&self) -> usize {
         // SAFETY: as for `allocate`.
-        locked(|frames| unsafe { &mut *self.0.get() }.reap(frames))
+        locked(|frames| {
+            // SAFETY: exclusive under `locked`; the kernel page allocator outlives this cache.
+            unsafe { (&mut *self.0.get()).reap(frames) }
+        })
     }
 
     /// Look at the cache: its sizes, its counts.

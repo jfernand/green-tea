@@ -18,6 +18,7 @@
 //! elsewhere, for objects larger than an eighth of a page; and a lock.
 
 use crate::{PAGE, PageSource};
+use core::ops::Deref;
 
 const WORD: usize = size_of::<usize>();
 
@@ -143,8 +144,13 @@ impl Cache {
 
     /// The address of an object in its constructed state. `None` if the cache has no free
     /// object and can't make a slab: `pages` has no page, or a constructor failed.
+    ///
+    /// # Safety
+    /// `pages` must be the same source used for every other operation on this cache, and
+    /// must outlive every slab it has supplied to the cache. It must keep each page
+    /// exclusively owned until this cache returns it, on constructor failure or `reap`.
     #[inline(never)]
-    pub fn allocate(&mut self, pages: &mut impl PageSource) -> Option<usize> {
+    pub unsafe fn allocate(&mut self, pages: &mut dyn PageSource) -> Option<usize> {
         // A slab that is partly used first, then one kept from before, then a new one.
         let slab = if self.heads[PARTIAL] != 0 {
             self.heads[PARTIAL]
@@ -177,10 +183,11 @@ impl Cache {
     /// Take an object back. It must be in its constructed state.
     ///
     /// # Safety
-    /// `object` must be an address that `allocate` on this cache returned. The cache
-    /// refuses an address that isn't the start of an object of the slab it is in, and an
-    /// object that is free already; it can't tell an address from another cache's slab,
-    /// or one that was never in a slab.
+    /// `object` must be an address that `allocate` on this cache returned and not freed
+    /// since, and its page source must still own its slab. The cache refuses an address
+    /// that isn't the start of an object of the slab it is in, and an object that is free
+    /// already; it can't tell an address from another cache's slab, or one that was never
+    /// in a slab.
     #[inline(never)]
     pub unsafe fn free(&mut self, object: usize) -> Result<(), FreeError> {
         let slab = (object & !(PAGE - 1)) + PAGE - HEADER;
@@ -213,7 +220,12 @@ impl Cache {
 
     /// Give back every slab that has no object allocated: run the destructor on each of
     /// its objects, and return its page to `pages`. Returns how many slabs that was.
-    pub fn reap(&mut self, pages: &mut impl PageSource) -> usize {
+    ///
+    /// # Safety
+    /// `pages` must be the same source used for every other operation on this cache, and
+    /// must outlive every slab it has supplied to the cache. It must keep those pages
+    /// exclusively owned until this cache returns them.
+    pub unsafe fn reap(&mut self, pages: &mut dyn PageSource) -> usize {
         let mut reaped = 0;
         while self.heads[EMPTY] != 0 {
             let slab = self.heads[EMPTY];
@@ -238,7 +250,7 @@ impl Cache {
     /// Make a slab: take a page, construct every object in it, and put the slab on the
     /// list of empty ones. Returns the slab's record.
     #[cold]
-    fn grow(&mut self, pages: &mut impl PageSource) -> Option<usize> {
+    fn grow(&mut self, pages: &mut dyn PageSource) -> Option<usize> {
         let page = pages.take_page()?;
         let first = page + self.next_colour * self.align;
         let object = |index: usize| first + index * self.buf;
@@ -416,6 +428,68 @@ impl Cache {
     }
 }
 
+/// A cache tied to one borrowed page source.
+///
+/// The source remains exclusively borrowed for the lifetime of this cache, so slabs
+/// cannot accidentally be reaped through a different source.
+pub struct BoundCache<'a> {
+    cache: Cache,
+    pages: &'a mut dyn PageSource,
+}
+
+impl Cache {
+    /// Bind this cache to `pages` for the rest of the cache's lifetime.
+    ///
+    /// ```compile_fail
+    /// use green_tea_kmem::slab::Cache;
+    /// use green_tea_kmem::PageSource;
+    ///
+    /// struct Pages;
+    /// unsafe impl PageSource for Pages {
+    ///     fn take_page(&mut self) -> Option<usize> { None }
+    ///     unsafe fn give_page(&mut self, _: usize) { unreachable!() }
+    /// }
+    /// let mut pages = Pages;
+    /// let cache = Cache::new("example", 8, 8, None, None).bind(&mut pages);
+    /// drop(pages);
+    /// drop(cache);
+    /// ```
+    pub fn bind<'a>(self, pages: &'a mut dyn PageSource) -> BoundCache<'a> {
+        BoundCache { cache: self, pages }
+    }
+}
+
+impl BoundCache<'_> {
+    /// An object in its constructed state, or `None` if no object can be made.
+    pub fn allocate(&mut self) -> Option<usize> {
+        // SAFETY: this wrapper keeps the originating page source exclusively borrowed.
+        unsafe { self.cache.allocate(self.pages) }
+    }
+
+    /// Take an object back, in its constructed state.
+    ///
+    /// # Safety
+    /// `object` must have come from this cache's `allocate` and not have been freed since.
+    pub unsafe fn free(&mut self, object: usize) -> Result<(), FreeError> {
+        // SAFETY: forwarded from this method's caller.
+        unsafe { self.cache.free(object) }
+    }
+
+    /// Destroy and return every slab with no allocated objects.
+    pub fn reap(&mut self) -> usize {
+        // SAFETY: this wrapper keeps the originating page source exclusively borrowed.
+        unsafe { self.cache.reap(self.pages) }
+    }
+}
+
+impl Deref for BoundCache<'_> {
+    type Target = Cache;
+
+    fn deref(&self) -> &Cache {
+        &self.cache
+    }
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -443,10 +517,17 @@ mod tests {
         }
     }
 
-    impl PageSource for HostPages {
+    // SAFETY: the host allocator returns unique pages with the required alignment; `out`
+    // tracks their ownership until `give_page` deallocates them.
+    unsafe impl PageSource for HostPages {
         fn take_page(&mut self) -> Option<usize> {
             self.left = self.left.checked_sub(1)?;
-            let page = unsafe { alloc(LAYOUT) } as usize;
+            let page = unsafe { alloc(LAYOUT) };
+            if page.is_null() {
+                self.left += 1;
+                return None;
+            }
+            let page = page as usize;
             self.out.push(page);
             Some(page)
         }
@@ -504,6 +585,16 @@ mod tests {
         Cache::new("test", SIZE, 8, Some(construct), Some(destroy))
     }
 
+    fn allocate(cache: &mut Cache, pages: &mut impl PageSource) -> Option<usize> {
+        // SAFETY: every test keeps the same page source paired with its cache.
+        unsafe { cache.allocate(pages) }
+    }
+
+    fn reap(cache: &mut Cache, pages: &mut impl PageSource) -> usize {
+        // SAFETY: every test keeps the same page source paired with its cache.
+        unsafe { cache.reap(pages) }
+    }
+
     #[test]
     fn a_page_is_cut_into_buffers_with_the_record_at_its_end() {
         let cache = cache();
@@ -522,15 +613,15 @@ mod tests {
     #[test]
     fn a_slab_is_constructed_once_and_handed_out_in_address_order() {
         let (mut cache, mut pages) = (cache(), HostPages::new(4));
-        let first = cache.allocate(&mut pages).unwrap();
+        let first = allocate(&mut cache, &mut pages).unwrap();
         assert_eq!(first % PAGE, 0, "the first slab has colour 0");
         assert_eq!((CONSTRUCTED.get(), cache.stats().constructed, cache.slabs()), (19, 19, (0, 1, 0)));
-        let rest: Vec<usize> = (1..19).map(|_| cache.allocate(&mut pages).unwrap()).collect();
+        let rest: Vec<usize> = (1..19).map(|_| allocate(&mut cache, &mut pages).unwrap()).collect();
         assert!(rest.iter().enumerate().all(|(i, object)| *object == first + (i + 1) * 208));
         assert!(rest.iter().all(|object| constructed(*object)));
         assert_eq!((cache.slabs(), cache.in_use(), pages.out.len()), ((1, 0, 0), 19, 1));
         // The twentieth object needs a second slab, whose buffers start 8 bytes in.
-        let twentieth = cache.allocate(&mut pages).unwrap();
+        let twentieth = allocate(&mut cache, &mut pages).unwrap();
         assert_eq!(twentieth % PAGE, 8);
         assert_eq!((CONSTRUCTED.get(), cache.slabs(), pages.out.len()), (38, (1, 1, 0), 2));
         cache.check().unwrap();
@@ -539,14 +630,14 @@ mod tests {
     #[test]
     fn freed_objects_come_back_without_being_constructed_again() {
         let (mut cache, mut pages) = (cache(), HostPages::new(4));
-        let objects: Vec<usize> = (0..30).map(|_| cache.allocate(&mut pages).unwrap()).collect();
+        let objects: Vec<usize> = (0..30).map(|_| allocate(&mut cache, &mut pages).unwrap()).collect();
         for object in &objects {
             unsafe { cache.free(*object).unwrap() };
         }
         // Both slabs are kept, and so is what the constructor did.
         assert_eq!((cache.slabs(), cache.in_use(), pages.out.len(), DESTROYED.get()), ((0, 0, 2), 0, 2, 0));
         assert!(objects.iter().all(|object| constructed(*object)), "a free overwrote constructed state");
-        let again: Vec<usize> = (0..30).map(|_| cache.allocate(&mut pages).unwrap()).collect();
+        let again: Vec<usize> = (0..30).map(|_| allocate(&mut cache, &mut pages).unwrap()).collect();
         assert_eq!(CONSTRUCTED.get(), 38, "objects were constructed a second time");
         assert_eq!(cache.stats().slabs_created, 2);
         // They are objects of the same two slabs, though not the same thirty of them.
@@ -559,32 +650,32 @@ mod tests {
     #[test]
     fn the_object_freed_last_is_handed_out_next() {
         let (mut cache, mut pages) = (cache(), HostPages::new(1));
-        let objects: Vec<usize> = (0..19).map(|_| cache.allocate(&mut pages).unwrap()).collect();
+        let objects: Vec<usize> = (0..19).map(|_| allocate(&mut cache, &mut pages).unwrap()).collect();
         for index in [3, 11, 7] {
             unsafe { cache.free(objects[index]).unwrap() };
         }
-        let next: Vec<usize> = (0..3).map(|_| cache.allocate(&mut pages).unwrap()).collect();
+        let next: Vec<usize> = (0..3).map(|_| allocate(&mut cache, &mut pages).unwrap()).collect();
         assert_eq!(next, [objects[7], objects[11], objects[3]]);
-        assert_eq!(cache.allocate(&mut pages), None, "the only page is full");
+        assert_eq!(allocate(&mut cache, &mut pages), None, "the only page is full");
         assert_eq!(cache.stats().refused, 1);
     }
 
     #[test]
     fn reaping_destroys_the_slabs_nobody_uses_and_only_those() {
         let (mut cache, mut pages) = (cache(), HostPages::new(8));
-        let objects: Vec<usize> = (0..57).map(|_| cache.allocate(&mut pages).unwrap()).collect();
+        let objects: Vec<usize> = (0..57).map(|_| allocate(&mut cache, &mut pages).unwrap()).collect();
         assert_eq!(cache.slabs(), (3, 0, 0));
         // Free the second slab's objects, and all but one of the third's.
         for object in &objects[19..56] {
             unsafe { cache.free(*object).unwrap() };
         }
         assert_eq!(cache.slabs(), (1, 1, 1));
-        assert_eq!(cache.reap(&mut pages), 1);
+        assert_eq!(reap(&mut cache, &mut pages), 1);
         assert_eq!((cache.slabs(), pages.out.len(), DESTROYED.get()), ((1, 1, 0), 2, 19));
-        assert_eq!(cache.reap(&mut pages), 0);
+        assert_eq!(reap(&mut cache, &mut pages), 0);
         // The one object left in the third slab is what keeps its page.
         unsafe { cache.free(objects[56]).unwrap() };
-        assert_eq!(cache.reap(&mut pages), 1);
+        assert_eq!(reap(&mut cache, &mut pages), 1);
         assert_eq!((cache.pages(), pages.out.len(), DESTROYED.get()), (1, 1, 38));
         let stats = cache.stats();
         assert_eq!((stats.slabs_created, stats.slabs_destroyed, stats.constructed, stats.destroyed), (3, 2, 57, 38));
@@ -592,15 +683,28 @@ mod tests {
     }
 
     #[test]
+    fn a_bound_cache_reaps_through_its_originating_source() {
+        let mut origin = HostPages::new(1);
+        let other = HostPages::new(1);
+        let mut cache = cache().bind(&mut origin);
+        let object = cache.allocate().unwrap();
+        unsafe { cache.free(object).unwrap() };
+        assert_eq!(cache.reap(), 1);
+        drop(cache);
+        assert!(origin.out.is_empty());
+        assert!(other.out.is_empty());
+    }
+
+    #[test]
     fn a_partly_used_slab_is_filled_before_an_empty_one_is_touched() {
         let (mut cache, mut pages) = (cache(), HostPages::new(8));
-        let objects: Vec<usize> = (0..38).map(|_| cache.allocate(&mut pages).unwrap()).collect();
+        let objects: Vec<usize> = (0..38).map(|_| allocate(&mut cache, &mut pages).unwrap()).collect();
         for object in &objects[..19] {
             unsafe { cache.free(*object).unwrap() }; // the first slab, now empty
         }
         unsafe { cache.free(objects[30]).unwrap() }; // one of the second's
         assert_eq!(cache.slabs(), (0, 1, 1));
-        assert_eq!(cache.allocate(&mut pages), Some(objects[30]));
+        assert_eq!(allocate(&mut cache, &mut pages), Some(objects[30]));
         assert_eq!(cache.slabs(), (1, 0, 1));
     }
 
@@ -609,9 +713,9 @@ mod tests {
         let (mut cache, mut pages) = (cache(), HostPages::new(16));
         let mut offsets = Vec::new();
         for _ in 0..16 {
-            let first = cache.allocate(&mut pages).unwrap();
+            let first = allocate(&mut cache, &mut pages).unwrap();
             offsets.push(first % PAGE);
-            (1..19).for_each(|_| assert!(cache.allocate(&mut pages).is_some()));
+            (1..19).for_each(|_| assert!(allocate(&mut cache, &mut pages).is_some()));
         }
         // Fourteen colours, 0 to 104, and then round again.
         assert_eq!(offsets, [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 0, 8]);
@@ -623,8 +727,8 @@ mod tests {
     #[test]
     fn mistaken_frees_are_refused() {
         let (mut cache, mut pages) = (cache(), HostPages::new(2));
-        let a = cache.allocate(&mut pages).unwrap();
-        let b = cache.allocate(&mut pages).unwrap();
+        let a = allocate(&mut cache, &mut pages).unwrap();
+        let b = allocate(&mut cache, &mut pages).unwrap();
         unsafe {
             assert_eq!(cache.free(a + 8), Err(FreeError::NotAnObject), "inside an object");
             assert_eq!(cache.free(a + 19 * 208), Err(FreeError::NotAnObject), "past the last buffer");
@@ -639,7 +743,7 @@ mod tests {
     #[test]
     fn a_cache_with_no_page_to_be_had_refuses() {
         let (mut cache, mut pages) = (cache(), HostPages::new(0));
-        assert_eq!(cache.allocate(&mut pages), None);
+        assert_eq!(allocate(&mut cache, &mut pages), None);
         assert_eq!((cache.pages(), cache.stats().refused, CONSTRUCTED.get()), (0, 1, 0));
     }
 
@@ -647,17 +751,17 @@ mod tests {
     fn a_constructor_that_fails_undoes_its_slab() {
         let (mut cache, mut pages) = (cache(), HostPages::new(4));
         FAIL_AFTER.set(19 + 5); // the second slab's sixth object
-        let objects: Vec<usize> = (0..19).map(|_| cache.allocate(&mut pages).unwrap()).collect();
-        assert_eq!(cache.allocate(&mut pages), None);
+        let objects: Vec<usize> = (0..19).map(|_| allocate(&mut cache, &mut pages).unwrap()).collect();
+        assert_eq!(allocate(&mut cache, &mut pages), None);
         assert_eq!((cache.slabs(), pages.out.len()), ((1, 0, 0), 1), "the page of the slab that failed was kept");
         assert_eq!((CONSTRUCTED.get(), DESTROYED.get()), (24, 5));
         assert_eq!((cache.stats().constructed, cache.stats().destroyed), (24, 5), "the failed slab's calls");
         // The cache still works: a freed object is handed out, and a slab can be made
         // once the constructor succeeds.
         unsafe { cache.free(objects[4]).unwrap() };
-        assert_eq!(cache.allocate(&mut pages), Some(objects[4]));
+        assert_eq!(allocate(&mut cache, &mut pages), Some(objects[4]));
         FAIL_AFTER.set(usize::MAX);
-        assert!(cache.allocate(&mut pages).is_some());
+        assert!(allocate(&mut cache, &mut pages).is_some());
         cache.check().unwrap();
     }
 
@@ -670,14 +774,14 @@ mod tests {
         let mut frames = unsafe { Frames::new(base, &mut table, 0) };
         let before = frames.free_blocks();
         let mut cache = cache();
-        let objects: Vec<usize> = (0..19 * 64).map(|_| cache.allocate(&mut frames).unwrap()).collect();
-        assert_eq!(cache.allocate(&mut frames), None, "every frame is a slab");
+        let objects: Vec<usize> = (0..19 * 64).map(|_| allocate(&mut cache, &mut frames).unwrap()).collect();
+        assert_eq!(allocate(&mut cache, &mut frames), None, "every frame is a slab");
         assert_eq!((frames.free_pages(), cache.pages()), (0, 64));
         for object in objects.iter().rev() {
             unsafe { cache.free(*object).unwrap() };
         }
         assert_eq!(frames.free_pages(), 0, "empty slabs are kept until they are reaped");
-        assert_eq!(cache.reap(&mut frames), 64);
+        assert_eq!(reap(&mut cache, &mut frames), 64);
         assert_eq!(frames.free_blocks(), before);
         assert_eq!((CONSTRUCTED.get(), DESTROYED.get()), (19 * 64, 19 * 64));
         frames.check().unwrap();

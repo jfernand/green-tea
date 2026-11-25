@@ -20,7 +20,13 @@ pub mod slab;
 pub const PAGE: usize = 4096;
 
 /// Where a slab cache gets its pages, and gives them back.
-pub trait PageSource {
+///
+/// # Safety
+/// `take_page` must return only nonzero, `PAGE`-aligned ranges of writable memory at least
+/// `PAGE` bytes long, exclusively owned by this source until returned with `give_page`.
+/// Pages returned by this source must not overlap one another or memory owned by anything
+/// else.
+pub unsafe trait PageSource {
     /// The address of a page nobody else has, or `None` if there is none.
     fn take_page(&mut self) -> Option<usize>;
 

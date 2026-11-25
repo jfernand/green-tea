@@ -388,7 +388,9 @@ impl Pages {
     }
 }
 
-impl PageSource for Pages {
+// SAFETY: `Frames` supplies unique page-aligned pages, and `give_page` returns them to that
+// same frame allocator.
+unsafe impl PageSource for Pages {
     fn take_page(&mut self) -> Option<usize> {
         self.allocate(0)
     }
@@ -439,7 +441,9 @@ impl Subject for Slabs {
     fn allocate(&mut self, size: usize, align: usize) -> Option<usize> {
         let pages = self.pages.as_mut()?;
         match class(size, align) {
-            Some(class) => self.caches[class].allocate(pages),
+            // SAFETY: each cache uses this `Pages` source for its entire lifetime; reset
+            // replaces both together before another allocation.
+            Some(class) => unsafe { self.caches[class].allocate(pages) },
             None => pages.allocate(Slabs::order(size, align)),
         }
     }

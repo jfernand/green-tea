@@ -307,7 +307,8 @@ fn object_cache() -> Cache {
 }
 
 fn allocate(cache: &mut Cache) -> Result<usize, String> {
-    let object = with_frames(|frames| cache.allocate(frames)).ok_or("the cache refused an object")?;
+    // SAFETY: the cache uses the kernel's one page allocator for its entire lifetime.
+    let object = with_frames(|frames| unsafe { cache.allocate(frames) }).ok_or("the cache refused an object")?;
     if !constructed(object) {
         return Err("the cache handed out an object that isn't in its constructed state".into());
     }
@@ -378,7 +379,8 @@ fn objects(boot: Free) -> Result<usize, String> {
     for object in &again {
         free(&mut cache, *object)?;
     }
-    let reaped = with_frames(|frames| cache.reap(frames));
+    // SAFETY: the same kernel page allocator supplied every slab to this cache.
+    let reaped = with_frames(|frames| unsafe { cache.reap(frames) });
     let end = state("all freed, and reaped", &cache);
     cache.check()?;
     with_frames(|frames| frames.check())?;
@@ -414,7 +416,8 @@ fn objects(boot: Free) -> Result<usize, String> {
     for object in held {
         free(&mut cache, object)?;
     }
-    with_frames(|frames| cache.reap(frames));
+    // SAFETY: the same kernel page allocator supplied every slab to this cache.
+    with_frames(|frames| unsafe { cache.reap(frames) });
     if offsets != " 0 8 16 24 32 40 48 56 64 72 80 88 96 104 0 8" || cache.colours() != 14 {
         return Err("successive slabs didn't start their buffers at successive offsets".into());
     }
@@ -441,7 +444,8 @@ fn pinned(boot: Free) -> Result<(), String> {
             }
         }
         let (_, partial, empty) = cache.slabs();
-        let reaped = with_frames(|frames| cache.reap(frames));
+        // SAFETY: the same kernel page allocator supplied every slab to this cache.
+        let reaped = with_frames(|frames| unsafe { cache.reap(frames) });
         held[which] = cache.pages();
         println!(
             "190 objects in 10 slabs, all freed but 10, {}: slabs {partial} partly used, {empty} empty",
@@ -452,7 +456,8 @@ fn pinned(boot: Free) -> Result<(), String> {
         for object in kept {
             free(&mut cache, object)?;
         }
-        with_frames(|frames| cache.reap(frames));
+        // SAFETY: the same kernel page allocator supplied every slab to this cache.
+        with_frames(|frames| unsafe { cache.reap(frames) });
     }
     if held != [10, 1] {
         return Err("a slab with an object in use was reaped, or one with none was kept".into());
@@ -472,7 +477,8 @@ fn mistakes() -> Result<(), String> {
     free(&mut cache, object)?;
     let twice = unsafe { cache.free(object) };
     println!("an address inside an object, freed: {inside:?}; an object freed a second time: {twice:?}");
-    with_frames(|frames| cache.reap(frames));
+    // SAFETY: the same kernel page allocator supplied every slab to this cache.
+    with_frames(|frames| unsafe { cache.reap(frames) });
     if inside != Err(slab::FreeError::NotAnObject) || twice != Err(slab::FreeError::NotAllocated) {
         return Err("the cache took back what it hadn't handed out".into());
     }

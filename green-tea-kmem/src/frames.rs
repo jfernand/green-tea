@@ -99,13 +99,19 @@ impl<'a> Frames<'a> {
     /// are free.
     ///
     /// # Safety
-    /// Nothing else may hand out the pages for as long as the allocator does.
+    /// `base..base + table.len() * PAGE` must be nonzero, page-aligned, writable memory,
+    /// and nothing else may hand out its pages for as long as the allocator does. If
+    /// `table` overlaps that region, every overlapping page must be among `reserved`.
     ///
     /// # Panics
-    /// If `base` isn't page-aligned, or there are more frames than a `u32` can number.
+    /// If a nonempty region starts at zero, `base` isn't page-aligned, the frame range
+    /// overflows, or there are more frames than a `u32` can number.
     pub unsafe fn new(base: usize, table: &'a mut [Frame], reserved: usize) -> Frames<'a> {
         assert!(base.is_multiple_of(PAGE), "frame 0 must start on a page");
         assert!(table.len() < NONE as usize && reserved <= table.len(), "a table too large");
+        assert!(table.is_empty() || base != 0, "frame 0 must have a nonzero address");
+        let bytes = table.len().checked_mul(PAGE).expect("frame range overflows");
+        assert!(base.checked_add(bytes).is_some(), "frame range overflows");
         table.fill(Frame::NEW);
         let pages = table.len();
         let mut frames = Frames {
@@ -314,7 +320,9 @@ impl<'a> Frames<'a> {
 }
 
 /// One page at a time, for a slab cache.
-impl PageSource for Frames<'_> {
+// SAFETY: `allocate(0)` returns exclusive page-aligned frames in this allocator's region,
+// and `give_page` returns only such a frame to this same allocator.
+unsafe impl PageSource for Frames<'_> {
     fn take_page(&mut self) -> Option<usize> {
         self.allocate(0)
     }
@@ -341,6 +349,13 @@ mod tests {
         let mut frames = unsafe { Frames::new(BASE, &mut table, reserved) };
         frames.check().unwrap();
         f(&mut frames)
+    }
+
+    #[test]
+    #[should_panic(expected = "frame range overflows")]
+    fn a_region_cannot_wrap_the_address_space() {
+        let mut table = [Frame::NEW];
+        let _ = unsafe { Frames::new(usize::MAX - PAGE + 1, &mut table, 0) };
     }
 
     fn by_order(counts: &[(usize, usize)]) -> [usize; ORDERS] {
