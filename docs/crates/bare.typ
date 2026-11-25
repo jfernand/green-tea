@@ -69,7 +69,7 @@ _start:
 
     # This hart is CPU 0. Remember which hart it is: the others are started by hart id.
     mv tp, zero
-    la t0, green_tea_boot_hart
+    la t0, GREEN_TEA_BOOT_HART
     sd a0, 0(t0)
 
     call kmain
@@ -1010,8 +1010,8 @@ PASS: 57 switches, as expected
 Four boards, one trait, and the parts of a kernel. @crate-coop puts them to work.
 // chapter-status:begin
 // stage: research-done
-// revision: 5
-// body: b87a369dedf3
+// revision: 6
+// body: 32c2ab70a80b
 // activity: 2026-11-22 | r4 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r4 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

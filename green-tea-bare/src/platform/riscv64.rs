@@ -51,7 +51,7 @@ _start:
 
     # This hart is CPU 0. Remember which hart it is: the others are started by hart id.
     mv tp, zero
-    la t0, green_tea_boot_hart
+    la t0, GREEN_TEA_BOOT_HART
     sd a0, 0(t0)
 
     call kmain
@@ -76,7 +76,7 @@ green_tea_secondary_entry:
 
 /// The hart `_start` ran on.
 #[unsafe(no_mangle)]
-static mut green_tea_boot_hart: usize = 0;
+static mut GREEN_TEA_BOOT_HART: usize = 0;
 
 unsafe extern "C" {
     fn green_tea_secondary_entry();
@@ -151,7 +151,7 @@ impl Platform for RiscvVirt {
     /// CPUs 1, 2, ... are the harts other than the boot hart, in order of hart id.
     fn start_cpu(cpu: usize, stack_top: usize) -> Result<(), &'static str> {
         // SAFETY: written once, by `_start`, before any Rust ran.
-        let boot_hart = unsafe { green_tea_boot_hart };
+        let boot_hart = unsafe { GREEN_TEA_BOOT_HART };
         let hart = if cpu <= boot_hart { cpu - 1 } else { cpu };
         let word = stack_top - 16; // keeps the stack 16-byte aligned
         // SAFETY: the stack is the caller's to give, and nothing runs on it yet.
