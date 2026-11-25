@@ -35,6 +35,7 @@ mod irq;
 mod lights;
 mod region;
 mod dump;
+mod dispatch;
 mod pages;
 mod replay;
 
@@ -65,9 +66,6 @@ const LINE_MAX: usize = 120;
 const HEAP_BLOCKS: usize = 24;
 /// The arena's size: far more than any command needs.
 const ARENA_SIZE: usize = 64 * 1024;
-
-/// What `Shell::line` runs itself, rather than as a command.
-const WHOLE_LINES: [&str; 8] = ["repeat", "test", "trace", "session", "replay", "harden", "regions", "pages"];
 
 /// Where a command's memory comes from.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -154,31 +152,37 @@ impl Shell {
     /// whole commands, each with memory of its own.
     fn line(&mut self, line: &[u8]) -> Next {
         let text = core::str::from_utf8(line).unwrap_or("").trim_ascii();
-        if let Some(rest) = text.strip_prefix("repeat ") {
-            self.repeat(rest.trim_ascii_start())
-        } else if text == "test" {
-            self.test();
-            Next::Prompt
-        } else if let Some(arg) = text.strip_prefix("trace ") {
-            self.trace(arg.trim_ascii());
-            Next::Prompt
-        } else if text == "session" {
-            self.session();
-            Next::Prompt
-        } else if text == "replay" {
-            self.replay();
-            Next::Prompt
-        } else if text == "harden" {
-            self.harden();
-            Next::Prompt
-        } else if text == "regions" {
-            self.regions();
-            Next::Prompt
-        } else if let Some(arg) = text.strip_prefix("pages").filter(|arg| arg.is_empty() || arg.starts_with(' ')) {
-            self.pages(arg.trim_ascii());
-            Next::Prompt
-        } else {
-            self.command(text)
+        match dispatch::parse(text) {
+            dispatch::Line::Repeat(rest) => self.repeat(rest),
+            dispatch::Line::Test => {
+                self.test();
+                Next::Prompt
+            }
+            dispatch::Line::Trace(arg) => {
+                self.trace(arg);
+                Next::Prompt
+            }
+            dispatch::Line::Session => {
+                self.session();
+                Next::Prompt
+            }
+            dispatch::Line::Replay => {
+                self.replay();
+                Next::Prompt
+            }
+            dispatch::Line::Harden => {
+                self.harden();
+                Next::Prompt
+            }
+            dispatch::Line::Regions => {
+                self.regions();
+                Next::Prompt
+            }
+            dispatch::Line::Pages(arg) => {
+                self.pages(arg);
+                Next::Prompt
+            }
+            dispatch::Line::Command(text) => self.command(text),
         }
     }
 
@@ -216,7 +220,11 @@ impl Shell {
             return Next::Prompt;
         };
         // These are handled by `line`, around a command's memory: `command` doesn't know them.
-        if let Some(word) = command.split_ascii_whitespace().next().filter(|word| WHOLE_LINES.contains(word)) {
+        if let Some(word) = command
+            .split_ascii_whitespace()
+            .next()
+            .filter(|word| dispatch::is_whole_line_word(word))
+        {
             println!("`repeat` runs one command at a time, and can't run `{word}`");
             return Next::Prompt;
         }
