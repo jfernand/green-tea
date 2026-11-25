@@ -98,20 +98,23 @@ static SHARED: Global<usize> = Global::new(0);
 static LOGGER: Global<[usize; 2]> = Global::new([0; 2]);
 static CLERK: Global<[usize; 4]> = Global::new([0; 4]);
 
-fn shared() -> &'static mut Fit {
-    // SAFETY: `two_tasks` keeps the allocator alive until both tasks have finished, and
-    // the tasks take turns: nothing holds this reference across a yield.
-    unsafe { &mut *(SHARED.get() as *mut Fit) }
+fn with_shared<R>(f: impl FnOnce(&mut Fit) -> R) -> R {
+    SHARED.with(|address| {
+        assert_ne!(*address, 0, "the shared allocator hasn't been initialized");
+        // SAFETY: `two_tasks` keeps the allocator alive through `run`; this closure never
+        // yields, so cooperative tasks cannot hold a second mutable reference at once.
+        f(unsafe { &mut *(*address as *mut Fit) })
+    })
 }
 
 /// Keeps a line of text in a block of its own, and a buffer. Its bug: it frees the line
 /// and goes on using it.
 fn logger() {
-    let line = shared().allocate(48, 8).unwrap();
-    let buffer = shared().allocate(96, 8).unwrap();
+    let line = with_shared(|fit| fit.allocate(48, 8).unwrap());
+    let buffer = with_shared(|fit| fit.allocate(96, 8).unwrap());
     LOGGER.set([line, buffer]);
     println!("  logger: a line at {line:#x}, and a buffer of 96 bytes at {buffer:#x}");
-    unsafe { shared().free(line).unwrap() };
+    with_shared(|fit| unsafe { fit.free(line).unwrap() });
     // The write after the free. The line's first word is now where the allocator keeps
     // its link to the next free block, and what is written there is the address of the
     // buffer's second word. The buffer's contents are the worst they could be: they read
@@ -127,7 +130,7 @@ fn logger() {
 /// Keeps two records of 48 bytes, a number in the first word of each.
 fn clerk() {
     let records = [1000, 2000].map(|amount| {
-        let record = shared().allocate(48, 8).unwrap();
+        let record = with_shared(|fit| fit.allocate(48, 8).unwrap());
         put(record, 0, amount);
         record
     });
@@ -150,6 +153,7 @@ fn two_tasks(base: usize) -> Result<(), &'static str> {
         },
         |_| {},
     );
+    SHARED.set(0);
     let ([line, buffer], [first, second, kept, lost]) = (LOGGER.get(), CLERK.get());
     let inside = second >= buffer && second + 48 <= buffer + 96;
     println!("the clerk's second record is inside the logger's buffer: {inside}");

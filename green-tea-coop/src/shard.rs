@@ -106,17 +106,23 @@ fn ms(ticks: u64) -> u64 {
     ticks / Board::ticks_per_ms()
 }
 
-/// This CPU's cache, and the heap behind it.
-fn my_cache(cpu: usize) -> (&'static mut Cache, &'static SpinLock<Central<Tlsf>>) {
-    // SAFETY: `with_caches` made both before the CPUs were given work and frees them after
-    // it, and no other CPU uses this CPU's cache.
-    unsafe { (&mut *CACHES[cpu].load(Ordering::Acquire), &*CENTRAL.load(Ordering::Acquire)) }
+/// Use this CPU's cache and the heap behind it without letting either reference escape.
+fn with_cache<R>(cpu: usize, f: impl FnOnce(&mut Cache, &SpinLock<Central<Tlsf>>) -> R) -> R {
+    let cache = CACHES[cpu].load(Ordering::Acquire);
+    let central = CENTRAL.load(Ordering::Acquire);
+    assert!(!cache.is_null() && !central.is_null(), "the caches haven't been initialized");
+    // SAFETY: `with_caches` initializes these before work and clears them after; one CPU
+    // exclusively uses its cache, and `central` is synchronized by its lock.
+    unsafe { f(&mut *cache, &*central) }
 }
 
-/// This CPU's heap of pages.
-fn my_heap(cpu: usize) -> &'static mut Heap<'static> {
-    // SAFETY: as for `my_cache`.
-    unsafe { &mut *HEAPS[cpu].load(Ordering::Acquire) }
+/// Use this CPU's heap of pages without letting its reference escape.
+fn with_heap<R>(cpu: usize, f: impl FnOnce(&mut Heap<'static>) -> R) -> R {
+    let heap = HEAPS[cpu].load(Ordering::Acquire);
+    assert!(!heap.is_null(), "the heaps haven't been initialized");
+    // SAFETY: `with_heaps` initializes the heap before work and clears it after; each heap
+    // is accessed only by its CPU, except after the workers have joined.
+    unsafe { f(&mut *heap) }
 }
 
 // ---- The first kind of work: a CPU frees what it allocated ----------------------------
@@ -251,13 +257,11 @@ fn with_caches(kind: Work) -> Result<usize, &'static str> {
     }
 
     fn allocate(cpu: usize, size: usize) -> Option<usize> {
-        let (cache, central) = my_cache(cpu);
-        cache.allocate(central, size, 8)
+        with_cache(cpu, |cache, central| cache.allocate(central, size, 8))
     }
     fn free(cpu: usize, addr: usize, size: usize) {
-        let (cache, central) = my_cache(cpu);
         // SAFETY: the block came from a cache's `allocate` with this size, and is freed once.
-        if unsafe { cache.free(central, addr, size, 8) }.is_err() {
+        if with_cache(cpu, |cache, central| unsafe { cache.free(central, addr, size, 8) }).is_err() {
             REFUSED.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -311,19 +315,19 @@ fn with_heaps(kind: Work, retain: usize) -> Result<usize, &'static str> {
     // The size is not passed on: the page knows it.
     fn free(cpu: usize, addr: usize) {
         // SAFETY: the block came from a heap of this arena, and is freed once.
-        if unsafe { my_heap(cpu).free(addr) }.is_err() {
+        if with_heap(cpu, |heap| unsafe { heap.free(addr) }).is_err() {
             REFUSED.fetch_add(1, Ordering::Relaxed);
         }
     }
     let measured = match kind {
         Work::Churn => {
-            measure(kind, |cpu| churn(cpu, |size| my_heap(cpu).allocate(size, 8), |addr, _| free(cpu, addr)))
+            measure(kind, |cpu| churn(cpu, |size| with_heap(cpu, |heap| heap.allocate(size, 8)), |addr, _| free(cpu, addr)))
         }
-        Work::Pass => measure(kind, |cpu| pass(cpu, |size| my_heap(cpu).allocate(size, 8), |addr, _| free(cpu, addr))),
+        Work::Pass => measure(kind, |cpu| pass(cpu, |size| with_heap(cpu, |heap| heap.allocate(size, 8)), |addr, _| free(cpu, addr))),
     };
     // The blocks freed by other CPUs are on their pages' lists. Each CPU brings its own home.
-    let held_before: usize = (0..CPUS).map(|cpu| my_heap(cpu).pages()).sum();
-    cpus::run(|cpu| my_heap(cpu).collect_all());
+    let held_before: usize = (0..CPUS).map(|cpu| with_heap(cpu, |heap| heap.pages())).sum();
+    cpus::run(|cpu| with_heap(cpu, |heap| heap.collect_all()));
 
     let mut all = Stats::default();
     let (mut out, mut pages) = (0, 0);
