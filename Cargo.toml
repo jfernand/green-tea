@@ -11,6 +11,7 @@ members = [
     "drivers/*",
     "green-tea-bare",
     "kernels/*",
+    "schedulers/*",
     "xtask",
 ]
 # What a plain `cargo build` / `cargo test` covers: everything that builds for the host.

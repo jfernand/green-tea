@@ -15,9 +15,10 @@
 #![no_main]
 
 use green_tea_bare::Framebuffer;
-use green_tea_bare::runtime::{Switch, run, spawn};
 use green_tea_bare::screen::{COLORS, COLUMNS, Painter, Screen};
-use green_tea_bare::task::{current_guard, yield_now};
+use green_tea_bare::{Board, Global, GlobalPtr, Platform, boot, delay_ms, heap, memory, println, stack};
+use green_tea_scheduler_coop::runtime::{Switch, run, spawn};
+use green_tea_scheduler_coop::task::{current_guard, yield_now};
 #[cfg(not(feature = "board-pc"))]
 use green_tea_bare::virtio::{self, Transport};
 #[cfg(not(feature = "board-pc"))]
@@ -26,7 +27,6 @@ use green_tea_bare::virtio_blk::SECTOR_SIZE;
 use green_tea_bare::pool::{Bitmap, FreeList, GiveError, Pool};
 #[cfg(not(feature = "board-pc"))]
 use green_tea_bare::VirtioBus;
-use green_tea_bare::{Board, Global, GlobalPtr, Platform, boot, delay_ms, heap, memory, println, stack};
 
 extern crate alloc;
 

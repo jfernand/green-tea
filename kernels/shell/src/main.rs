@@ -46,9 +46,9 @@ use core::alloc::Allocator;
 use core::cell::RefCell;
 use core::fmt::{self, Write};
 use green_tea_bare::arena::Arena;
-use green_tea_bare::runtime::run;
 use green_tea_bare::screen::Screen;
-use green_tea_bare::{Board, Platform, boot, console, heap, memory, print, println};
+use green_tea_bare::{Board, Platform, boot, heap, memory, print, println};
+use green_tea_scheduler_coop::{console, runtime::run, task};
 
 /// Called by the platform's `_start`, on the boot stack, with .bss zeroed.
 #[unsafe(no_mangle)]
@@ -273,7 +273,7 @@ impl Shell {
                 // The runtime allocates its list of sleeping tasks the first time a task
                 // sleeps, which is whenever the console first has nothing to read. Sleep
                 // now, so that it isn't sometimes in the trace and sometimes not.
-                green_tea_bare::task::sleep_ms(1);
+                task::sleep_ms(1);
                 self.counted = heap::with(|fit| (fit.stats().allocations, fit.stats().frees));
                 heap::record(buffer);
                 println!("recording the heap's allocations and frees, up to {} of them", replay::TRACE_EVENTS);

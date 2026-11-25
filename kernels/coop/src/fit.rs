@@ -14,10 +14,10 @@ use alloc::vec::Vec;
 use core::fmt::Write;
 use green_tea_bare::fit::{Fit, FreeError, MIN_BLOCK, Order, Policy, Stats};
 use green_tea_bare::Framebuffer;
-use green_tea_bare::runtime::{run, spawn};
 use green_tea_bare::screen::Screen;
-use green_tea_bare::task::yield_now;
 use green_tea_bare::{Global, heap, println};
+use green_tea_scheduler_coop::runtime::{run, spawn};
+use green_tea_scheduler_coop::task::yield_now;
 
 const WORD: usize = size_of::<usize>();
 const TASKS: usize = 1000;

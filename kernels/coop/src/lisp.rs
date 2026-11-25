@@ -14,9 +14,9 @@
 use alloc::format;
 use alloc::string::String;
 use green_tea_bare::Framebuffer;
-use green_tea_bare::runtime::{run, spawn};
 use green_tea_bare::screen::Screen;
 use green_tea_bare::{Global, println, stack};
+use green_tea_scheduler_coop::runtime::{run, spawn};
 use green_tea_lisp::programs::{PROGRAMS, Program};
 use green_tea_lisp::rc::{Counts, Cycles, Freeing, LAZY_STEP, RcHeap};
 use green_tea_lisp::{Error, Heap, Kind, Lisp, Stats, Value};

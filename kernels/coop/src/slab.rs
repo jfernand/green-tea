@@ -20,10 +20,10 @@ use green_tea_bare::kmem::frames::{self, MAX_ORDER, ORDERS};
 use green_tea_bare::kmem::slab::{self, Cache, HEADER};
 use green_tea_bare::kmem::{self, PAGE, with_frames};
 use green_tea_bare::Framebuffer;
-use green_tea_bare::runtime::{run, spawn};
 use green_tea_bare::screen::Screen;
-use green_tea_bare::task::{self, yield_now};
 use green_tea_bare::{Global, println, stack};
+use green_tea_scheduler_coop::runtime::{run, spawn};
+use green_tea_scheduler_coop::task::{self, yield_now};
 
 /// The free blocks of each order, as a row of a table.
 type Free = [usize; ORDERS];

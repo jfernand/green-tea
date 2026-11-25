@@ -19,10 +19,10 @@ use green_tea_bare::fit::hardened::{ALL, CANARY, ENCODE, Fault, Hardened, QUARAN
 use green_tea_bare::fit::trace::{self, Random};
 use green_tea_bare::fit::{Fit, Order, Policy};
 use green_tea_bare::Framebuffer;
-use green_tea_bare::runtime::{run, spawn};
 use green_tea_bare::screen::Screen;
-use green_tea_bare::task::yield_now;
 use green_tea_bare::{Global, println};
+use green_tea_scheduler_coop::runtime::{run, spawn};
+use green_tea_scheduler_coop::task::yield_now;
 
 const WORD: usize = size_of::<usize>();
 /// The region the allocators get, from the kernel's heap.

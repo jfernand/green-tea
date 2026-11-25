@@ -1,0 +1,17 @@
+[package]
+name = "green-tea-scheduler-coop"
+description = "A bare-metal cooperative task runtime for green-tea kernels."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+[features]
+board-pc = ["green-tea-bare/board-pc"]
+
+[dependencies]
+green-tea-arch = { path = "../../green-tea-arch" }
+green-tea-bare = { path = "../../green-tea-bare" }

@@ -140,6 +140,7 @@ version = "0.1.0"
 dependencies = [
  "green-tea-bare",
  "green-tea-lisp",
+ "green-tea-scheduler-coop",
  "green-tea-shard",
  "green-tea-smr",
 ]
@@ -241,6 +242,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "green-tea-scheduler-coop"
+version = "0.1.0"
+dependencies = [
+ "green-tea-arch",
+ "green-tea-bare",
+]
+
+[[package]]
 name = "green-tea-shard"
 version = "0.1.0"
 dependencies = [
@@ -254,6 +263,7 @@ version = "0.1.0"
 dependencies = [
  "green-tea-bare",
  "green-tea-region",
+ "green-tea-scheduler-coop",
 ]
 
 [[package]]
