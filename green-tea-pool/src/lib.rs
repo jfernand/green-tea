@@ -54,7 +54,17 @@ pub trait Pool: Sized {
 /// It takes the lowest free slot, by finding the lowest set bit. Its state lives apart
 /// from the slots, so it never touches their memory, and it can tell when a slot is
 /// given back twice.
-#[derive(Clone, Copy, Debug)]
+///
+/// A pool is uniquely owned; moving it does not duplicate its allocation state:
+///
+/// ```compile_fail
+/// use green_tea_pool::{Bitmap, Pool};
+/// let mut pool = unsafe { Bitmap::new(0x1000, 8, 2, 0) };
+/// let duplicate = pool;
+/// let _ = pool.take();
+/// drop(duplicate);
+/// ```
+#[derive(Debug)]
 pub struct Bitmap {
     base: usize,
     slot_size: usize,
@@ -65,6 +75,8 @@ pub struct Bitmap {
 impl Pool for Bitmap {
     unsafe fn new(base: usize, slot_size: usize, slots: usize, _link_at: usize) -> Bitmap {
         assert!(slots <= 128, "a Bitmap has 128 bits");
+        assert!(slots == 0 || slot_size != 0, "slots must have a size");
+        assert!(slots.checked_mul(slot_size).and_then(|bytes| base.checked_add(bytes)).is_some(), "pool range overflows");
         let free = if slots == 0 { 0 } else { u128::MAX >> (128 - slots) };
         Bitmap { base, slot_size, slots, free }
     }
@@ -81,6 +93,9 @@ impl Pool for Bitmap {
 
     #[inline(never)]
     unsafe fn give(&mut self, slot: usize) -> Result<(), GiveError> {
+        if self.slots == 0 {
+            return Err(GiveError::NotASlot);
+        }
         let offset = slot.checked_sub(self.base).ok_or(GiveError::NotASlot)?;
         let index = offset / self.slot_size;
         if index >= self.slots || !offset.is_multiple_of(self.slot_size) {
@@ -106,7 +121,7 @@ impl Pool for Bitmap {
 /// that making a pool doesn't mean writing a link into every slot.
 ///
 /// It can't tell whether a slot it is given is one of its own, or already free.
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct FreeList {
     base: usize,
     slot_size: usize,
@@ -121,9 +136,14 @@ pub struct FreeList {
 
 impl Pool for FreeList {
     unsafe fn new(base: usize, slot_size: usize, slots: usize, link_at: usize) -> FreeList {
-        assert!(link_at + size_of::<usize>() <= slot_size, "the link must fit in a slot");
-        assert!((base + link_at).is_multiple_of(align_of::<usize>()), "the link must be word-aligned");
+        assert!(link_at.checked_add(size_of::<usize>()).is_some_and(|end| end <= slot_size), "the link must fit in a slot");
+        assert!(
+            base.checked_add(link_at).is_some_and(|address| address.is_multiple_of(align_of::<usize>())),
+            "the link must be word-aligned"
+        );
         assert!(slot_size.is_multiple_of(align_of::<usize>()), "the link must be word-aligned");
+        assert!(slots == 0 || slot_size != 0, "slots must have a size");
+        assert!(slots.checked_mul(slot_size).and_then(|bytes| base.checked_add(bytes)).is_some(), "pool range overflows");
         FreeList { base, slot_size, slots, link_at, head: 0, fresh: 0, free: slots }
     }
 
@@ -214,6 +234,24 @@ mod tests {
     #[test]
     fn a_free_list_reuses_what_is_given_back() {
         reuses_what_is_given_back::<FreeList>();
+    }
+
+    #[test]
+    #[should_panic(expected = "slots must have a size")]
+    fn a_bitmap_rejects_nonempty_zero_sized_slots() {
+        let _ = unsafe { Bitmap::new(0x1000, 0, 1, 0) };
+    }
+
+    #[test]
+    #[should_panic(expected = "pool range overflows")]
+    fn a_bitmap_rejects_an_unrepresentable_pool_range() {
+        let _ = unsafe { Bitmap::new(usize::MAX - 7, 8, 2, 0) };
+    }
+
+    #[test]
+    fn an_empty_zero_sized_bitmap_refuses_returns() {
+        let mut pool = unsafe { Bitmap::new(0x1000, 0, 0, 0) };
+        assert_eq!(unsafe { pool.give(0x1000) }, Err(GiveError::NotASlot));
     }
 
     /// Give back slots 2, 5 and 0, in that order, and take three.

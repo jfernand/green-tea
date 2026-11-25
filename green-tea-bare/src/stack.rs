@@ -36,10 +36,10 @@ static POOL: Global<Option<Slots>> = Global::new(None);
 /// Run `f` on the pool. A free slot's link goes in the first word above its guard page:
 /// on a board with guard pages, the guard page itself can't be written.
 fn with_pool<R>(f: impl FnOnce(&mut Slots) -> R) -> R {
-    let mut pool = POOL.get().unwrap_or_else(|| unsafe { Slots::new(region_start(), SLOT, SLOTS, PAGE) });
-    let result = f(&mut pool);
-    POOL.set(Some(pool));
-    result
+    POOL.with(|pool| {
+        let pool = pool.get_or_insert_with(|| unsafe { Slots::new(region_start(), SLOT, SLOTS, PAGE) });
+        f(pool)
+    })
 }
 
 /// How many stacks the pool has left.
