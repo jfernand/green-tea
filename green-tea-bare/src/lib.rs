@@ -13,9 +13,9 @@
 //!   [`arena`] (a bump allocator that can be reset), [`kmem`] (page frames and slab caches,
 //!   under the heap: where task records come from), [`stack`]
 //!   (task stacks with guard pages, from a pool), [`memory`] (where the linker put each
-//!   section), [`Global`] (statics in place of `thread_local!`).
-//! - [`task`] and [`runtime`]: green-tea-v2's tasks and round-robin scheduler, ported to
-//!   bare metal, on top of green-tea-arch's `swap_context`.
+//!   section), [`Global`] (statics in place of `thread_local!`). The task schedulers are
+//!   separate crates under `schedulers/`.
+//! - [`event`]: a signal that can be raised from an interrupt handler.
 //!
 //! A kernel is a `#![no_std] #![no_main]` binary that defines `kmain`: each platform's
 //! `_start` sets up a stack, zeroes .bss, and calls it. The panic handler and the global
@@ -26,8 +26,8 @@
 //! until it is first touched ([`pages`]).
 //!
 //! Everything runs on the CPU that booted, unless a kernel starts the others ([`cpus`]).
-//! Then the heap is safe to use from all of them, and nothing else is: tasks, the
-//! scheduler, the console and every [`Global`] belong to the boot CPU.
+//! Then the heap is safe to use from all of them, and nothing else is: the schedulers,
+//! console and every [`Global`] belong to the boot CPU.
 
 #![no_std]
 
@@ -43,10 +43,8 @@ pub mod memory;
 pub mod pages;
 pub mod platform;
 pub mod event;
-pub mod runtime;
 pub mod screen;
 pub mod stack;
-pub mod task;
 
 pub use global::{Global, GlobalPtr};
 pub use {

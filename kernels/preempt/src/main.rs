@@ -18,16 +18,15 @@
 //!    `eret`, `iretq`) into the busy loop, as if nothing had happened.
 //!
 //! The one rule that makes this safe: the scheduler only runs with interrupts off, and
-//! tasks only with them on. See [`spawn_preemptible`].
+//! tasks only with them on; `green-tea-scheduler-preempt` enforces it at every switch.
 
 #![no_std]
 #![no_main]
 
 use green_tea_bare::Framebuffer;
-use green_tea_bare::runtime::{Switch, run, spawn};
 use green_tea_bare::screen::{BAR_MAX, COLORS, COLUMNS, Painter, Screen};
-use green_tea_bare::task::{in_task, sleep_ms, yield_now};
 use green_tea_bare::{Board, Global, Platform, TimerInterrupt, boot, delay_ms, println};
+use green_tea_scheduler_preempt::{self as scheduler, Switch, run, sleep_ms, spawn};
 
 /// Called by the platform's `_start`, on the boot stack, with .bss zeroed.
 #[unsafe(no_mangle)]
@@ -41,45 +40,6 @@ extern "C" fn kmain() -> ! {
 // ---- Preemption -----------------------------------------------------------------------
 
 const SLICE_MS: u64 = 100;
-
-static PREEMPTIONS: Global<usize> = Global::new(0);
-
-/// The timer handler: the current task's slice is up, so switch away from it. Runs with
-/// interrupts off, on the task's stack.
-fn on_tick() {
-    if in_task() {
-        PREEMPTIONS.set(PREEMPTIONS.get() + 1);
-        yield_now(); // back to the scheduler; returns when this task is next resumed
-    }
-}
-
-/// `spawn`, for a task that may be preempted at any instruction.
-///
-/// The scheduler runs with interrupts off: a tick while it's moving tasks in and out of
-/// the run queue would call `yield_now` from no task at all, or re-enter the queue's
-/// `RefCell`. So every way out of a task leaves interrupts off, and every way back in
-/// turns them on again:
-/// - a preempted task leaves through `on_tick` (the trap turned them off), and comes back
-///   through the trap entry's `sret` (which turns them on);
-/// - a new task starts here, with interrupts off, and turns them on first thing;
-/// - a task that finishes turns them off before it returns.
-///
-/// `spawn` itself runs with interrupts off too, since it pushes on the run queue.
-fn spawn_preemptible<B: TimerInterrupt>(f: impl FnOnce() + 'static) {
-    B::without_interrupts(|| {
-        spawn(move || {
-            B::interrupts_on();
-            f();
-            B::interrupts_off();
-        })
-    });
-}
-
-/// `sleep_ms`, from a preemptible task. Like any other way out of a task, it must leave
-/// with interrupts off; it comes back with them off too, and turns them on again.
-fn sleep_preemptible<B: TimerInterrupt>(ms: u64) {
-    B::without_interrupts(|| sleep_ms(ms));
-}
 
 // ---- The demo -------------------------------------------------------------------------
 //
@@ -132,15 +92,15 @@ fn demo<B: TimerInterrupt>(fb: Framebuffer) {
         STEPS.iter().sum::<usize>() as u64 * STEP_MS,
     );
 
-    B::init_timer(on_tick);
     static SWITCHES: Global<usize> = Global::new(0);
     static IDLES: Global<usize> = Global::new(0);
-    run(
+    run::<B>(
         move || {
             for column in 0..COLUMNS - 1 {
-                spawn_preemptible::<B>(move || busy_worker::<B>(painter, column));
+                spawn::<B>(move || busy_worker::<B>(painter, column));
             }
         },
+        SLICE_MS,
         |switch| {
             // The scheduler, with interrupts off. Draw first, then start the slice, so
             // the drawing doesn't eat into it.
@@ -155,21 +115,18 @@ fn demo<B: TimerInterrupt>(fb: Framebuffer) {
                     screen.switch_to(id, switches);
                     let now = B::ticks();
                     RUNNING.set(Some((id, now)));
-                    B::set_deadline(now + SLICE_MS * B::ticks_per_ms());
                 }
                 Switch::Idle => {
                     IDLES.set(IDLES.get() + 1);
                     screen.idle(switches);
-                    B::set_deadline(u64::MAX);
                 }
             }
         },
     );
     account(B::ticks());
-    B::set_deadline(u64::MAX);
 
     let switches = SWITCHES.get();
-    let preemptions = PREEMPTIONS.get();
+    let preemptions = scheduler::preemptions();
     screen.finish(switches);
     let slices = SLICES.get();
     let cpu_ms = CPU.get().map(|t| t / B::ticks_per_ms());
@@ -208,7 +165,7 @@ fn busy_worker<B: TimerInterrupt>(mut painter: Painter, column: usize) {
         delay_ms(STEP_MS); // "work": the timer can cut in anywhere in here
 
         if column == 0 && step == SPAWN_AFTER_STEP {
-            spawn_preemptible::<B>(move || sleeper::<B>(painter));
+            spawn::<B>(move || sleeper::<B>(painter));
         }
     }
 }
@@ -217,7 +174,7 @@ fn sleeper<B: TimerInterrupt>(mut painter: Painter) {
     for step in 1..=SLEEPER_STEPS {
         painter.bar(SLEEPER, (step - 1) * STEP_PX, step * STEP_PX, shade(SLEEPER));
         painter.label(SLEEPER, step);
-        sleep_preemptible::<B>(SLEEP_MS);
+        sleep_ms::<B>(SLEEP_MS);
     }
 }
 

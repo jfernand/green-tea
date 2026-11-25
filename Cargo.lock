@@ -224,6 +224,7 @@ name = "green-tea-preempt"
 version = "0.1.0"
 dependencies = [
  "green-tea-bare",
+ "green-tea-scheduler-preempt",
 ]
 
 [[package]]
@@ -247,6 +248,14 @@ version = "0.1.0"
 dependencies = [
  "green-tea-arch",
  "green-tea-bare",
+]
+
+[[package]]
+name = "green-tea-scheduler-preempt"
+version = "0.1.0"
+dependencies = [
+ "green-tea-bare",
+ "green-tea-scheduler-coop",
 ]
 
 [[package]]

@@ -1,0 +1,17 @@
+[package]
+name = "green-tea-scheduler-preempt"
+description = "A timer-preemptive scheduler for green-tea bare-metal kernels."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+[features]
+board-pc = ["green-tea-bare/board-pc", "green-tea-scheduler-coop/board-pc"]
+
+[dependencies]
+green-tea-bare = { path = "../../green-tea-bare" }
+green-tea-scheduler-coop = { path = "../coop" }
