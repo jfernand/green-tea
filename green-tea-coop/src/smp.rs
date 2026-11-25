@@ -148,6 +148,7 @@ fn faults() -> Result<(), &'static str> {
         return Err("the heap refused the pages for the fault test");
     }
     FAULT_PAGES.store(block as usize, Ordering::Release);
+    let faults_before = pages::stats().faults;
     cpus::run(|cpu| {
         let page = (FAULT_PAGES.load(Ordering::Acquire) + cpu * pages::PAGE) as *mut usize;
         for i in 0..FAULTS {
@@ -167,6 +168,9 @@ fn faults() -> Result<(), &'static str> {
     unsafe { alloc::alloc::dealloc(block, layout) };
     if FAULTS_WRONG.load(Ordering::Relaxed) != 0 {
         return Err("a CPU came back from a fault with another CPU's registers");
+    }
+    if pages::stats().faults - faults_before != CPUS * FAULTS {
+        return Err("not every forced heap page fault was serviced");
     }
     println!("each CPU took {FAULTS} page faults, all at once, and came back from each with its own registers");
     Ok(())

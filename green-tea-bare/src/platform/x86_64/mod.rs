@@ -782,8 +782,6 @@ mod paging {
     /// not used: the next 2 MiB page is the stack pool's.
     static mut HEAP_4K: [Table; HEAP_TABLES] = [const { Table([0; 512]) }; HEAP_TABLES];
     const HEAP_TABLES: usize = 3;
-    /// The address that `HEAP_4K[0]` starts at.
-    static HEAP_BASE: Global<usize> = Global::new(0);
 
     unsafe extern "C" {
         /// `_start`'s four page directories, back to back: entry `i` maps `i` × 2 MiB.
@@ -814,7 +812,6 @@ mod paging {
         let heap = pages::heap_range();
         let base = heap.start & !(MIB2 - 1);
         assert!(heap.end <= base + HEAP_TABLES * MIB2 && heap.end <= stack::region_start());
-        HEAP_BASE.set(base);
         unsafe {
             // Only ever touched here, at boot: no other references exist.
             let (tables, pds) = (&raw mut HEAP_4K, &raw mut boot_pds);
@@ -945,8 +942,11 @@ mod paging {
 
     /// The entry for a page of the heap.
     fn heap_entry(page: usize) -> *mut u64 {
-        let index = (page - HEAP_BASE.get()) / pages::PAGE;
-        assert!(pages::heap_range().contains(&page) && index < HEAP_TABLES * 512);
+        let heap = pages::heap_range();
+        let base = heap.start & !(MIB2 - 1);
+        assert!(heap.contains(&page));
+        let index = (page - base) / pages::PAGE;
+        assert!(index < HEAP_TABLES * 512);
         // SAFETY: in bounds, and nothing holds a reference to the tables.
         unsafe { (&raw mut HEAP_4K).cast::<u64>().add(index) }
     }

@@ -423,7 +423,6 @@ impl TimerInterrupt for RiscvVirt {
 /// adds is the holes: the guard pages, which stay missing, and the pages of the heap,
 /// which are missing until they are first touched.
 mod paging {
-    use crate::Global;
     use crate::{pages, stack};
     use core::arch::asm;
 
@@ -452,8 +451,6 @@ mod paging {
     /// table is not used: the next 2 MiB page is the stack pool's.
     static mut HEAP_4K: [Table; HEAP_TABLES] = [const { Table([0; 512]) }; HEAP_TABLES];
     const HEAP_TABLES: usize = 3;
-    /// The address that `HEAP_4K[0]` starts at.
-    static HEAP_BASE: Global<usize> = Global::new(0);
 
     fn leaf(address: usize, flags: u64) -> u64 {
         ((address as u64 >> 12) << 10) | flags
@@ -491,7 +488,6 @@ mod paging {
             let heap = pages::heap_range();
             let base = heap.start & !(MIB2 - 1);
             assert!(heap.start >= RAM && heap.end <= base + HEAP_TABLES * MIB2 && heap.end <= stacks);
-            HEAP_BASE.set(base);
             let tables = &raw mut HEAP_4K;
             for (t, table) in (*tables).iter_mut().enumerate().take((heap.end - base).div_ceil(MIB2)) {
                 for (i, entry) in table.0.iter_mut().enumerate() {
@@ -537,8 +533,11 @@ mod paging {
 
     /// The entry for a page of the heap.
     fn heap_entry(page: usize) -> *mut u64 {
-        let index = (page - HEAP_BASE.get()) / pages::PAGE;
-        assert!(pages::heap_range().contains(&page) && index < HEAP_TABLES * 512);
+        let heap = pages::heap_range();
+        let base = heap.start & !(MIB2 - 1);
+        assert!(heap.contains(&page));
+        let index = (page - base) / pages::PAGE;
+        assert!(index < HEAP_TABLES * 512);
         // SAFETY: in bounds, and nothing holds a reference to the tables.
         unsafe { (&raw mut HEAP_4K).cast::<u64>().add(index) }
     }
