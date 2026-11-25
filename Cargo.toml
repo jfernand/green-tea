@@ -10,9 +10,7 @@ members = [
     "green-tea-smr",
     "drivers/*",
     "green-tea-bare",
-    "green-tea-coop",
-    "green-tea-preempt",
-    "green-tea-shell",
+    "kernels/*",
     "xtask",
 ]
 # What a plain `cargo build` / `cargo test` covers: everything that builds for the host.

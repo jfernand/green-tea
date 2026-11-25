@@ -14,8 +14,8 @@ With minimal help from R. Claude and R. Junie
 ## Layout
 
 The workspace has two versions side by side, so you can compare them, and three bare-metal
-kernels built on the same context switch. Its allocators are grouped under `allocators/`, like
-the device drivers under `drivers/`:
+kernels built on the same context switch. Allocators, device drivers and kernels are grouped
+under `allocators/`, `drivers/` and `kernels/`, respectively:
 
 | crate | what it shows |
 |---|---|
@@ -34,9 +34,9 @@ the device drivers under `drivers/`:
 | [`green-tea-smr`](green-tea-smr) | Safe memory reclamation: a lock-free stack and queue with their nodes on the heap, and when a node they have unlinked may be freed, by epochs and by hazard pointers. `no_std`; its tests run on the host with real threads. |
 | [`drivers/`](drivers) | The device drivers, one crate each, which know their device but not the machine: serial ports (16550, PL011), QEMU's fw_cfg and ramfb, drawing on a framebuffer, PCI through ECAM, virtio (MMIO and PCI transports, split virtqueues), virtio-blk, and for physical PCs Multiboot2, ACPI, a PS/2 keyboard, a USB keyboard over xHCI and an NVMe disk. |
 | [`green-tea-bare`](green-tea-bare) | What the kernels share: boot code per board behind the `Platform` and `TimerInterrupt` traits (timers, interrupts, paging, and where each device is), a port of v2's `Task` and scheduler, and a heap. |
-| [`green-tea-coop`](green-tea-coop) | A bare-metal kernel for QEMU on riscv64, aarch64 and x86_64 whose tasks yield to each other, so you can watch the context switches on screen. |
-| [`green-tea-preempt`](green-tea-preempt) | The same, but the tasks never yield: a timer interrupt preempts them. One task sleeps instead, and costs no time slices. |
-| [`green-tea-shell`](green-tea-shell) | A kernel with a small shell on the serial console. Each command allocates its working memory from the heap, block by block, or from an arena that is reset after every command. |
+| [`green-tea-coop`](kernels/coop) | A bare-metal kernel for QEMU on riscv64, aarch64 and x86_64 whose tasks yield to each other, so you can watch the context switches on screen. |
+| [`green-tea-preempt`](kernels/preempt) | The same, but the tasks never yield: a timer interrupt preempts them. One task sleeps instead, and costs no time slices. |
+| [`green-tea-shell`](kernels/shell) | A kernel with a small shell on the serial console. Each command allocates its working memory from the heap, block by block, or from an arena that is reset after every command. |
 | [`xtask`](xtask) | `cargo xtask test` runs v2 across targets under qemu; `cargo xtask kernel` boots the kernels everywhere they run; `cargo xtask shell` boots the shell on your terminal. |
 
 Each version has two demos: `coop-2-*` drives two tasks with a hand-written loop, and
