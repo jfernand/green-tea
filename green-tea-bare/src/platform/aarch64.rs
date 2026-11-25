@@ -363,7 +363,7 @@ extern "C" fn green_tea_exception(kind: u64, frame: &Frame) {
 
 impl TimerInterrupt for AarchVirt {
     fn init_timer(on_tick: fn()) {
-        ON_TICK.set(Some(on_tick));
+        Self::without_interrupts(|| ON_TICK.set(Some(on_tick)));
         Self::set_deadline(u64::MAX);
         unsafe {
             // The priority byte for interrupt 27 (anything below the mask passes), then

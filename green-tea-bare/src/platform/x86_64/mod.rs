@@ -716,7 +716,7 @@ extern "C" fn green_tea_device(vector: usize) {
 impl TimerInterrupt for Board {
     /// Turn the local APIC on, and measure its timer against the HPET.
     fn init_timer(on_tick: fn()) {
-        ON_TICK.set(Some(on_tick));
+        Self::without_interrupts(|| ON_TICK.set(Some(on_tick)));
         const APIC_ENABLE: u32 = 1 << 8;
         lapic_write(LAPIC_SPURIOUS, APIC_ENABLE | SPURIOUS_VECTOR as u32);
         lapic_write(LAPIC_DIVIDE, 0b0011); // count at the APIC's clock / 16
@@ -726,7 +726,7 @@ impl TimerInterrupt for Board {
         lapic_write(LAPIC_INITIAL_COUNT, u32::MAX);
         crate::delay_ms(MEASURE_MS);
         let counted = u32::MAX - lapic_read(LAPIC_CURRENT_COUNT);
-        APIC_TICKS_PER_MS.set((u64::from(counted) / MEASURE_MS).max(1));
+        Self::without_interrupts(|| APIC_TICKS_PER_MS.set((u64::from(counted) / MEASURE_MS).max(1)));
 
         lapic_write(LAPIC_INITIAL_COUNT, 0); // stopped
         lapic_write(LAPIC_LVT_TIMER, TIMER_VECTOR as u32); // one-shot, unmasked
@@ -734,14 +734,16 @@ impl TimerInterrupt for Board {
 
     /// Start the APIC timer's one-shot count for the time left until `deadline`.
     fn set_deadline(deadline: u64) {
-        DEADLINE.set(deadline);
-        if deadline == u64::MAX {
-            lapic_write(LAPIC_INITIAL_COUNT, 0); // stops it
-            return;
-        }
-        let wait = u128::from(deadline.saturating_sub(Self::ticks()));
-        let count = wait * u128::from(APIC_TICKS_PER_MS.get()) / u128::from(Self::ticks_per_ms());
-        lapic_write(LAPIC_INITIAL_COUNT, count.clamp(1, u128::from(u32::MAX)) as u32);
+        Self::without_interrupts(|| {
+            DEADLINE.set(deadline);
+            if deadline == u64::MAX {
+                lapic_write(LAPIC_INITIAL_COUNT, 0); // stops it
+                return;
+            }
+            let wait = u128::from(deadline.saturating_sub(Self::ticks()));
+            let count = wait * u128::from(APIC_TICKS_PER_MS.get()) / u128::from(Self::ticks_per_ms());
+            lapic_write(LAPIC_INITIAL_COUNT, count.clamp(1, u128::from(u32::MAX)) as u32);
+        });
     }
 
     fn interrupts_on() {

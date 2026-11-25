@@ -48,7 +48,7 @@ pub mod screen;
 pub mod stack;
 pub mod task;
 
-pub use global::Global;
+pub use global::{Global, GlobalPtr};
 pub use {
     green_tea_fit as fit, green_tea_fw_cfg as fw_cfg, green_tea_pci as pci, green_tea_pool as pool, green_tea_ramfb as ramfb,
     green_tea_smp as smp, green_tea_virtio as virtio, green_tea_virtio_blk as virtio_blk,

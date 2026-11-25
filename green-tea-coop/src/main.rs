@@ -26,7 +26,7 @@ use green_tea_bare::virtio_blk::SECTOR_SIZE;
 use green_tea_bare::pool::{Bitmap, FreeList, GiveError, Pool};
 #[cfg(not(feature = "board-pc"))]
 use green_tea_bare::VirtioBus;
-use green_tea_bare::{Board, Global, Platform, boot, delay_ms, heap, memory, println, stack};
+use green_tea_bare::{Board, Global, GlobalPtr, Platform, boot, delay_ms, heap, memory, println, stack};
 
 extern crate alloc;
 
@@ -157,13 +157,15 @@ fn overflow_test(fb: Framebuffer) {
         println!("FAIL: {} has no guard pages", Board::NAME);
         return;
     }
-    static SCREEN: Global<Option<Framebuffer>> = Global::new(None);
-    SCREEN.set(Some(fb));
+    static SCREEN: Global<GlobalPtr<Framebuffer>> = Global::new(GlobalPtr::null());
+    SCREEN.set(GlobalPtr::new(&fb as *const Framebuffer as *mut Framebuffer));
     stack::on_overflow(|addr| {
         let (start, end) = GUARD.get();
         let depth = DEPTH.get();
-        if let Some(fb) = SCREEN.get() {
-            Screen::new(fb).finish(depth as usize); // green, with the depth reached
+        // SAFETY: `overflow_test`'s boot-stack frame remains active until `run` returns or
+        // this handler halts, and the framebuffer handle isn't mutated concurrently.
+        if let Some(fb) = unsafe { SCREEN.get().as_ptr().as_ref() } {
+            Screen::new(*fb).finish(depth as usize); // green, with the depth reached
         }
         if (start..end).contains(&addr) {
             println!("PASS: overflowed after {depth} frames, into the task's guard page at {addr:#x}");

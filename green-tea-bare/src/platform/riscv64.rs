@@ -385,7 +385,7 @@ extern "C" fn green_tea_fault(frame: &TrapFrame) {
 
 impl TimerInterrupt for RiscvVirt {
     fn init_timer(on_tick: fn()) {
-        ON_TICK.set(Some(on_tick));
+        Self::without_interrupts(|| ON_TICK.set(Some(on_tick)));
         Self::set_deadline(u64::MAX);
         unsafe { asm!("csrs sie, {}", in(reg) SIE_STIE) }; // init installed the trap entry
     }

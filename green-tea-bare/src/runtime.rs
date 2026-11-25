@@ -10,13 +10,12 @@
 //! idles until the first one is due.
 
 use crate::event::Event;
-use crate::global::Global;
+use crate::global::{Global, GlobalPtr};
 use crate::platform::{Board, Platform};
 use crate::task::Task;
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use core::cell::RefCell;
-use core::ptr;
 
 struct Runtime {
     queue: RefCell<VecDeque<Task>>, // runnable tasks, in the order they'll next run
@@ -25,7 +24,7 @@ struct Runtime {
 }
 
 /// The runtime in charge, or null outside `run`.
-static RUNTIME: Global<*const Runtime> = Global::new(ptr::null());
+static RUNTIME: Global<GlobalPtr<Runtime>> = Global::new(GlobalPtr::null());
 
 /// What the scheduler is about to do, as told to `run`'s hook.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -48,7 +47,7 @@ pub fn run(main: impl FnOnce() + 'static, mut on_switch: impl FnMut(Switch)) {
         waiting: RefCell::new(Vec::new()),
     };
     assert!(RUNTIME.get().is_null(), "run() called inside run()");
-    RUNTIME.set(&runtime);
+    RUNTIME.set(GlobalPtr::new(&runtime as *const Runtime as *mut Runtime));
 
     spawn(main);
     loop {
@@ -84,7 +83,7 @@ pub fn run(main: impl FnOnce() + 'static, mut on_switch: impl FnMut(Switch)) {
         }
     }
     crate::task::reap(); // every task has finished: their records' stacks go back to the pool
-    RUNTIME.set(ptr::null()); // no unwinding here (panics halt), so no drop guard needed
+    RUNTIME.set(GlobalPtr::null()); // no unwinding here (panics halt), so no drop guard needed
 }
 
 impl Runtime {
@@ -122,7 +121,7 @@ impl Runtime {
 /// # Panics
 /// If called outside `run`.
 pub fn spawn(func: impl FnOnce() + 'static) {
-    let runtime = RUNTIME.get();
+    let runtime = RUNTIME.get().as_ptr();
     assert!(!runtime.is_null(), "spawn called outside run()");
     let task = Task::new(func);
     unsafe { &*runtime }.queue.borrow_mut().push_back(task);

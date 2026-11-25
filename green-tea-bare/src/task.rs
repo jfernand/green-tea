@@ -17,17 +17,17 @@
 //! handler, and keeps interrupts off whenever a switch is under way.
 
 use crate::event::Event;
-use crate::global::Global;
+use crate::global::{Global, GlobalPtr};
 use crate::kmem::{Cache, KernelCache};
 use crate::platform::{Board, Platform};
 use crate::stack::{SLOTS, Stack};
 use alloc::boxed::Box;
 use core::ops::Range;
-use core::ptr::{self, NonNull};
+use core::ptr::NonNull;
 use green_tea_arch::{Context, swap_context};
 
 /// The task running right now, or null when we're on the boot stack.
-static CURRENT: Global<*mut Inner> = Global::new(ptr::null_mut());
+static CURRENT: Global<GlobalPtr<Inner>> = Global::new(GlobalPtr::null());
 
 /// Ids handed out in creation order, starting at 0.
 static NEXT_ID: Global<usize> = Global::new(0);
@@ -124,7 +124,7 @@ impl Task {
     pub fn resume(&mut self) {
         let inner = self.inner.as_ptr();
         assert!(!self.is_done(), "resumed a task that has already finished");
-        let previous = CURRENT.replace(inner);
+        let previous = CURRENT.replace(GlobalPtr::new(inner));
         unsafe { swap_context(&raw mut (*inner).caller, &raw const (*inner).context) };
         CURRENT.set(previous);
     }
@@ -154,7 +154,7 @@ pub fn in_task() -> bool {
 /// # Panics
 /// If called outside a task.
 pub fn yield_now() {
-    let inner = CURRENT.get();
+    let inner = CURRENT.get().as_ptr();
     assert!(!inner.is_null(), "yield_now called outside a task");
     unsafe { swap_context(&raw mut (*inner).context, &raw const (*inner).caller) };
 }
@@ -164,7 +164,7 @@ pub fn yield_now() {
 /// # Panics
 /// If called outside a task.
 pub fn current_guard() -> Range<usize> {
-    let inner = CURRENT.get();
+    let inner = CURRENT.get().as_ptr();
     assert!(!inner.is_null(), "current_guard called outside a task");
     unsafe { (*inner).stack.guard() }
 }
@@ -175,7 +175,7 @@ pub fn current_guard() -> Range<usize> {
 /// # Panics
 /// If called outside a task.
 pub fn sleep_until(deadline: u64) {
-    let inner = CURRENT.get();
+    let inner = CURRENT.get().as_ptr();
     assert!(!inner.is_null(), "sleep_until called outside a task");
     unsafe { (*inner).wake_at = Some(deadline) };
     yield_now();
@@ -187,7 +187,7 @@ pub fn sleep_until(deadline: u64) {
 /// # Panics
 /// If called outside a task.
 pub fn wait_event(event: &'static Event) {
-    let inner = CURRENT.get();
+    let inner = CURRENT.get().as_ptr();
     assert!(!inner.is_null(), "wait_event called outside a task");
     if !event.is_set() {
         unsafe { (*inner).waits_for = Some(event) };
