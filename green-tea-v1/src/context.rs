@@ -1,8 +1,10 @@
 use crate::stack::Stack;
 use std::collections::VecDeque;
+use std::marker::PhantomPinned;
+use std::pin::Pin;
 
 #[allow(dead_code)]
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
 pub struct Context {
     rsp: u64, // [rdi + 0x00] stack pointer: where execution resumes
@@ -21,11 +23,17 @@ unsafe extern "C" {
 }
 
 pub struct Task {
-    #[allow(dead_code)]
     stack: Stack,
-    pub context: Context,
+    context: Context,
     func: Option<Box<dyn FnOnce()>>,
-    pub done: bool,
+    done: bool,
+    _pin: PhantomPinned,
+}
+
+impl Task {
+    pub fn is_done(&self) -> bool {
+        self.done
+    }
 }
 
 extern "C" fn task_entry(task: *mut Task) -> ! {
@@ -57,24 +65,30 @@ fn initial_sp(stack: &Stack) -> *mut u64 {
     (top - 24) as *mut u64
 }
 
-pub fn spawn(func: impl FnOnce() + 'static) -> Box<Task> {
+/// Create an address-stable task that the scheduler can safely resume.
+///
+/// ```compile_fail
+/// use green_tea_v1::context::spawn;
+/// let task = spawn(|| {});
+/// let moved = *task;
+/// ```
+pub fn spawn(func: impl FnOnce() + 'static) -> Pin<Box<Task>> {
     let stack = Stack::new(32 * 1024);
-    let mut task = Box::new(Task {
+    let mut task = Box::pin(Task {
         stack,
         context: Context::default(),
         func: Some(Box::new(func)),
         done: false,
+        _pin: PhantomPinned,
     });
+    let task_ptr = unsafe { task.as_mut().get_unchecked_mut() as *mut Task };
     unsafe {
-        let sp = initial_sp(&task.stack);
+        let sp = initial_sp(&(*task_ptr).stack);
         sp.write(bootstrap_entry as *const () as usize as u64);
-        task.context
-            .rsp = sp as u64;
+        (*task_ptr).context.rsp = sp as u64;
+        (*task_ptr).context.r15 = task_ptr as usize as u64;
+        (*task_ptr).context.r14 = task_entry as *const () as usize as u64;
     }
-    task.context
-        .r15 = &raw mut *task as usize as u64; // the first switch "returns" here
-    task.context
-        .r14 = task_entry as *const () as usize as u64; // and then jumps here
     task
 }
 
@@ -91,18 +105,19 @@ pub fn yield_now() {
 /// yields or finishes, then put it at the back, or drop it (and its stack) if it's done.
 ///
 /// A task may call `run`: the outer scheduler's `MAIN` and `CURRENT` are put back on return.
-pub fn run(tasks: impl IntoIterator<Item = Box<Task>>) {
+pub fn run(tasks: impl IntoIterator<Item = Pin<Box<Task>>>) {
     let (outer_main, outer_current) = unsafe { ((&raw const MAIN).read(), CURRENT) };
-    let mut queue: VecDeque<Box<Task>> = tasks
+    let mut queue: VecDeque<Pin<Box<Task>>> = tasks
         .into_iter()
         .collect();
     while let Some(mut task) = queue.pop_front() {
+        let task_ptr = unsafe { task.as_mut().get_unchecked_mut() as *mut Task };
         unsafe {
-            CURRENT = &raw mut *task;
-            swap_context(&raw mut MAIN, &raw const task.context);
+            CURRENT = task_ptr;
+            swap_context(&raw mut MAIN, &raw const (*task_ptr).context);
             CURRENT = outer_current;
         }
-        if !task.done {
+        if !task.as_ref().is_done() {
             queue.push_back(task);
         }
     }
@@ -116,6 +131,7 @@ mod tests {
         yield_now,
     };
     use crate::stack::Stack;
+    use std::marker::PhantomPinned;
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -169,26 +185,25 @@ mod tests {
         let executed_ptr = &mut executed as *mut bool;
 
         let stack = Stack::new(32 * 1024);
-        let mut task = Box::new(Task {
+        let mut task = Box::pin(Task {
             stack,
             context: Context::default(),
             func: Some(Box::new(move || unsafe {
                 *executed_ptr = true;
             })),
             done: false,
+            _pin: PhantomPinned,
         });
+        let task_ptr = unsafe { task.as_mut().get_unchecked_mut() as *mut Task };
 
         unsafe {
-            let sp = initial_sp(&task.stack);
+            let sp = initial_sp(&(*task_ptr).stack);
             sp.write(bootstrap_entry as *const () as usize as u64);
-            task.context
-                .rsp = sp as u64;
-            task.context
-                .r15 = &raw mut *task as usize as u64;
-            task.context
-                .r14 = task_entry as *const () as usize as u64;
+            (*task_ptr).context.rsp = sp as u64;
+            (*task_ptr).context.r15 = task_ptr as usize as u64;
+            (*task_ptr).context.r14 = task_entry as *const () as usize as u64;
 
-            swap_context(&raw mut MAIN, &raw const task.context);
+            swap_context(&raw mut MAIN, &raw const (*task_ptr).context);
         }
 
         assert!(executed);
@@ -233,24 +248,23 @@ mod tests {
         }
 
         let stack = Stack::new(32 * 1024);
-        let mut task = Box::new(Task {
+        let mut task = Box::pin(Task {
             stack,
             context: Context::default(),
             func: None,
             done: false,
+            _pin: PhantomPinned,
         });
+        let task_ptr = unsafe { task.as_mut().get_unchecked_mut() as *mut Task };
 
         unsafe {
             (*std::ptr::addr_of_mut!(LOG)).clear();
-            let sp = initial_sp(&task.stack);
+            let sp = initial_sp(&(*task_ptr).stack);
             sp.write(bootstrap_entry as *const () as usize as u64);
-            task.context
-                .rsp = sp as u64;
-            task.context
-                .r15 = &raw mut *task as usize as u64;
-            task.context
-                .r14 = worker_entry as *const () as usize as u64;
-            TASK_CTX = task.context;
+            (*task_ptr).context.rsp = sp as u64;
+            (*task_ptr).context.r15 = task_ptr as usize as u64;
+            (*task_ptr).context.r14 = worker_entry as *const () as usize as u64;
+            TASK_CTX = (*task_ptr).context;
 
             while (*std::ptr::addr_of!(LOG)).last() != Some(&100) {
                 swap_context(&raw mut SCHEDULER_CTX, &raw const TASK_CTX);
