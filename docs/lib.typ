@@ -35,16 +35,17 @@
   let (first, last) = (lines.first().first(), lines.last().last())
   let url = repo-url + "/blob/" + pinned + "/" + path + "#L" + str(first) + "-L" + str(last)
   block(breakable: breakable, above: 12pt, below: if notes.len() > 0 { 6pt } else { 12pt }, width: 100%)[
-    #block(width: 100%, below: 0pt, fill: c-black, stroke: (left: 3pt + brand-primary),
+    #block(width: 100%, below: 0pt, fill: pv(c-black, none),
+      stroke: pv((left: 3pt + brand-primary), (left: 3pt + brand-primary, bottom: 0.5pt + border-default)),
       inset: (left: 11pt, right: 9pt, y: 5pt),
       grid(columns: (1fr, auto), align: (left, right),
-        link(url, text(font: font-mono, size: 6.6pt, fill: c-amber-300, path)),
+        link(url, text(font: font-mono, size: 6.6pt, fill: pv(c-amber-300, amber-txt), path)),
         text(font: font-mono, size: 6.6pt, fill: c-steel-400, pinned + " · L" + str(first) + "–" + str(last))))
     #{
       show raw.where(block: true): it => block(width: 100%, above: 0pt, breakable: breakable,
-        fill: c-ink, stroke: (left: 3pt + brand-primary), inset: (left: 11pt, right: 9pt, top: 7pt, bottom: 9pt))[
+        fill: pv(c-ink, none), stroke: (left: 3pt + brand-primary), inset: (left: 11pt, right: 9pt, top: 7pt, bottom: 9pt))[
         #set par(justify: false, leading: 0.55em)
-        #set text(font: font-mono, size: size, fill: c-paper)
+        #set text(font: font-mono, size: size, fill: pv(c-paper, c-ink))
         #it.lines.join(linebreak())
       ]
       show raw.line: it => {
@@ -67,18 +68,20 @@
 
 // A recorded run. The body is a raw block; check-quotes.py finds each line in docs/output/.
 #let output(title: "output", size: 7pt, body) = block(width: 100%, above: 11pt, below: 11pt, breakable: false,
-  stroke: 0.6pt + border-strong, fill: c-white)[
-  #block(width: 100%, fill: c-steel-100, inset: (x: 8pt, y: 3.5pt), below: 0pt, label(fill: c-steel-600, size: 6pt, title))
+  stroke: 0.6pt + border-strong, fill: pv(c-white, none))[
+  #block(width: 100%, fill: pv(c-steel-100, none), stroke: pv(none, (bottom: 0.5pt + border-strong)),
+    inset: (x: 8pt, y: 3.5pt), below: 0pt, label(fill: c-steel-600, size: 6pt, title))
   #show raw.where(block: true): r => text(font: font-mono, size: size, fill: c-steel-800, r.lines.map(l => l.text).join("\n"))
   #set par(justify: false, leading: 0.5em)
   #block(inset: (x: 8pt, y: 7pt), above: 0pt, width: 100%, body)
 ]
 
-#let takeaways(..items) = block(width: 100%, above: 15pt, below: 12pt, breakable: false, fill: c-ink, inset: 13pt)[
-  #set text(fill: c-paper, size: 8.8pt)
-  #show raw.where(block: false): it => box(fill: c-steel-800, inset: (x: 2.5pt), outset: (y: 2.5pt),
-    text(font: font-mono, size: 7.8pt, fill: c-amber-200, it.text))
-  #label(fill: brand-primary, size: 6.6pt)[Key takeaways]
+#let takeaways(..items) = block(width: 100%, above: 15pt, below: 12pt, breakable: false,
+  fill: pv(c-ink, none), stroke: pv(none, 1pt + c-ink), inset: 13pt)[
+  #set text(fill: pv(c-paper, c-ink), size: 8.8pt)
+  #show raw.where(block: false): it => box(fill: pv(c-steel-800, none), inset: (x: 2.5pt), outset: (y: 2.5pt),
+    text(font: font-mono, size: 7.8pt, fill: pv(c-amber-200, c-ink), it.text))
+  #label(fill: pv(brand-primary, amber-txt), size: 6.6pt)[Key takeaways]
   #v(3pt)
   #set list(marker: text(fill: brand-primary)[■], body-indent: 7pt)
   #for i in items.pos() [ - #i ]
@@ -90,10 +93,11 @@
   block(width: 100%, above: 12pt, below: 12pt, breakable: false)[
     #grid(columns: fs.map(f => f.at(2) * 1fr), gutter: 0pt,
       ..fs.enumerate().map(((i, f)) => block(width: 100%, height: 30pt, inset: 4pt,
-        fill: if calc.rem(i, 2) == 0 { c-ink } else { c-steel-800 }, stroke: (right: 0.6pt + c-steel-600),
+        fill: if for-print { none } else if calc.rem(i, 2) == 0 { c-ink } else { c-steel-800 },
+        stroke: pv((right: 0.6pt + c-steel-600), (y: 0.8pt + c-ink, left: if i == 0 { 0.8pt + c-ink }, right: 0.8pt + c-ink)),
         align(center + horizon)[
-          #text(font: font-mono, size: 6.8pt, fill: c-paper, weight: 600)[#f.at(0)] \
-          #text(font: font-mono, size: 6pt, fill: brand-primary)[#f.at(1)]
+          #text(font: font-mono, size: 6.8pt, fill: pv(c-paper, c-ink), weight: 600)[#f.at(0)] \
+          #text(font: font-mono, size: 6pt, fill: pv(brand-primary, amber-txt))[#f.at(1)]
         ])))
     #if caption != none { v(3pt); label-sm[#caption] }
   ]
@@ -104,7 +108,10 @@
   #for l in ls.pos() {
     let (title, detail, tone) = l
     let (bg, fg) = if tone == "dark" { (c-ink, c-paper) } else if tone == "amber" { (brand-primary, c-black) } else { (c-steel-100, c-black) }
+    // Print: the amber layer keeps its fill; the others become rules, with no dark or pale tints.
+    let (bg, fg) = if for-print and tone != "amber" { (none, c-ink) } else { (bg, fg) }
     block(width: 100%, fill: bg, inset: (x: 9pt, y: 6pt), below: 2pt,
+      stroke: if for-print and tone == "dark" { 1.2pt + c-ink } else if for-print and tone != "amber" { 0.6pt + c-steel-400 },
       grid(columns: (34%, 1fr), column-gutter: 10pt,
         text(font: font-display, stretch: 75%, weight: 700, size: 11pt, fill: fg)[#upper(title)],
         text(size: 7.6pt, fill: fg)[#detail]))
@@ -117,17 +124,21 @@
   pagebreak(weak: true)
   place(hide(heading(level: 1, numbering: none, outlined: true, title)))
   v(50mm)
-  block(width: 100%, fill: c-black, inset: 18pt)[
-    #label(fill: brand-primary, size: 7pt)[Part]
+  block(width: 100%, fill: pv(c-black, none), inset: pv(18pt, (y: 18pt)))[
+    #label(fill: pv(brand-primary, amber-txt), size: 7pt)[Part]
     #v(8pt)
-    #display(size: 34pt, fill: c-paper)[#title]
+    #display(size: 34pt, fill: pv(c-paper, c-ink))[#title]
     #v(6pt)
     #line(length: 40%, stroke: 2.5pt + brand-primary)
     #v(6pt)
-    #text(size: 9.4pt, fill: c-steel-300, blurb)
+    #text(size: 9.4pt, fill: pv(c-steel-300, c-steel-600), blurb)
   ]
   pagebreak()
 }
+
+// A page turned sideways, for output wider than the text. A print PDF can't mix page sizes,
+// so there the content turns on an upright page instead.
+#let wide(body) = if for-print { page(rotate(-90deg, reflow: true, body)) } else { page(flipped: true, body) }
 
 // `#show: appendices`: lettered headings, in the template's style.
 #let appendices(body) = {
@@ -143,7 +154,7 @@
   ]
   show heading.where(level: 2): it => block(above: 17pt, below: 8pt, breakable: false)[
     #grid(columns: (auto, 1fr), column-gutter: 8pt, align: (left + horizon, left + horizon),
-      label(fill: brand-deep, size: 7.4pt, context counter(heading).display("A.1")),
+      label(fill: amber-txt, size: 7.4pt, context counter(heading).display("A.1")),
       text(font: font-display, stretch: 75%, weight: 700, size: 14.5pt, upper(it.body)))
     #v(3pt, weak: true)
     #line(length: 100%, stroke: 0.8pt + border-strong)

@@ -232,7 +232,7 @@ main: all tasks finished
 
 The 18 tests, by module:
 
-#dtable(columns: (auto, 1fr), ("Test", "What it establishes"),
+#dtable(columns: pv((auto, 1fr), (1.75fr, 1fr)), ("Test", "What it establishes"),
   [`test_stack_creation`, `size_is_rounded_up_to_whole_pages`], [A stack maps, and its size is whole pages plus the guard],
   [`a_failed_mapping_panics`, `an_absurd_size_panics_instead_of_wrapping`], [A size of $2^60$ reaches the `mmap` error, and `usize::MAX` the overflow check],
   [`runs_to_completion`, `yields_back_to_the_resumer`], [A closure runs, and three yields return in order],
@@ -318,8 +318,8 @@ exit status 101
 One switch, a coroutine and a queue. @crate-bare ports them to a machine with no operating system.
 // chapter-status:begin
 // stage: research-done
-// revision: 2
-// body: 1a57d0d979b0
+// revision: 3
+// body: bc6683f5d81d
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

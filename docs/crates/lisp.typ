@@ -937,7 +937,7 @@ the same, as a percentage of the objects allocated:
 
 `counters` stores 250 integers into old pairs and records nothing. `slots` makes 250 old-to-young references, all of which a minor collection has to find:
 
-#page(flipped: true)[#output(title: "the same run", size: 6.6pt)[
+#wide[#output(title: "the same run", size: 6.6pt)[
 ```
 the write barrier, in 4096 words with a nursery of 256:
   program   allocated  stores  into old  old to young  recorded  most remembered  objects scanned  references found  recorded by the barrier that tests nothing
@@ -1191,8 +1191,8 @@ PASS: five programs on three heaps that trace: 160 collections traced 25698 obje
 One language, six heaps, and the numbers to compare them. @crate-io starts the drivers.
 // chapter-status:begin
 // stage: research-done
-// revision: 2
-// body: c39e43d160a2
+// revision: 3
+// body: d2889da28d85
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

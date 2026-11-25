@@ -51,7 +51,7 @@ None of this knows what a thread is. A caller gives each thread a number below `
 
 Almost every atomic operation in the crate is `SeqCst`, and for most of them that is more than they need. The ones that need it are the two *store, then load* patterns, because neither `Acquire` nor `Release` stops a later load from being performed before an earlier store.
 
-#dtable(columns: (auto, auto, 1fr), ("Operation", "Ordering", "What it protects"),
+#dtable(columns: pv((auto, auto, 1fr), (1.1fr, auto, 1fr)), ("Operation", "Ordering", "What it protects"),
   [hazard store, then the re-read of `source`], [`SeqCst`], [*Needed.* The scanner's unlink precedes its read of the hazard pointers. In the single total order, either the scanner sees the hazard, or the protecting thread's re-read sees the node gone. With weaker orderings both could miss],
   [`scan`'s hazard loads], [`SeqCst`], [The other half of that argument],
   [announcement store in `enter`, then `protect`'s loads], [`SeqCst`], [*Needed*, the same shape. A thread that reads a pointer must already be visible as active to whoever next checks its slot],
@@ -326,7 +326,7 @@ test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
 The `smr` kernel starts with the ABA problem, step by step, on real addresses (shown as offsets):
 
-#page(flipped: true)[#output(title: "cargo xtask kernel --kernel smr --target riscv64", size: 6.6pt)[
+#wide[#output(title: "cargo xtask kernel --kernel smr --target riscv64", size: 6.6pt)[
 ```
 a stack holds 3, 2 and 1. a pop reads the first node's address and the second's, and before its
 compare-and-swap another thread pops twice, pushes 9 on another stack, and pushes 4 on this one.
@@ -390,8 +390,8 @@ if it covers more than 256 numbers:
 Four answers to when, and what each costs. @crate-lisp is a program whose heap answers it by tracing.
 // chapter-status:begin
 // stage: research-done
-// revision: 2
-// body: f3583831f4a5
+// revision: 3
+// body: 6e14da932e2b
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end
