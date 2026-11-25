@@ -437,15 +437,15 @@ impl<A: Allocator> Write for Text<A> {
 /// Run one command, allocating from `memory`: a copy of the line, its words, and what it
 /// prints. All three are dropped on return, which gives the memory back only if `memory`
 /// is an allocator that takes it.
-fn execute<A: Allocator + Copy>(text: &str, memory: A, shell: &Shell) -> Next {
-    let mut line = Vec::new_in(memory);
+fn execute<A: Allocator + Copy>(text: &str, allocator: A, shell: &Shell) -> Next {
+    let mut line = Vec::new_in(allocator);
     line.extend_from_slice(text.as_bytes());
     let line = core::str::from_utf8(&line).unwrap_or("");
 
-    let mut words = Vec::new_in(memory);
+    let mut words = Vec::new_in(allocator);
     words.extend(line.split_ascii_whitespace());
 
-    let mut out = Text(Vec::new_in(memory));
+    let mut out = Text(Vec::new_in(allocator));
     let mut next = Next::Prompt;
     // Writing to `out` can't fail: it only appends to a Vec.
     let _ = match words.as_slice() {
