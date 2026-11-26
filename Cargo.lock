@@ -109,6 +109,7 @@ version = "0.1.0"
 dependencies = [
  "green-tea-acpi",
  "green-tea-arch",
+ "green-tea-capabilities",
  "green-tea-clevo-lights",
  "green-tea-fit",
  "green-tea-framebuffer",
@@ -117,6 +118,7 @@ dependencies = [
  "green-tea-io",
  "green-tea-ioapic",
  "green-tea-kmem",
+ "green-tea-memory",
  "green-tea-multiboot2",
  "green-tea-ns16550",
  "green-tea-nvme",
@@ -131,6 +133,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "green-tea-black"
+version = "0.1.0"
+dependencies = [
+ "green-tea-bare",
+ "green-tea-scheduler-coop",
+]
+
+[[package]]
+name = "green-tea-capabilities"
+version = "0.1.0"
+
+[[package]]
 name = "green-tea-clevo-lights"
 version = "0.1.0"
 
@@ -143,6 +157,13 @@ dependencies = [
  "green-tea-scheduler-coop",
  "green-tea-shard",
  "green-tea-smr",
+]
+
+[[package]]
+name = "green-tea-dma"
+version = "0.1.0"
+dependencies = [
+ "green-tea-memory",
 ]
 
 [[package]]
@@ -175,6 +196,16 @@ version = "0.1.0"
 [[package]]
 name = "green-tea-kmem"
 version = "0.1.0"
+dependencies = [
+ "green-tea-memory",
+]
+
+[[package]]
+name = "green-tea-latency"
+version = "0.1.0"
+dependencies = [
+ "green-tea-bare",
+]
 
 [[package]]
 name = "green-tea-lisp"
@@ -190,6 +221,13 @@ dependencies = [
  "green-tea-pool",
  "green-tea-shard",
  "green-tea-smp",
+]
+
+[[package]]
+name = "green-tea-memory"
+version = "0.1.0"
+dependencies = [
+ "green-tea-capabilities",
 ]
 
 [[package]]
@@ -240,6 +278,28 @@ name = "green-tea-region"
 version = "0.1.0"
 dependencies = [
  "green-tea-fit",
+]
+
+[[package]]
+name = "green-tea-rt"
+version = "0.1.0"
+
+[[package]]
+name = "green-tea-rt-bare"
+version = "0.1.0"
+dependencies = [
+ "green-tea-arch",
+ "green-tea-bare",
+ "green-tea-rt",
+]
+
+[[package]]
+name = "green-tea-rt-kernel"
+version = "0.1.0"
+dependencies = [
+ "green-tea-bare",
+ "green-tea-rt",
+ "green-tea-rt-bare",
 ]
 
 [[package]]

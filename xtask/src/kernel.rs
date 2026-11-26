@@ -34,8 +34,12 @@ sets how many virtual CPUs may run at once, with or without windows; a kernel wi
 counts as four.
 
   coop      green-tea-coop: tasks yield to each other (riscv64, aarch64, x86_64)
+  protected green-tea-black: x86_64 ring-3 process, mediated exit, and contained fault checks
+  rt        green-tea-rt: fixed-priority preemption, timed wakeups, inheritance and bounded locks
   preempt   green-tea-preempt: a timer interrupt preempts tasks that never yield, and one
             that sleeps between steps (riscv64, aarch64, x86_64)
+  latency   green-tea-latency: an 8192-sample APIC-countdown timer latency histogram (x86_64)
+  latency-deadline  the same histogram using capability-checked TSC-deadline mode (x86_64)
   overflow  green-tea-coop's test that a task overflowing its stack hits its guard page
             (riscv64, x86_64: the boards that page)
   disk      green-tea-coop's test of the virtio-blk driver: reads back a disk image made
@@ -149,7 +153,11 @@ struct Kernel {
 
 const KERNELS: &[Kernel] = &[
     Kernel { name: "coop", package: "green-tea-coop", arches: ALL, test: None, disk: false, input: None },
+    Kernel { name: "protected", package: "green-tea-black", arches: &["x86_64"], test: None, disk: false, input: None },
+    Kernel { name: "rt", package: "green-tea-rt-kernel", arches: ALL, test: None, disk: false, input: None },
     Kernel { name: "preempt", package: "green-tea-preempt", arches: ALL, test: None, disk: false, input: None },
+    Kernel { name: "latency", package: "green-tea-latency", arches: &["x86_64"], test: Some("countdown"), disk: false, input: None },
+    Kernel { name: "latency-deadline", package: "green-tea-latency", arches: &["x86_64"], test: Some("deadline"), disk: false, input: None },
     // Needs a board whose guard pages fault: not aarch64 (MMU off), so far.
     Kernel { name: "overflow", package: "green-tea-coop", arches: &["riscv64", "x86_64"], test: Some("overflow"), disk: false, input: None },
     Kernel { name: "disk", package: "green-tea-coop", arches: ALL, test: Some("disk"), disk: true, input: None },
@@ -674,6 +682,7 @@ fn parse_shell(args: &[String]) -> Result<Option<(&'static Arch, bool)>, String>
 /// One QEMU and what we've learned from it so far.
 struct Run {
     job: Job,
+    board: Board,
     qemu: Child,
     /// A run's time limit counts from its own start, not from the suite's.
     started: Instant,
@@ -684,6 +693,7 @@ struct Run {
     seen_kernel: bool,
     /// A socket to the serial port and what to type at it, once the kernel is up.
     late_input: Option<(PathBuf, &'static str)>,
+    keyboard_test_stage: u8,
     /// Set once: Ok or Err with a one-line description.
     outcome: Option<Result<String, String>>,
     exited: bool,
@@ -703,8 +713,12 @@ impl Run {
                 let vars = out_dir.join("pc").join(format!("{}.vars", job.label()));
                 fs::copy(OVMF_VARS, &vars)?;
                 cmd.args(["-machine", "q35", "-cpu", "max", "-m", "512M", "-vga", "std", "-net", "none"])
-                    .args(["-device", "qemu-xhci,id=xhci", "-device", "usb-kbd,bus=xhci.0"])
-                    .arg("-drive")
+                    .arg("-device")
+                    .arg("qemu-xhci,id=xhci");
+                if job.kernel.name != "protected" {
+                    cmd.args(["-device", "usb-kbd,bus=xhci.0"]);
+                }
+                cmd.arg("-drive")
                     .arg(format!("if=pflash,format=raw,readonly=on,file={OVMF_CODE}"))
                     .arg("-drive")
                     .arg(format!("if=pflash,format=raw,file={}", vars.display()))
@@ -758,12 +772,14 @@ impl Run {
         }
         Ok(Run {
             job,
+            board,
             qemu: cmd.spawn()?,
             started: Instant::now(),
             log,
             read: 0,
             seen_kernel: false,
             late_input,
+            keyboard_test_stage: 0,
             outcome: None,
             exited: false,
         })
@@ -815,6 +831,23 @@ impl Run {
             }
             if self.seen_kernel {
                 eprintln!("[{:15}] {line}", self.job.label());
+            }
+            if self.board == Board::Pc && self.job.kernel.name == "protected" {
+                match (self.keyboard_test_stage, line) {
+                    (0, "user keyboard: waiting for A scan code") => {
+                        eprintln!("[{:15}] sending PS/2 key A", self.job.label());
+                        thread::sleep(Duration::from_millis(100));
+                        self.monitor("sendkey a");
+                        self.keyboard_test_stage = 1;
+                    }
+                    (1, "kernel keyboard: waiting for B") => {
+                        eprintln!("[{:15}] sending PS/2 key B", self.job.label());
+                        thread::sleep(Duration::from_millis(100));
+                        self.monitor("sendkey b");
+                        self.keyboard_test_stage = 2;
+                    }
+                    _ => {}
+                }
             }
             judge(&mut self.outcome, line);
         }
@@ -1061,7 +1094,19 @@ mod tests {
     #[test]
     fn grub_passes_the_test_on_the_command_line() {
         assert!(grub_config(Some("slab")).contains("multiboot2 /boot/kernel test=slab\n"));
+        assert!(grub_config(Some("deadline")).contains("multiboot2 /boot/kernel test=deadline\n"));
         assert!(grub_config(None).contains("multiboot2 /boot/kernel\n"));
+    }
+
+    #[test]
+    fn latency_images_use_the_same_x86_binary_with_distinct_timer_modes() {
+        let countdown = parse(&["--kernel".into(), "latency".into()]).unwrap();
+        let deadline = parse(&["--kernel".into(), "latency-deadline".into()]).unwrap();
+        assert_eq!(countdown.jobs.len(), 1);
+        assert_eq!(countdown.jobs[0].kernel.package, "green-tea-latency");
+        assert_eq!(countdown.jobs[0].kernel.test, Some("countdown"));
+        assert_eq!(deadline.jobs[0].kernel.package, "green-tea-latency");
+        assert_eq!(deadline.jobs[0].kernel.test, Some("deadline"));
     }
 
     #[test]
