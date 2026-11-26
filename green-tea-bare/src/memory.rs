@@ -11,6 +11,9 @@
 
 use core::hint::black_box;
 use core::ops::Range;
+use crate::platform::{Board, Platform};
+use crate::{pages, stack};
+use green_tea_memory::{OwnedRange, PhysicalRange, RegionError, Residency};
 
 unsafe extern "C" {
     static __kernel_start: u8;
@@ -106,4 +109,34 @@ pub fn sections() -> [Section; 7] {
 /// The section `addr` is in.
 pub fn section_of(addr: usize) -> Option<Section> {
     sections().into_iter().find(|s| s.contains(addr))
+}
+
+/// Check the heap and task-stack regions against this board's implemented guarantees.
+/// Called once during boot, before the kernel starts tasks or secondary CPUs.
+pub fn validate_kernel_regions() -> Result<(), RegionError> {
+    let heap_range = pages::heap_physical_range();
+    let mut heap = unsafe { OwnedRange::new(heap_range) };
+    let heap_residency = if Board::DEMAND_PAGING { Residency::DemandPaged } else { Residency::Resident };
+    heap.request(heap_residency, None).validate(Board::CAPABILITIES)?;
+
+    let stacks = stack::region_range();
+    if heap_range.overlaps(stacks) {
+        return Err(RegionError::InvalidRange);
+    }
+    if let Some(ram_end) = Board::ram_end() {
+        if stacks.end() > ram_end || heap_range.end() > ram_end {
+            return Err(RegionError::InvalidRange);
+        }
+    }
+    let mut stacks = unsafe { OwnedRange::new(stacks) };
+    stacks.request(Residency::Resident, None).validate(Board::CAPABILITIES)?;
+
+    if Board::GUARD_PAGES {
+        for base in stack::guard_pages() {
+            let guard = PhysicalRange::new(base, pages::PAGE, pages::PAGE)?;
+            let mut guard = stacks.subrange(guard)?;
+            guard.request(Residency::Unmapped, None).validate(Board::CAPABILITIES)?;
+        }
+    }
+    Ok(())
 }

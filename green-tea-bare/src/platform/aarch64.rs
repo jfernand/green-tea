@@ -18,6 +18,7 @@ use crate::{Framebuffer, Global};
 use core::arch::{asm, global_asm};
 use core::ptr::{read_volatile, write_volatile};
 use green_tea_fw_cfg::Mmio;
+use green_tea_capabilities::Capabilities;
 use green_tea_pl011::Pl011;
 use green_tea_virtio::{self as virtio, AnyTransport};
 
@@ -83,7 +84,7 @@ extern "C" fn green_tea_secondary(cpu: usize) -> ! {
 
 impl Platform for AarchVirt {
     const NAME: &'static str = "aarch64";
-    const GUARD_PAGES: bool = false;
+    const CAPABILITIES: Capabilities = Capabilities::NONE;
 
     /// The serial port, and the exception vectors, so that a fault on this CPU is reported.
     fn init() {

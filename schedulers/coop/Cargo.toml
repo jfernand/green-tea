@@ -10,8 +10,12 @@ homepage.workspace = true
 publish.workspace = true
 
 [features]
+default = ["green"]
+green = ["green-tea-bare/green"]
+black = ["green-tea-bare/black"]
+white = ["green-tea-bare/white"]
 board-pc = ["green-tea-bare/board-pc"]
 
 [dependencies]
 green-tea-arch = { path = "../../green-tea-arch" }
-green-tea-bare = { path = "../../green-tea-bare" }
+green-tea-bare = { path = "../../green-tea-bare", default-features = false }

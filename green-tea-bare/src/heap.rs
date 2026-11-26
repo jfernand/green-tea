@@ -27,11 +27,6 @@ use core::ptr;
 use green_tea_fit::trace::Event;
 use green_tea_fit::tlsf::Tlsf;
 
-unsafe extern "C" {
-    static __heap_start: u8;
-    static __heap_end: u8;
-}
-
 /// The allocator the heap is, for the tests to print.
 pub const NAME: &str = "TLSF";
 
@@ -115,10 +110,9 @@ pub fn is_recording() -> bool {
 #[cold]
 #[inline(never)]
 fn start(slot: &mut Option<Tlsf>) {
-    let start = &raw const __heap_start as usize;
-    let end = &raw const __heap_end as usize;
+    let range = crate::pages::heap_physical_range();
     // SAFETY: linker.ld reserves the region for the heap, and nothing else uses it.
-    *slot = Some(unsafe { Tlsf::new(start, end - start) });
+    *slot = Some(unsafe { Tlsf::new(range.start(), range.len()) });
 }
 
 fn locked<R>(f: impl FnOnce(&mut Tlsf, &mut Option<Recording>) -> R) -> R {

@@ -31,6 +31,15 @@
 
 #![no_std]
 
+#[cfg(all(feature = "green", feature = "black"))]
+compile_error!("select only one base profile: green or black");
+#[cfg(not(any(feature = "green", feature = "black")))]
+compile_error!("select a base profile: green or black");
+#[cfg(all(feature = "rt-runtime", not(feature = "white")))]
+compile_error!("the realtime runtime requires the additive white profile");
+#[cfg(all(feature = "black", feature = "rt-runtime"))]
+compile_error!("Black+White runtime integration is not implemented");
+
 extern crate alloc;
 
 pub mod arena;
@@ -52,6 +61,7 @@ pub use {
     green_tea_smp as smp, green_tea_virtio as virtio, green_tea_virtio_blk as virtio_blk,
 };
 pub use green_tea_framebuffer::Framebuffer;
+pub use green_tea_capabilities as capabilities;
 #[cfg(feature = "board-pc")]
 pub use green_tea_clevo_lights as clevo_lights;
 #[cfg(feature = "board-pc")]
@@ -59,8 +69,12 @@ pub use green_tea_nvme as nvme;
 #[cfg(not(feature = "board-pc"))]
 pub use platform::Qemu;
 pub use platform::{Board, Platform, TimerInterrupt, VirtioBus};
+#[cfg(target_arch = "x86_64")]
+pub use platform::{ProcessError, ProcessOutcome, USER_REGION_A, USER_REGION_B, UserProcess};
 #[cfg(feature = "board-pc")]
 pub use platform::InterruptCounts;
+#[cfg(feature = "board-pc")]
+pub use platform::UserI8042Lease;
 #[cfg(feature = "board-pc")]
 pub use platform::EcPort;
 
@@ -71,12 +85,22 @@ use core::panic::PanicInfo;
 /// echoing the serial log (it skips the firmware's banner).
 pub fn boot(kernel: &str) -> Framebuffer {
     Board::init();
+    capabilities::BUILD_PROFILE
+        .validate(Board::CAPABILITIES.union(RUNTIME_CAPABILITIES))
+        .unwrap_or_else(|missing| panic!("{} profile requires unsupported capability {:?}", capabilities::BUILD_PROFILE.name(), missing.capability));
+    memory::validate_kernel_regions()
+        .unwrap_or_else(|error| panic!("{} kernel memory regions are unsupported: {error:?}", Board::NAME));
     println!("{kernel} on {}", Board::NAME);
     match Board::display() {
         Ok(fb) => fb,
         Err(e) => panic!("{e}"),
     }
 }
+
+#[cfg(feature = "rt-runtime")]
+const RUNTIME_CAPABILITIES: capabilities::Capabilities = capabilities::Capabilities::REALTIME_EXECUTION;
+#[cfg(not(feature = "rt-runtime"))]
+const RUNTIME_CAPABILITIES: capabilities::Capabilities = capabilities::Capabilities::NONE;
 
 /// Busy-wait on the platform's timer.
 pub fn delay_ms(ms: u64) {

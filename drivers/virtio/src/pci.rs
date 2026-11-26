@@ -49,6 +49,9 @@ const QUEUE_DEVICE: usize = 0x30;
 const MAX_QUEUES: usize = 4;
 
 pub struct PciTransport {
+    ecam: Ecam,
+    function: Function,
+    dma_enabled: bool,
     common: usize,
     notify: usize,
     notify_multiplier: u32,
@@ -58,7 +61,8 @@ pub struct PciTransport {
 }
 
 /// If `f` is a virtio device with the capabilities this driver needs: its virtio id and
-/// transport. Only then turns on its memory decoding and DMA, which it needs from here on.
+/// transport. This enables memory decoding, but leaves bus mastering disabled until the
+/// board has authorized DMA.
 pub fn probe(ecam: Ecam, f: Function) -> Option<(u32, PciTransport)> {
     if ecam.vendor_id(f) != VENDOR_VIRTIO {
         return None;
@@ -90,10 +94,13 @@ pub fn probe(ecam: Ecam, f: Function) -> Option<(u32, PciTransport)> {
         }
     });
     let (common, notify) = (common?, notify?);
-    ecam.enable(f);
+    ecam.enable_memory(f);
     Some((
         id,
         PciTransport {
+            ecam,
+            function: f,
+            dma_enabled: false,
             common,
             notify,
             notify_multiplier,
@@ -104,6 +111,16 @@ pub fn probe(ecam: Ecam, f: Function) -> Option<(u32, PciTransport)> {
 }
 
 impl PciTransport {
+    /// Allow the device to DMA to its negotiated queue and buffer addresses.
+    ///
+    /// # Safety
+    /// The caller must ensure the device is trusted to access all memory reachable by those
+    /// addresses, or that an enabled IOMMU domain restricts it to owned mapped buffers.
+    pub unsafe fn enable_dma(&mut self) {
+        // SAFETY: this method's caller upholds the bus-master authorization contract.
+        unsafe { self.ecam.enable_bus_master(self.function) };
+        self.dma_enabled = true;
+    }
     fn read<T>(&self, offset: usize) -> T {
         unsafe { read_volatile((self.common + offset) as *const T) }
     }
@@ -159,6 +176,7 @@ impl Transport for PciTransport {
     }
 
     fn setup_queue(&mut self, queue: u16, size: u16, descriptors: u64, driver: u64, device: u64) {
+        assert!(self.dma_enabled, "PCI virtio bus mastering was not authorized");
         assert!(usize::from(queue) < MAX_QUEUES, "virtio queue {queue} is past what this driver can notify");
         self.write(QUEUE_SELECT, queue);
         self.write(QUEUE_SIZE, size);
@@ -260,6 +278,7 @@ mod tests {
         let mut device = FakeDevice::new(true);
         device.set_bar_u16(QUEUE_NOTIFY_OFF, 2);
         let mut transport = device.transport();
+        unsafe { transport.enable_dma() };
         transport.setup_queue(1, 16, 0x1000, 0x2000, 0x3000);
         transport.notify(1);
         assert_eq!(device.bar_u16(NOTIFY_OFFSET + 2 * NOTIFY_MULTIPLIER as usize), 1);
@@ -274,9 +293,19 @@ mod tests {
     }
 
     #[test]
-    fn probe_turns_on_a_complete_device() {
+    fn probe_enables_memory_but_not_bus_mastering() {
         let device = FakeDevice::new(true);
         assert!(probe(device.ecam(), F).is_some());
+        assert_eq!(device.command(), 0b010);
+    }
+
+    #[test]
+    fn bus_mastering_requires_explicit_authorization() {
+        let device = FakeDevice::new(true);
+        let mut transport = device.transport();
+        assert_eq!(device.command(), 0b010);
+        // SAFETY: the fake device is ordinary memory and cannot issue DMA.
+        unsafe { transport.enable_dma() };
         assert_eq!(device.command(), 0b110);
     }
 

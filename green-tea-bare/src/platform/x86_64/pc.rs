@@ -22,6 +22,7 @@ use core::arch::{asm, global_asm};
 use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use green_tea_acpi::{Acpi, Identity4G, IoApicEntry, IsaRoute};
+use green_tea_capabilities::{BaseProfile, Capabilities};
 use green_tea_clevo_lights::{EcPorts, Firmware, Lights};
 use green_tea_framebuffer::Text;
 use green_tea_i8042::Keyboard;
@@ -133,6 +134,8 @@ struct InputRoutes {
 static mut INPUT_ROUTES: Option<InputRoutes> = None;
 static INPUT: Event = Event::new();
 static INPUT_STARTED: AtomicBool = AtomicBool::new(false);
+static INPUT_SETUP: AtomicBool = AtomicBool::new(false);
+static INPUT_AVAILABLE: AtomicBool = AtomicBool::new(false);
 static KEYBOARD_IRQS: AtomicU64 = AtomicU64::new(0);
 static SERIAL_IRQS: AtomicU64 = AtomicU64::new(0);
 static MOUSE_IRQS: AtomicU64 = AtomicU64::new(0);
@@ -144,6 +147,15 @@ static DSDT_LENGTH: AtomicU32 = AtomicU32::new(0);
 static DSDT_CHECKSUM: AtomicU8 = AtomicU8::new(0);
 static KEYBOARD_BUSY: AtomicBool = AtomicBool::new(false);
 static mut KEYBOARD: Keyboard = Keyboard::new();
+const KERNEL_KEYBOARD_OWNER: u8 = 0;
+const USER_KEYBOARD_OWNER: u8 = 1;
+const USER_KEY_CAPACITY: usize = 32;
+static KEYBOARD_OWNER: AtomicU8 = AtomicU8::new(KERNEL_KEYBOARD_OWNER);
+static USER_KEYS: [AtomicU8; USER_KEY_CAPACITY] = [const { AtomicU8::new(0) }; USER_KEY_CAPACITY];
+static USER_KEY_HEAD: AtomicUsize = AtomicUsize::new(0);
+static USER_KEY_TAIL: AtomicUsize = AtomicUsize::new(0);
+static USER_KEY_DROPS: AtomicU64 = AtomicU64::new(0);
+static KEYBOARD_AVAILABLE: AtomicBool = AtomicBool::new(false);
 /// The test named on the command line.
 static mut TEST: [u8; 16] = [0; 16];
 static TEST_LEN: AtomicUsize = AtomicUsize::new(0);
@@ -239,6 +251,10 @@ fn init_screen(info: &Info) {
 /// Find the xHCI controllers through ACPI's MCFG table, and start reading the first USB
 /// keyboard on them. A machine without one still boots: USB is only a way to type.
 fn init_usb(acpi: Option<&Acpi<Identity4G>>) {
+    if crate::capabilities::BUILD_PROFILE.base == BaseProfile::Black {
+        crate::println!("usb: refusing DMA-capable assignment without IOMMU enforcement");
+        return;
+    }
     let Some((base, buses)) = acpi.and_then(|a| a.ecam()).filter(|(base, _)| *base < 1 << 32) else { return };
     let window = base as usize + ((*buses.start() as usize) << 20);
     let window_len = (*buses.end() as usize - *buses.start() as usize + 1) << 20;
@@ -259,7 +275,10 @@ fn init_usb(acpi: Option<&Acpi<Identity4G>>) {
         if let Err(e) = paging::map_device(bar as usize, 0x10000) {
             return crate::println!("usb: {e}");
         }
-        ecam.enable(function);
+        ecam.enable_memory(function);
+        // SAFETY: Green runs this in-kernel driver as trusted code; DMA isolation is not
+        // claimed for this legacy identity-mapped deployment.
+        unsafe { ecam.enable_bus_master(function) };
         let mark = arena.mark();
         // SAFETY: the function's registers, just mapped and enabled, and used only here.
         match unsafe { Xhci::new(bar as usize, &mut arena, crate::delay_ms) } {
@@ -288,7 +307,40 @@ fn on_input_interrupt(vector: usize) {
         _ => &MOUSE_IRQS,
     };
     count.fetch_add(1, Ordering::Relaxed);
+    if KEYBOARD_OWNER.load(Ordering::Acquire) == USER_KEYBOARD_OWNER
+        && matches!(vector, KEYBOARD_VECTOR | MOUSE_VECTOR)
+    {
+        // SAFETY: the lease excludes kernel polling, this handler is the sole decoder
+        // writer, and only the boot CPU receives these input routes.
+        if let Some(input) = unsafe { (&raw mut KEYBOARD).as_mut() }.and_then(Keyboard::read_raw) {
+            if !input.auxiliary {
+                push_user_key(input.code);
+            }
+        }
+        return;
+    }
     INPUT.signal();
+}
+
+fn push_user_key(key: u8) {
+    let head = USER_KEY_HEAD.load(Ordering::Relaxed);
+    let next = (head + 1) & (USER_KEY_CAPACITY - 1);
+    if next == USER_KEY_TAIL.load(Ordering::Acquire) {
+        USER_KEY_DROPS.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    USER_KEYS[head].store(key, Ordering::Relaxed);
+    USER_KEY_HEAD.store(next, Ordering::Release);
+}
+
+fn pop_user_key() -> Option<u8> {
+    let tail = USER_KEY_TAIL.load(Ordering::Relaxed);
+    if tail == USER_KEY_HEAD.load(Ordering::Acquire) {
+        return None;
+    }
+    let key = USER_KEYS[tail].load(Ordering::Relaxed);
+    USER_KEY_TAIL.store((tail + 1) & (USER_KEY_CAPACITY - 1), Ordering::Release);
+    Some(key)
 }
 
 fn on_backup_tick() {
@@ -315,13 +367,17 @@ fn start_input_interrupts() -> bool {
     Pc::init_timer(on_backup_tick);
     ON_DEVICE.set(Some(on_input_interrupt));
     // SAFETY: on the boot CPU, with interrupts off, so nothing else uses the keyboard.
-    if unsafe { (&raw mut KEYBOARD).as_mut() }.is_some_and(Keyboard::enable_interrupts) {
-        let keyboard = route_irq(routes, routes.keyboard, KEYBOARD_VECTOR, destination);
-        let mouse = route_irq(routes, routes.mouse, MOUSE_VECTOR, destination);
-        if !keyboard || !mouse {
+    let keyboard_available = if unsafe { (&raw mut KEYBOARD).as_mut() }.is_some_and(Keyboard::enable_interrupts) {
+        let keyboard_route = route_irq(routes, routes.keyboard, KEYBOARD_VECTOR, destination);
+        let mouse_route = route_irq(routes, routes.mouse, MOUSE_VECTOR, destination);
+        if !keyboard_route || !mouse_route {
             crate::println!("interrupts: no IO APIC input for the keyboard");
         }
-    }
+        keyboard_route && mouse_route
+    } else {
+        false
+    };
+    KEYBOARD_AVAILABLE.store(keyboard_available, Ordering::Release);
     if HAS_SERIAL.load(Ordering::Relaxed) && route_irq(routes, routes.serial, SERIAL_VECTOR, destination) {
         Ns16550Port(COM1).enable_receive_interrupt();
     }
@@ -342,6 +398,70 @@ fn init_input_routes(acpi: Option<&Acpi<Identity4G>>) {
         };
         // SAFETY: at boot, on the only CPU.
         unsafe { INPUT_ROUTES = Some(routes) };
+    }
+}
+
+fn with_input_setup<R>(f: impl FnOnce() -> R) -> R {
+    let interrupts_were_on = Pc::interrupts_off();
+    while INPUT_SETUP.swap(true, Ordering::Acquire) {
+        core::hint::spin_loop();
+    }
+    let result = f();
+    INPUT_SETUP.store(false, Ordering::Release);
+    if interrupts_were_on {
+        Pc::interrupts_on();
+    }
+    result
+}
+
+/// Exclusive controller ownership retained by the kernel on behalf of one user process.
+pub struct UserI8042Lease {
+    _private: (),
+}
+
+impl UserI8042Lease {
+    pub fn dropped_scan_codes(&self) -> u64 {
+        USER_KEY_DROPS.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for UserI8042Lease {
+    fn drop(&mut self) {
+        with_input_setup(|| {
+            assert_eq!(KEYBOARD_OWNER.swap(KERNEL_KEYBOARD_OWNER, Ordering::AcqRel), USER_KEYBOARD_OWNER);
+            USER_KEY_TAIL.store(USER_KEY_HEAD.load(Ordering::Acquire), Ordering::Release);
+        });
+    }
+}
+
+impl Pc {
+    /// Transfer the controller to the user-process broker before kernel console input starts.
+    pub fn claim_user_i8042() -> Result<UserI8042Lease, &'static str> {
+        with_input_setup(|| {
+            if INPUT_STARTED.load(Ordering::Acquire) {
+                return Err("kernel input already owns the i8042");
+            }
+            if KEYBOARD_BUSY.load(Ordering::Acquire) {
+                return Err("the i8042 is being polled");
+            }
+            if KEYBOARD_OWNER
+                .compare_exchange(KERNEL_KEYBOARD_OWNER, USER_KEYBOARD_OWNER, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+            {
+                return Err("the i8042 already has an owner");
+            }
+            USER_KEY_HEAD.store(0, Ordering::Relaxed);
+            USER_KEY_TAIL.store(0, Ordering::Relaxed);
+            USER_KEY_DROPS.store(0, Ordering::Relaxed);
+            let available = start_input_interrupts();
+            INPUT_AVAILABLE.store(available, Ordering::Release);
+            INPUT_STARTED.store(true, Ordering::Release);
+            if !available || !KEYBOARD_AVAILABLE.load(Ordering::Acquire) {
+                KEYBOARD_OWNER.store(KERNEL_KEYBOARD_OWNER, Ordering::Release);
+                return Err("the i8042 keyboard and mouse IRQ routes are unavailable");
+            }
+            Ok(UserI8042Lease { _private: () })
+        })
     }
 }
 
@@ -413,6 +533,9 @@ impl Pc {
     /// from or written to their disks. Can be called once, and only while one CPU is
     /// running, since it changes the page tables.
     pub fn find_nvme(serial: &[u8]) -> Result<Option<Nvme>, &'static str> {
+        if crate::capabilities::BUILD_PROFILE.base == BaseProfile::Black {
+            return Err("NVMe assignment refused: no IOMMU DMA isolation backend is enabled");
+        }
         if NVME_TAKEN.swap(true, Ordering::AcqRel) {
             return Err("the NVMe driver is already in use");
         }
@@ -435,7 +558,9 @@ impl Pc {
         });
         for (function, bar) in controllers.into_iter().flatten() {
             paging::map_device(bar as usize, green_tea_nvme::REGISTERS)?;
-            ecam.enable(function);
+            ecam.enable_memory(function);
+            // SAFETY: as for the trusted Green in-kernel xHCI driver above.
+            unsafe { ecam.enable_bus_master(function) };
             // SAFETY: the function's registers, just mapped and enabled. NVME_TAKEN makes
             // this the only driver, and the last controller was off before this one starts,
             // so one at a time uses NVME_MEMORY, which is in .bss.
@@ -453,8 +578,16 @@ impl Pc {
 
 impl Platform for Pc {
     const NAME: &'static str = "x86_64 (pc)";
-    const GUARD_PAGES: bool = true;
-    const DEMAND_PAGING: bool = true;
+    const CAPABILITIES: Capabilities = if cfg!(feature = "black") {
+        Capabilities::PAGE_TABLES
+            .union(Capabilities::GUARD_PAGES)
+            .union(Capabilities::DEMAND_PAGING)
+            .union(Capabilities::PROTECTED_ADDRESS_SPACES)
+    } else {
+        Capabilities::PAGE_TABLES
+            .union(Capabilities::GUARD_PAGES)
+            .union(Capabilities::DEMAND_PAGING)
+    };
 
     fn set_mapped(page: usize, mapped: bool) -> bool {
         paging::set_mapped(page, mapped)
@@ -522,11 +655,14 @@ impl Platform for Pc {
 
     /// The first call turns the input interrupts on. A machine without an IO APIC is polled.
     fn input_event() -> Option<&'static Event> {
-        static AVAILABLE: AtomicBool = AtomicBool::new(false);
-        if !INPUT_STARTED.swap(true, Ordering::AcqRel) {
-            AVAILABLE.store(start_input_interrupts(), Ordering::Release);
-        }
-        AVAILABLE.load(Ordering::Acquire).then_some(&INPUT)
+        let available = with_input_setup(|| {
+            if !INPUT_STARTED.load(Ordering::Acquire) {
+                INPUT_AVAILABLE.store(start_input_interrupts(), Ordering::Release);
+                INPUT_STARTED.store(true, Ordering::Release);
+            }
+            INPUT_AVAILABLE.load(Ordering::Acquire)
+        });
+        available.then_some(&INPUT)
     }
 
     /// Halt until an interrupt, with a timer set in case none comes. `sti` takes effect
@@ -567,9 +703,22 @@ impl Platform for Pc {
         // SAFETY: KEYBOARD_BUSY is ours.
         let usb = unsafe { (&raw mut USB).as_mut() }.and_then(Option::as_mut).and_then(Xhci::poll);
         // SAFETY: KEYBOARD_BUSY is ours.
-        let byte = usb.or_else(|| unsafe { (&raw mut KEYBOARD).as_mut() }.and_then(Keyboard::getc));
+        let byte = usb.or_else(|| {
+            if KEYBOARD_OWNER.load(Ordering::Acquire) == KERNEL_KEYBOARD_OWNER {
+                unsafe { (&raw mut KEYBOARD).as_mut() }.and_then(Keyboard::getc)
+            } else {
+                None
+            }
+        });
         KEYBOARD_BUSY.store(false, Ordering::Release);
         byte
+    }
+
+    fn user_i8042_byte() -> Result<Option<u8>, &'static str> {
+        if Self::cpu() != 0 || KEYBOARD_OWNER.load(Ordering::Acquire) != USER_KEYBOARD_OWNER {
+            return Err("the user i8042 broker is not owned by this process");
+        }
+        Ok(pop_user_key())
     }
 
     /// The TSC, which runs at a constant rate on any recent CPU.

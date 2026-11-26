@@ -18,8 +18,12 @@ test = false
 bench = false
 
 [features]
+default = ["green"]
+green = ["green-tea-bare/green", "green-tea-scheduler-preempt/green"]
+black = ["green-tea-bare/black", "green-tea-scheduler-preempt/black"]
+white = ["green-tea-bare/white", "green-tea-scheduler-preempt/white"]
 board-pc = ["green-tea-bare/board-pc", "green-tea-scheduler-preempt/board-pc"]
 
 [dependencies]
-green-tea-bare = { path = "../../green-tea-bare" }
-green-tea-scheduler-preempt = { path = "../../schedulers/preempt" }
+green-tea-bare = { path = "../../green-tea-bare", default-features = false }
+green-tea-scheduler-preempt = { path = "../../schedulers/preempt", default-features = false }

@@ -23,6 +23,7 @@ use crate::{Framebuffer, Global};
 use crate::{pages, stack};
 use core::arch::{asm, global_asm};
 use green_tea_fw_cfg::Mmio;
+use green_tea_capabilities::Capabilities;
 use green_tea_ns16550::Ns16550Mmio;
 use green_tea_virtio::{self as virtio, AnyTransport};
 
@@ -93,8 +94,9 @@ extern "C" fn green_tea_secondary(cpu: usize) -> ! {
 
 impl Platform for RiscvVirt {
     const NAME: &'static str = "riscv64";
-    const GUARD_PAGES: bool = true;
-    const DEMAND_PAGING: bool = true;
+    const CAPABILITIES: Capabilities = Capabilities::PAGE_TABLES
+        .union(Capabilities::GUARD_PAGES)
+        .union(Capabilities::DEMAND_PAGING);
 
     fn set_mapped(page: usize, mapped: bool) -> bool {
         paging::set_mapped(page, mapped)

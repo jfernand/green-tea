@@ -21,9 +21,16 @@ bench = false
 [features]
 # Build for a physical x86_64 PC booted by GRUB, instead of QEMU's q35: see
 # src/platform/x86_64/pc.rs. Chosen with: cargo xtask kernel --board pc
+default = ["green"]
 board-pc = []
+green = ["green-tea-capabilities/green"]
+black = ["green-tea-capabilities/black"]
+white = ["green-tea-capabilities/white"]
+rt-runtime = []
 
 [dependencies]
+green-tea-capabilities = { path = "../green-tea-capabilities", default-features = false }
+green-tea-memory = { path = "../green-tea-memory" }
 green-tea-arch = { path = "../green-tea-arch" }
 green-tea-pool = { path = "../allocators/pool" }
 green-tea-fit = { path = "../allocators/fit" }

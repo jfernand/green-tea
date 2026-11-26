@@ -19,8 +19,9 @@
 //! repeats what `_start` does. A CPU's number is its local APIC's id.
 //!
 //! Interrupts: `init` loads an IDT (and the GDT and TSS it needs), and masks the legacy
-//! PIC. The timer interrupt comes from the local APIC's timer, in one-shot mode; it counts
-//! at its own rate, which `init_timer` measures against the HPET that `ticks` reads.
+//! PIC. The local APIC timer uses one-shot countdown by default, calibrated against the
+//! board clock; the PC board can instead use TSC-deadline mode when the CPU supports it and
+//! its invariant TSC is the platform clock.
 //!
 //! Guard pages: `init` also maps the task stack pool with 4 KiB pages, leaving out the
 //! guard pages. Exceptions run on a stack of their own (IST1 in the TSS), since a stack
@@ -38,12 +39,17 @@ use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use green_tea_io::port::outb;
 
+mod timer_caps;
+pub use timer_caps::{X86TimerCapabilities, X86TimerMode};
+mod user;
+pub use user::{ProcessError, ProcessOutcome, USER_REGION_A, USER_REGION_B, UserProcess};
+
 #[cfg(feature = "board-pc")]
 mod pc;
 #[cfg(not(feature = "board-pc"))]
 mod q35;
 #[cfg(feature = "board-pc")]
-pub use pc::{EcPort, InterruptCounts, Pc};
+pub use pc::{EcPort, InterruptCounts, Pc, UserI8042Lease};
 #[cfg(not(feature = "board-pc"))]
 pub use q35::Q35;
 
@@ -306,6 +312,27 @@ green_tea_exception_common:
     add $16, %rsp               # the vector and the error code
     iretq
 
+    # A user-callable, bounded syscall entry at vector 0x80. The saved frame has the same
+    # layout as an exception frame, including the user RSP and SS pushed on the ring change.
+    .globl green_tea_syscall_entry
+green_tea_syscall_entry:
+    push $0
+    push $128
+    .irp r, rax,rbx,rcx,rdx,rsi,rdi,rbp,r8,r9,r10,r11,r12,r13,r14,r15
+    push %\r
+    .endr
+    cld
+    mov %rsp, %rdi
+    mov %rsp, %rbx
+    and $-16, %rsp
+    call green_tea_syscall
+    mov %rbx, %rsp
+    .irp r, r15,r14,r13,r12,r11,r10,r9,r8,rbp,rdi,rsi,rdx,rcx,rbx,rax
+    pop %\r
+    .endr
+    add $16, %rsp
+    iretq
+
     # The timer interrupt, on the interrupted task's stack. In 64-bit mode the CPU aligns
     # rsp to 16 before pushing its 5-word frame; 15 more words keep it aligned for the
     # call. Every register is saved, not just the caller-saved ones that an ordinary call
@@ -355,6 +382,7 @@ green_tea_exception_stubs:
 
 unsafe extern "C" {
     static green_tea_exception_stubs: [u64; 32];
+    fn green_tea_syscall_entry();
     fn green_tea_timer_entry();
     fn green_tea_spurious_entry();
     fn green_tea_device_49();
@@ -368,21 +396,23 @@ mod traps {
     use crate::cpus::MAX;
     use core::arch::asm;
 
-    const GDT_ENTRIES: usize = 3 + 2 * MAX;
+    const GDT_ENTRIES: usize = 5 + 2 * MAX;
 
     /// The boot GDT's segments at the same selectors (so the loaded ones stay valid), plus
-    /// a TSS for each CPU from 0x18 on (a system descriptor, two entries long).
+    /// user data/code segments, then a TSS for each CPU from 0x28 on (two entries long).
     static mut GDT: [u64; GDT_ENTRIES] = {
         let mut gdt = [0; GDT_ENTRIES];
         gdt[1] = 0x00af9a000000ffff;
         gdt[2] = 0x00cf92000000ffff;
+        gdt[3] = 0x00cff2000000ffff;
+        gdt[4] = 0x00affa000000ffff;
         gdt
     };
     const CODE: u16 = 0x08;
 
     /// The selector of CPU `cpu`'s TSS.
     const fn tss_selector(cpu: usize) -> u16 {
-        0x18 + 16 * cpu as u16
+        0x28 + 16 * cpu as u16
     }
 
     /// In long mode the TSS holds no task state, only stack pointers. `ist[0]` (IST1) is
@@ -449,6 +479,11 @@ mod traps {
             const PRESENT_INTERRUPT_GATE: u8 = 0x8e;
             Gate::new(handler, ist, PRESENT_INTERRUPT_GATE)
         }
+
+        fn to_user(handler: u64) -> Gate {
+            const USER_INTERRUPT_GATE: u8 = 0xee;
+            Gate::new(handler, 0, USER_INTERRUPT_GATE)
+        }
     }
 
     /// A vector without a gate raises a #NP (vector 11), whose error code names it.
@@ -468,11 +503,37 @@ mod traps {
         // one at a time.
         unsafe {
             let (gdt, idt) = (&raw mut GDT, &raw const IDT);
-            let pointer = Pointer { limit: size_of::<[u64; GDT_ENTRIES]>() as u16 - 1, base: gdt as u64 };
+            let pointer = Pointer {
+                limit: size_of::<[u64; GDT_ENTRIES]>() as u16 - 1,
+                base: gdt as u64,
+            };
             asm!("lgdt [{}]", in(reg) &raw const pointer, options(readonly, nostack));
             asm!("ltr {:x}", in(reg) tss_selector(cpu), options(nostack));
-            let pointer = Pointer { limit: size_of::<[Gate; 256]>() as u16 - 1, base: idt as u64 };
+            let pointer = Pointer {
+                limit: size_of::<[Gate; 256]>() as u16 - 1,
+                base: idt as u64,
+            };
             asm!("lidt [{}]", in(reg) &raw const pointer, options(readonly, nostack));
+        }
+    }
+
+    pub fn kernel_stack(cpu: usize) -> usize {
+        assert!(cpu < MAX);
+        // SAFETY: the boot CPU owns this TSS entry while a process is active; use an
+        // unaligned access because the architectural TSS layout is packed.
+        unsafe {
+            let tss = (&raw const TSS).cast::<Tss>().add(cpu);
+            core::ptr::addr_of!((*tss).rsp[0]).read_unaligned() as usize
+        }
+    }
+
+    pub fn set_kernel_stack(cpu: usize, top: usize) {
+        assert!(cpu < MAX && (top == 0 || top.is_multiple_of(16)));
+        // SAFETY: user processes run only on the boot CPU and update its TSS with
+        // interrupts disabled; use an unaligned access for the packed TSS field.
+        unsafe {
+            let tss = (&raw mut TSS).cast::<Tss>().add(cpu);
+            core::ptr::addr_of_mut!((*tss).rsp[0]).write_unaligned(top as u64);
         }
     }
 
@@ -481,43 +542,60 @@ mod traps {
         unsafe {
             let (gdt, tss, idt) = (&raw mut GDT, &raw mut TSS, &raw mut IDT);
             for cpu in 0..MAX {
-                let stack = (&raw const FAULT_STACKS).cast::<FaultStack>().add(cpu);
+                let stack = (&raw const FAULT_STACKS)
+                    .cast::<FaultStack>()
+                    .add(cpu);
                 (*tss)[cpu].ist[0] = stack as u64 + size_of::<FaultStack>() as u64;
 
                 let base = &raw const (*tss)[cpu] as u64;
                 let limit = size_of::<Tss>() as u64 - 1;
                 const PRESENT_AVAILABLE_TSS: u64 = 0x89;
-                (*gdt)[3 + 2 * cpu] = (limit & 0xffff)
+                (*gdt)[5 + 2 * cpu] = (limit & 0xffff)
                     | (base & 0xff_ffff) << 16
                     | PRESENT_AVAILABLE_TSS << 40
                     | (limit >> 16 & 0xf) << 48
                     | (base >> 24 & 0xff) << 56;
-                (*gdt)[4 + 2 * cpu] = base >> 32;
+                (*gdt)[6 + 2 * cpu] = base >> 32;
             }
-            let pointer = Pointer { limit: size_of::<[u64; GDT_ENTRIES]>() as u16 - 1, base: gdt as u64 };
+            let pointer = Pointer {
+                limit: size_of::<[u64; GDT_ENTRIES]>() as u16 - 1,
+                base: gdt as u64,
+            };
             asm!("lgdt [{}]", in(reg) &raw const pointer, options(readonly, nostack));
             asm!("ltr {:x}", in(reg) tss_selector(0), options(nostack));
 
-            for (vector, &stub) in super::green_tea_exception_stubs.iter().enumerate() {
+            for (vector, &stub) in super::green_tea_exception_stubs
+                .iter()
+                .enumerate()
+            {
                 (*idt)[vector] = Gate::to(stub, 1);
             }
             (*idt)[TIMER_VECTOR] = Gate::to(super::green_tea_timer_entry as *const () as u64, 0);
+            (*idt)[0x80] = Gate::to_user(super::green_tea_syscall_entry as *const () as u64);
             (*idt)[SPURIOUS_VECTOR] =
                 Gate::to(super::green_tea_spurious_entry as *const () as u64, 0);
             (*idt)[49] = Gate::to(super::green_tea_device_49 as *const () as u64, 0);
             (*idt)[50] = Gate::to(super::green_tea_device_50 as *const () as u64, 0);
             (*idt)[51] = Gate::to(super::green_tea_device_51 as *const () as u64, 0);
-            let pointer = Pointer { limit: size_of::<[Gate; 256]>() as u16 - 1, base: idt as u64 };
+            let pointer = Pointer {
+                limit: size_of::<[Gate; 256]>() as u16 - 1,
+                base: idt as u64,
+            };
             asm!("lidt [{}]", in(reg) &raw const pointer, options(readonly, nostack));
 
             // The 8259 PIC, which the firmware left delivering IRQ 0-15 at vectors 8-15,
             // where they'd look like exceptions: move them to 0x20..0x30, and mask them all.
             for (port, byte) in [
-                (0x20, 0x11), (0xa0, 0x11), // ICW1: initialize, expect ICW4
-                (0x21, 0x20), (0xa1, 0x28), // ICW2: vector bases
-                (0x21, 0x04), (0xa1, 0x02), // ICW3: the second PIC hangs off IRQ 2
-                (0x21, 0x01), (0xa1, 0x01), // ICW4: 8086 mode
-                (0x21, 0xff), (0xa1, 0xff), // mask every IRQ
+                (0x20, 0x11),
+                (0xa0, 0x11), // ICW1: initialize, expect ICW4
+                (0x21, 0x20),
+                (0xa1, 0x28), // ICW2: vector bases
+                (0x21, 0x04),
+                (0xa1, 0x02), // ICW3: the second PIC hangs off IRQ 2
+                (0x21, 0x01),
+                (0xa1, 0x01), // ICW4: 8086 mode
+                (0x21, 0xff),
+                (0xa1, 0xff), // mask every IRQ
             ] {
                 outb(port, byte);
             }
@@ -531,14 +609,32 @@ mod traps {
 extern "C" fn green_tea_fault(frame: &ExceptionFrame) {
     let cr2: usize; // a page fault's address
     unsafe { asm!("mov {}, cr2", out(reg) cr2, options(nomem, nostack)) };
+    if frame.cs & 3 == 3 {
+        user::fault(frame.vector, frame.error, cr2);
+    }
     if frame.vector == PAGE_FAULT && frame.error & PAGE_FAULT_PRESENT == 0 && pages::fault(cr2) {
         return;
     }
     if frame.vector == PAGE_FAULT && stack::guard_slot(cr2).is_some() {
         stack::overflowed(cr2);
     }
-    let ExceptionFrame { vector, error, rip, rsp, .. } = *frame;
-    panic!("unexpected exception {vector} (error {error:#x}): rip {rip:#x}, rsp {rsp:#x}, cr2 {cr2:#x}");
+    let ExceptionFrame {
+        vector,
+        error,
+        rip,
+        rsp,
+        ..
+    } = *frame;
+    panic!(
+        "unexpected exception {vector} (error {error:#x}): rip {rip:#x}, rsp {rsp:#x}, cr2 {cr2:#x}"
+    );
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn green_tea_syscall(frame: &mut ExceptionFrame) {
+    assert_eq!(frame.vector, 0x80, "unexpected user syscall vector");
+    assert_eq!(frame.cs & 3, 3, "syscall entry is only for ring 3");
+    user::syscall(frame);
 }
 
 // ---- The local APIC timer --------------------------------------------------------------
@@ -555,7 +651,11 @@ fn wake_cpu(apic_id: u32, stack_top: usize) {
     // waits for each CPU before it starts the next.
     unsafe {
         let (start, end) = (&raw const ap_trampoline, &raw const ap_trampoline_end);
-        core::ptr::copy_nonoverlapping(start, AP_TRAMPOLINE as *mut u8, end as usize - start as usize);
+        core::ptr::copy_nonoverlapping(
+            start,
+            AP_TRAMPOLINE as *mut u8,
+            end as usize - start as usize,
+        );
         green_tea_ap_stack = stack_top as u64;
     }
     lapic_write(LAPIC_SPURIOUS, APIC_ENABLE | SPURIOUS_VECTOR as u32);
@@ -580,7 +680,9 @@ const LAPIC_LVT_TIMER: usize = 0x320;
 const LAPIC_INITIAL_COUNT: usize = 0x380;
 const LAPIC_CURRENT_COUNT: usize = 0x390;
 const LAPIC_DIVIDE: usize = 0x3e0;
+const IA32_TSC_DEADLINE: u32 = 0x6e0;
 const LVT_MASKED: u32 = 1 << 16;
+const LVT_TSC_DEADLINE: u32 = 1 << 18;
 
 /// Whether the local APICs are in x2APIC mode, where registers are MSRs instead of memory.
 /// Only the `pc` board turns it on.
@@ -595,13 +697,17 @@ const X2APIC_ICR: u32 = 0x830;
 fn rdmsr(msr: u32) -> u64 {
     let (low, high): (u32, u32);
     // SAFETY: only architectural MSRs that this CPU is known to have are read.
-    unsafe { asm!("rdmsr", in("ecx") msr, out("eax") low, out("edx") high, options(nomem, nostack)) };
+    unsafe {
+        asm!("rdmsr", in("ecx") msr, out("eax") low, out("edx") high, options(nomem, nostack))
+    };
     u64::from(high) << 32 | u64::from(low)
 }
 
 fn wrmsr(msr: u32, value: u64) {
     // SAFETY: as for `rdmsr`; the callers write values the architecture defines.
-    unsafe { asm!("wrmsr", in("ecx") msr, in("eax") value as u32, in("edx") (value >> 32) as u32, options(nostack)) };
+    unsafe {
+        asm!("wrmsr", in("ecx") msr, in("eax") value as u32, in("edx") (value >> 32) as u32, options(nostack))
+    };
 }
 
 /// Move this CPU's local APIC to x2APIC mode. From disabled it has to go through enabled.
@@ -644,20 +750,32 @@ fn lapic_write(register: usize, value: u32) {
     if X2APIC.load(Ordering::Relaxed) {
         return wrmsr(X2APIC_MSRS + (register >> 4) as u32, u64::from(value));
     }
-    unsafe { write_volatile((LAPIC.load(Ordering::Relaxed) + register) as *mut u32, value) }
+    unsafe {
+        write_volatile(
+            (LAPIC.load(Ordering::Relaxed) + register) as *mut u32,
+            value,
+        )
+    }
 }
 
 /// Use the address ACPI gives for the local APICs. It must be in the 4 GiB `_start` maps.
 #[cfg_attr(not(feature = "board-pc"), allow(dead_code))]
 fn set_lapic_base(address: u64) {
-    assert!(address < 1 << 32, "the local APIC is at {address:#x}, above 4 GiB");
+    assert!(
+        address < 1 << 32,
+        "the local APIC is at {address:#x}, above 4 GiB"
+    );
     LAPIC.store(address as usize, Ordering::Relaxed);
 }
 
 /// This CPU's local APIC id.
 fn apic_id() -> u32 {
     let id = lapic_read(LAPIC_ID);
-    if X2APIC.load(Ordering::Relaxed) { id } else { id >> 24 }
+    if X2APIC.load(Ordering::Relaxed) {
+        id
+    } else {
+        id >> 24
+    }
 }
 
 /// Send the interrupt command `command` to the local APIC with id `apic_id`.
@@ -680,6 +798,89 @@ static ON_TICK: Global<Option<fn()>> = Global::new(None);
 static DEADLINE: Global<u64> = Global::new(u64::MAX);
 /// The APIC timer's rate, measured by `init_timer`.
 static APIC_TICKS_PER_MS: Global<u64> = Global::new(0);
+/// The timer mode selected by `init_x86_timer`.
+static TIMER_MODE: Global<X86TimerMode> = Global::new(X86TimerMode::ApicCountdown);
+
+/// The x86 timer features visible on this CPU and whether this board can use TSC deadlines
+/// with its platform clock.
+pub fn x86_timer_capabilities() -> X86TimerCapabilities {
+    let max_basic = core::arch::x86_64::__cpuid(0).eax;
+    let max_extended = core::arch::x86_64::__cpuid(0x8000_0000).eax;
+    let (leaf1_ecx, leaf1_edx) = if max_basic >= 1 {
+        let leaf1 = core::arch::x86_64::__cpuid(1);
+        (leaf1.ecx, leaf1.edx)
+    } else {
+        (0, 0)
+    };
+    let invariant_tsc = if max_extended >= 0x8000_0007 {
+        core::arch::x86_64::__cpuid(0x8000_0007).edx
+    } else {
+        0
+    };
+    X86TimerCapabilities::from_cpuid(
+        max_basic,
+        leaf1_ecx,
+        leaf1_edx,
+        max_extended,
+        invariant_tsc,
+        cfg!(feature = "board-pc"),
+    )
+}
+
+/// The local APIC identifier of the CPU running this code.
+pub fn x86_apic_id() -> u32 {
+    apic_id()
+}
+
+/// Configure the x86 local APIC timer in the requested mode. Countdown remains the default
+/// used by existing kernels; TSC-deadline is accepted only when the CPU and board clock are
+/// both suitable.
+pub fn init_x86_timer(mode: X86TimerMode, on_tick: fn()) -> Result<(), &'static str> {
+    let capabilities = x86_timer_capabilities();
+    if !capabilities.local_apic {
+        return Err("the local APIC timer is unavailable");
+    }
+    if mode == X86TimerMode::TscDeadline && !capabilities.usable_tsc_deadline {
+        if !capabilities.tsc_deadline {
+            return Err("the CPU does not support TSC-deadline mode");
+        }
+        if !capabilities.invariant_tsc {
+            return Err("the TSC is not reported invariant");
+        }
+        return Err("this board's clock is not the TSC");
+    }
+
+    Board::without_interrupts(|| {
+        ON_TICK.set(Some(on_tick));
+        TIMER_MODE.set(mode);
+        DEADLINE.set(u64::MAX);
+        const APIC_ENABLE: u32 = 1 << 8;
+        lapic_write(LAPIC_SPURIOUS, APIC_ENABLE | SPURIOUS_VECTOR as u32);
+        lapic_write(LAPIC_DIVIDE, 0b0011); // count at the APIC's clock / 16
+        lapic_write(LAPIC_LVT_TIMER, LVT_MASKED | TIMER_VECTOR as u32);
+        lapic_write(LAPIC_INITIAL_COUNT, 0);
+
+        match mode {
+            X86TimerMode::ApicCountdown => {
+                const MEASURE_MS: u64 = 10;
+                if capabilities.tsc_deadline {
+                    wrmsr(IA32_TSC_DEADLINE, 0);
+                }
+                lapic_write(LAPIC_INITIAL_COUNT, u32::MAX);
+                crate::delay_ms(MEASURE_MS);
+                let counted = u32::MAX - lapic_read(LAPIC_CURRENT_COUNT);
+                APIC_TICKS_PER_MS.set((u64::from(counted) / MEASURE_MS).max(1));
+                lapic_write(LAPIC_INITIAL_COUNT, 0);
+                lapic_write(LAPIC_LVT_TIMER, TIMER_VECTOR as u32);
+            }
+            X86TimerMode::TscDeadline => {
+                wrmsr(IA32_TSC_DEADLINE, 0);
+                lapic_write(LAPIC_LVT_TIMER, TIMER_VECTOR as u32 | LVT_TSC_DEADLINE);
+            }
+        }
+        Ok(())
+    })
+}
 
 /// Called by `green_tea_timer_entry`, with interrupts off (it's an interrupt gate).
 #[unsafe(no_mangle)]
@@ -714,35 +915,37 @@ extern "C" fn green_tea_device(vector: usize) {
 }
 
 impl TimerInterrupt for Board {
-    /// Turn the local APIC on, and measure its timer against the HPET.
+    /// Turn the local APIC on in countdown mode, preserving the existing board behavior.
     fn init_timer(on_tick: fn()) {
-        Self::without_interrupts(|| ON_TICK.set(Some(on_tick)));
-        const APIC_ENABLE: u32 = 1 << 8;
-        lapic_write(LAPIC_SPURIOUS, APIC_ENABLE | SPURIOUS_VECTOR as u32);
-        lapic_write(LAPIC_DIVIDE, 0b0011); // count at the APIC's clock / 16
-
-        const MEASURE_MS: u64 = 10;
-        lapic_write(LAPIC_LVT_TIMER, LVT_MASKED | TIMER_VECTOR as u32);
-        lapic_write(LAPIC_INITIAL_COUNT, u32::MAX);
-        crate::delay_ms(MEASURE_MS);
-        let counted = u32::MAX - lapic_read(LAPIC_CURRENT_COUNT);
-        Self::without_interrupts(|| APIC_TICKS_PER_MS.set((u64::from(counted) / MEASURE_MS).max(1)));
-
-        lapic_write(LAPIC_INITIAL_COUNT, 0); // stopped
-        lapic_write(LAPIC_LVT_TIMER, TIMER_VECTOR as u32); // one-shot, unmasked
+        init_x86_timer(X86TimerMode::ApicCountdown, on_tick)
+            .expect("the local APIC timer is required");
     }
 
     /// Start the APIC timer's one-shot count for the time left until `deadline`.
     fn set_deadline(deadline: u64) {
         Self::without_interrupts(|| {
             DEADLINE.set(deadline);
-            if deadline == u64::MAX {
-                lapic_write(LAPIC_INITIAL_COUNT, 0); // stops it
-                return;
+            match TIMER_MODE.get() {
+                X86TimerMode::ApicCountdown => {
+                    if deadline == u64::MAX {
+                        lapic_write(LAPIC_INITIAL_COUNT, 0); // stops it
+                        return;
+                    }
+                    let wait = u128::from(deadline.saturating_sub(Self::ticks()));
+                    let count = wait * u128::from(APIC_TICKS_PER_MS.get())
+                        / u128::from(Self::ticks_per_ms());
+                    lapic_write(
+                        LAPIC_INITIAL_COUNT,
+                        count.clamp(1, u128::from(u32::MAX)) as u32,
+                    );
+                }
+                X86TimerMode::TscDeadline => {
+                    wrmsr(
+                        IA32_TSC_DEADLINE,
+                        if deadline == u64::MAX { 0 } else { deadline },
+                    );
+                }
             }
-            let wait = u128::from(deadline.saturating_sub(Self::ticks()));
-            let count = wait * u128::from(APIC_TICKS_PER_MS.get()) / u128::from(Self::ticks_per_ms());
-            lapic_write(LAPIC_INITIAL_COUNT, count.clamp(1, u128::from(u32::MAX)) as u32);
         });
     }
 
@@ -764,6 +967,8 @@ impl TimerInterrupt for Board {
 /// heap is in two or three more, and each of those gets a table in which the heap's pages
 /// are missing until they are first touched.
 mod paging {
+    use alloc::alloc::{Layout, alloc_zeroed, handle_alloc_error};
+    use alloc::boxed::Box;
     use crate::Global;
     use crate::{pages, stack};
     use core::arch::asm;
@@ -774,6 +979,109 @@ mod paging {
 
     #[repr(C, align(4096))]
     struct Table([u64; 512]);
+
+    const ADDRESS: u64 = 0x000f_ffff_ffff_f000;
+    const USER: u64 = 1 << 2;
+
+    unsafe extern "C" {
+        static boot_pml4: [u64; 512];
+    }
+
+    /// One user mapping set alongside the existing supervisor-only kernel mappings.
+    pub(super) struct UserAddressSpace {
+        root: Box<Table>,
+        _tables: [Box<Table>; 3],
+    }
+
+    impl UserAddressSpace {
+        pub(super) fn new(user_base: usize, code: usize, stack: usize) -> Result<Self, &'static str> {
+            const USER_END: usize = 0x0000_8000_0000_0000;
+            let Some(user_end) = user_base.checked_add(2 * pages::PAGE) else {
+                return Err("user range overflows");
+            };
+            if !user_base.is_multiple_of(pages::PAGE)
+                || user_end > USER_END
+                || (user_base >> 39) & 511 != 255
+                || (user_base + pages::PAGE) >> 39 & 511 != 255
+                || !code.is_multiple_of(pages::PAGE)
+                || !stack.is_multiple_of(pages::PAGE)
+                || code == stack
+                || (code as u64) & !ADDRESS != 0
+                || (stack as u64) & !ADDRESS != 0
+            {
+                return Err("invalid user mapping geometry");
+            }
+
+            let mut root = zeroed_table();
+            let mut pdpt = zeroed_table();
+            let mut pd = zeroed_table();
+            let mut pt = zeroed_table();
+            // SAFETY: this is called on the boot CPU after board paging is finalized; the
+            // boot root is immutable while a process address space is being constructed.
+            unsafe {
+                let source = core::ptr::addr_of!(boot_pml4).cast::<u64>();
+                for (index, entry) in root.0.iter_mut().enumerate() {
+                    *entry = source.add(index).read_volatile();
+                }
+            }
+
+            let pml4_index = (user_base >> 39) & 511;
+            let pdpt_index = (user_base >> 30) & 511;
+            let pd_index = (user_base >> 21) & 511;
+            let code_index = (user_base >> 12) & 511;
+            let stack_index = ((user_base + pages::PAGE) >> 12) & 511;
+            if root.0[pml4_index] != 0 || pdpt_index != ((user_base + pages::PAGE) >> 30) & 511
+                || pd_index != ((user_base + pages::PAGE) >> 21) & 511
+                || stack_index == code_index
+            {
+                return Err("user range overlaps an existing mapping");
+            }
+
+            pdpt.0[pdpt_index] = table_address(&pd) | PRESENT | WRITABLE | USER;
+            pd.0[pd_index] = table_address(&pt) | PRESENT | WRITABLE | USER;
+            pt.0[code_index] = code as u64 | PRESENT | USER;
+            pt.0[stack_index] = stack as u64 | PRESENT | WRITABLE | USER;
+            root.0[pml4_index] = table_address(&pdpt) | PRESENT | WRITABLE | USER;
+
+            Ok(Self { root, _tables: [pdpt, pd, pt] })
+        }
+
+        pub(super) fn root(&self) -> usize {
+            table_address(&self.root) as usize
+        }
+    }
+
+    fn table_address(table: &Table) -> u64 {
+        let address = table as *const Table as usize;
+        assert!(address.is_multiple_of(pages::PAGE) && (address as u64) & !ADDRESS == 0);
+        address as u64
+    }
+
+    fn zeroed_table() -> Box<Table> {
+        let layout = Layout::new::<Table>();
+        // SAFETY: the layout has the table's 4 KiB alignment, and every bit pattern of its
+        // u64 entries is valid; the allocation remains owned by the returned Box.
+        let table = unsafe { alloc_zeroed(layout) } as *mut Table;
+        if table.is_null() {
+            handle_alloc_error(layout);
+        }
+        // SAFETY: `alloc_zeroed` returned a live allocation with exactly this layout.
+        unsafe { Box::from_raw(table) }
+    }
+
+    pub(super) fn current_root() -> usize {
+        let root: u64;
+        unsafe { asm!("mov {}, cr3", out(reg) root, options(nomem, nostack, preserves_flags)) };
+        (root & ADDRESS) as usize
+    }
+
+    /// # Safety
+    /// `root` must point to a complete, aligned page-table tree that retains every mapping
+    /// needed by the current kernel context.
+    pub(super) unsafe fn activate(root: usize) {
+        assert!(root.is_multiple_of(pages::PAGE) && (root as u64) & !ADDRESS == 0);
+        unsafe { asm!("mov cr3, {}", in(reg) root, options(nostack, preserves_flags)) };
+    }
 
     static mut STACKS_4K: Table = Table([0; 512]);
     /// For the 2 MiB pages the heap is in. The heap is 4 MiB and starts wherever .stack
@@ -794,7 +1102,11 @@ mod paging {
         unsafe {
             // Only ever touched here, at boot: no other references exist.
             let (pool, pds) = (&raw mut STACKS_4K, &raw mut boot_pds);
-            for (i, entry) in (*pool).0.iter_mut().enumerate() {
+            for (i, entry) in (*pool)
+                .0
+                .iter_mut()
+                .enumerate()
+            {
                 *entry = (stacks + i * stack::PAGE) as u64 | PRESENT | WRITABLE;
             }
             for guard in stack::guard_pages() {
@@ -815,10 +1127,22 @@ mod paging {
         unsafe {
             // Only ever touched here, at boot: no other references exist.
             let (tables, pds) = (&raw mut HEAP_4K, &raw mut boot_pds);
-            for (t, table) in (*tables).iter_mut().enumerate().take((heap.end - base).div_ceil(MIB2)) {
-                for (i, entry) in table.0.iter_mut().enumerate() {
+            for (t, table) in (*tables)
+                .iter_mut()
+                .enumerate()
+                .take((heap.end - base).div_ceil(MIB2))
+            {
+                for (i, entry) in table
+                    .0
+                    .iter_mut()
+                    .enumerate()
+                {
                     let page = base + t * MIB2 + i * pages::PAGE;
-                    *entry = if heap.contains(&page) { 0 } else { page as u64 | PRESENT | WRITABLE };
+                    *entry = if heap.contains(&page) {
+                        0
+                    } else {
+                        page as u64 | PRESENT | WRITABLE
+                    };
                 }
                 (*pds)[base / MIB2 + t] = table as *mut Table as u64 | PRESENT | WRITABLE;
             }
@@ -838,20 +1162,34 @@ mod paging {
         unsafe { asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack)) };
         let mut table = (cr3 & ADDRESS) as usize;
         let mut steps = [None; 4];
-        for (level, step) in steps.iter_mut().enumerate() {
+        for (level, step) in steps
+            .iter_mut()
+            .enumerate()
+        {
             let shift = 39 - 9 * level;
             let index = (addr >> shift) & 511;
             // SAFETY: a table is 512 entries, and the tables are mapped where they are.
-            let entry = unsafe { (table as *const u64).add(index).read_volatile() };
+            let entry = unsafe {
+                (table as *const u64)
+                    .add(index)
+                    .read_volatile()
+            };
             let target = (entry & ADDRESS) as usize;
             let points_to = if entry & PRESENT == 0 {
                 Nothing
             } else if level == 3 || entry & PAGE_SIZE != 0 {
-                Page { frame: target & !((1 << shift) - 1), size: 1 << shift }
+                Page {
+                    frame: target & !((1 << shift) - 1),
+                    size: 1 << shift,
+                }
             } else {
                 Table(target)
             };
-            *step = Some(pages::Step { index, entry, points_to });
+            *step = Some(pages::Step {
+                index,
+                entry,
+                points_to,
+            });
             let Table(next) = points_to else { break };
             table = next;
         }
@@ -880,14 +1218,19 @@ mod paging {
         if addr >= 1 << 32 {
             return Ok(());
         }
-        let kernel = (_start as *const () as usize & !(MIB2 - 1))..(&raw const __kernel_end as usize);
-        let (first, last) = (addr & !(MIB2 - 1), (addr + len - 1).min((1 << 32) - 1) & !(MIB2 - 1));
+        let kernel =
+            (_start as *const () as usize & !(MIB2 - 1))..(&raw const __kernel_end as usize);
+        let (first, last) = (
+            addr & !(MIB2 - 1),
+            (addr + len - 1).min((1 << 32) - 1) & !(MIB2 - 1),
+        );
         // SAFETY: at boot, on the boot CPU; each index is within the 2048 entries.
         unsafe {
             let pds = (&raw mut boot_pds).cast::<u64>();
             for page in (first..=last).step_by(MIB2) {
                 let entry = pds.add(page / MIB2);
-                if kernel.start < page + MIB2 && page < kernel.end || entry.read() & PAGE_SIZE == 0 {
+                if kernel.start < page + MIB2 && page < kernel.end || entry.read() & PAGE_SIZE == 0
+                {
                     return Err("a device shares a 2 MiB page with the kernel");
                 }
                 entry.write(entry.read() | UNCACHED);
@@ -916,7 +1259,13 @@ mod paging {
                         return Err("out of page tables for devices above 4 GiB");
                     }
                     USED.set(used + 1);
-                    entry.write((&raw mut HIGH).cast::<Table>().add(used) as u64 | PRESENT | WRITABLE);
+                    entry.write(
+                        (&raw mut HIGH)
+                            .cast::<Table>()
+                            .add(used) as u64
+                            | PRESENT
+                            | WRITABLE,
+                    );
                 }
                 Ok((entry.read() & ADDRESS) as *mut u64)
             }
@@ -931,9 +1280,14 @@ mod paging {
         // SAFETY: at boot, on the boot CPU; the tables are in the identity map.
         unsafe {
             for page in (first..=last).step_by(MIB2) {
-                let pdpt = next_level((&raw mut boot_pml4).cast::<u64>().add(page >> 39 & 511))?;
+                let pdpt = next_level(
+                    (&raw mut boot_pml4)
+                        .cast::<u64>()
+                        .add(page >> 39 & 511),
+                )?;
                 let pd = next_level(pdpt.add(page >> 30 & 511))?;
-                pd.add(page >> 21 & 511).write(page as u64 | PRESENT | WRITABLE | PAGE_SIZE | cache);
+                pd.add(page >> 21 & 511)
+                    .write(page as u64 | PRESENT | WRITABLE | PAGE_SIZE | cache);
             }
             asm!("mov {0}, cr3", "mov cr3, {0}", out(reg) _, options(nostack));
         }
@@ -948,7 +1302,11 @@ mod paging {
         let index = (page - base) / pages::PAGE;
         assert!(index < HEAP_TABLES * 512);
         // SAFETY: in bounds, and nothing holds a reference to the tables.
-        unsafe { (&raw mut HEAP_4K).cast::<u64>().add(index) }
+        unsafe {
+            (&raw mut HEAP_4K)
+                .cast::<u64>()
+                .add(index)
+        }
     }
 
     pub fn is_mapped(page: usize) -> bool {

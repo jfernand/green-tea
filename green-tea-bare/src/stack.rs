@@ -9,6 +9,7 @@
 
 use crate::global::Global;
 use core::ops::Range;
+use green_tea_memory::{OwnedRange, PhysicalRange};
 use green_tea_pool::{FreeList, Pool};
 
 pub const PAGE: usize = 4096;
@@ -24,6 +25,11 @@ unsafe extern "C" {
 /// The region's first byte, 2 MiB aligned.
 pub fn region_start() -> usize {
     &raw const __stacks_start as usize
+}
+
+/// The checked physical range reserved for task stacks by linker.ld.
+pub fn region_range() -> PhysicalRange {
+    PhysicalRange::new(region_start(), REGION, REGION).expect("linker stack region must be 2 MiB-aligned")
 }
 
 /// How the pool remembers which slots are free: a list threaded through the free slots.
@@ -51,8 +57,8 @@ pub fn free_slots() -> usize {
 /// interrupt-safe: green-tea-preempt creates tasks with interrupts off, and the scheduler,
 /// which drops them, runs with interrupts off.
 pub struct Stack {
-    /// The slot's first byte, which is its guard page's.
-    base: usize,
+    /// A unique claim on this pool slot, including its guard page.
+    region: Option<OwnedRange<'static>>,
 }
 
 impl Stack {
@@ -69,24 +75,32 @@ impl Stack {
 
     /// Take a free slot, if there is one.
     pub fn try_take() -> Option<Stack> {
-        with_pool(|pool| pool.take()).map(|base| Stack { base })
+        with_pool(|pool| pool.take()).map(|base| {
+            let range = PhysicalRange::new(base, SLOT, PAGE).expect("stack pool returned an invalid slot");
+            // SAFETY: the pool exclusively assigned this linker-reserved slot, which remains
+            // valid for the kernel's lifetime; Stack returns it to the pool on drop.
+            let region = unsafe { OwnedRange::new(range) };
+            Stack { region: Some(region) }
+        })
     }
 
     /// One past the highest byte: where the stack starts.
     pub fn top(&self) -> *mut u8 {
-        (self.base + SLOT) as *mut u8
+        self.region.as_ref().expect("live stack has a region").range().end() as *mut u8
     }
 
     /// The guard page's addresses.
     pub fn guard(&self) -> Range<usize> {
-        self.base..self.base + PAGE
+        let start = self.region.as_ref().expect("live stack has a region").range().start();
+        start..start + PAGE
     }
 }
 
 impl Drop for Stack {
     fn drop(&mut self) {
+        let base = self.region.take().expect("live stack has a region").into_range().start();
         // SAFETY: `base` came from this pool's `take`, and a Stack is dropped once.
-        let given = with_pool(|pool| unsafe { pool.give(self.base) });
+        let given = with_pool(|pool| unsafe { pool.give(base) });
         assert!(given.is_ok(), "the stack pool refused a stack: {given:?}");
     }
 }
@@ -94,12 +108,12 @@ impl Drop for Stack {
 /// Every guard page in the pool, lowest first: what a board with guard pages leaves
 /// unmapped.
 pub fn guard_pages() -> impl Iterator<Item = usize> {
-    (0..SLOTS).map(|slot| region_start() + slot * SLOT)
+    (0..SLOTS).map(|slot| region_range().start() + slot * SLOT)
 }
 
 /// If `addr` is in a guard page, that page's stack slot.
 pub fn guard_slot(addr: usize) -> Option<usize> {
-    let offset = addr.checked_sub(region_start())?;
+    let offset = addr.checked_sub(region_range().start())?;
     let slot = offset / SLOT;
     (slot < SLOTS && offset % SLOT < PAGE).then_some(slot)
 }

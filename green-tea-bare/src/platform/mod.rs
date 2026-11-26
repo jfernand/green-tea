@@ -29,22 +29,34 @@ pub use aarch64::AarchVirt as Board;
 #[cfg(target_arch = "riscv64")]
 pub use riscv64::RiscvVirt as Board;
 #[cfg(all(target_arch = "x86_64", feature = "board-pc"))]
-pub use x86_64::Pc as Board;
+pub use x86_64::EcPort;
 #[cfg(all(target_arch = "x86_64", feature = "board-pc"))]
 pub use x86_64::InterruptCounts;
 #[cfg(all(target_arch = "x86_64", feature = "board-pc"))]
-pub use x86_64::EcPort;
+pub use x86_64::UserI8042Lease;
+#[cfg(all(target_arch = "x86_64", feature = "board-pc"))]
+pub use x86_64::Pc as Board;
 #[cfg(all(target_arch = "x86_64", not(feature = "board-pc")))]
 pub use x86_64::Q35 as Board;
+#[cfg(target_arch = "x86_64")]
+pub use x86_64::{
+    ProcessError, ProcessOutcome, USER_REGION_A, USER_REGION_B, UserProcess, X86TimerCapabilities, X86TimerMode,
+    init_x86_timer, x86_apic_id, x86_timer_capabilities,
+};
 
 use crate::Framebuffer;
 use crate::event::Event;
+use green_tea_capabilities::{Capabilities, Capability};
 use green_tea_virtio as virtio;
 
 #[cfg(all(feature = "board-pc", not(target_arch = "x86_64")))]
 compile_error!("the board-pc feature is for x86_64");
 
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64")))]
+#[cfg(not(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    target_arch = "riscv64"
+)))]
 compile_error!("green-tea-bare supports riscv64, aarch64 and x86_64 so far");
 
 /// What every board provides. Its `_start` (in the same module, as global asm) has
@@ -53,14 +65,17 @@ pub trait Platform {
     /// The architecture, for the boot banner.
     const NAME: &'static str;
 
+    /// Guarantees implemented by this board backend, not merely present in its hardware.
+    const CAPABILITIES: Capabilities;
+
     /// Whether touching a task stack's guard page faults (see [`crate::stack`]). That
     /// needs paging; boards without it run with the MMU off, or with a plain identity map.
-    const GUARD_PAGES: bool;
+    const GUARD_PAGES: bool = Self::CAPABILITIES.supports(Capability::GuardPages);
 
     /// Whether the heap's pages start out unmapped, and the fault handler maps each one the
     /// first time it is touched (see [`crate::pages`]). That needs paging, and a fault
     /// handler that returns to the code it interrupted.
-    const DEMAND_PAGING: bool = false;
+    const DEMAND_PAGING: bool = Self::CAPABILITIES.supports(Capability::DemandPaging);
 
     /// Map or unmap the 4 KiB page of the heap at `page`, and forget any translation of it
     /// the CPU has cached. Returns whether the page was mapped before. A board without
@@ -129,6 +144,12 @@ pub trait Platform {
     /// interrupts. `None` means the console has to be polled.
     fn input_event() -> Option<&'static Event> {
         None
+    }
+
+    /// Take one raw set-1 keyboard byte from an explicitly claimed user-driver broker.
+    /// `None` means the bounded queue is empty; unsupported or unclaimed access is an error.
+    fn user_i8042_byte() -> Result<Option<u8>, &'static str> {
+        Err("this board has no user i8042 broker")
     }
 
     /// Stop until an interrupt has been handled. Called by the scheduler, with interrupts

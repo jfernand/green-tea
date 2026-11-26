@@ -9,6 +9,7 @@ use crate::{Framebuffer, pages};
 use core::arch::{asm, global_asm};
 use core::ptr::{read_volatile, write_volatile};
 use green_tea_fw_cfg::IoPorts;
+use green_tea_capabilities::{BaseProfile, Capabilities};
 use green_tea_ns16550::Ns16550Port;
 use green_tea_pci::Ecam;
 use green_tea_virtio::{self as virtio, AnyTransport};
@@ -39,8 +40,16 @@ const HPET_COUNTER: *const u64 = (HPET + 0xf0) as *const u64;
 
 impl Platform for Q35 {
     const NAME: &'static str = "x86_64";
-    const GUARD_PAGES: bool = true;
-    const DEMAND_PAGING: bool = true;
+    const CAPABILITIES: Capabilities = if cfg!(feature = "black") {
+        Capabilities::PAGE_TABLES
+            .union(Capabilities::GUARD_PAGES)
+            .union(Capabilities::DEMAND_PAGING)
+            .union(Capabilities::PROTECTED_ADDRESS_SPACES)
+    } else {
+        Capabilities::PAGE_TABLES
+            .union(Capabilities::GUARD_PAGES)
+            .union(Capabilities::DEMAND_PAGING)
+    };
 
     fn set_mapped(page: usize, mapped: bool) -> bool {
         paging::set_mapped(page, mapped)
@@ -134,9 +143,14 @@ impl VirtioBus for Q35 {
     /// virtio devices are PCI functions here. SeaBIOS put ECAM at 0xb000_0000 (inside
     /// the 4 GiB that `_start` maps) and gave their BARs addresses below 4 GiB.
     fn for_each_virtio(mut f: impl FnMut(virtio::Device)) -> Result<(), &'static str> {
+        if crate::capabilities::BUILD_PROFILE.base == BaseProfile::Black {
+            return Err("virtio PCI assignment refused: no IOMMU DMA isolation backend");
+        }
         let ecam = Ecam(0xb000_0000);
         ecam.for_each_function(|function| {
-            if let Some((id, transport)) = virtio::pci::probe(ecam, function) {
+            if let Some((id, mut transport)) = virtio::pci::probe(ecam, function) {
+                // SAFETY: Green runs these PCI transports as trusted in-kernel drivers.
+                unsafe { transport.enable_dma() };
                 f(virtio::Device { id, transport: AnyTransport::Pci(transport) });
             }
         });

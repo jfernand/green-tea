@@ -19,9 +19,13 @@ test = false
 bench = false
 
 [features]
+default = ["green"]
+green = ["green-tea-bare/green", "green-tea-scheduler-coop/green"]
+black = ["green-tea-bare/black", "green-tea-scheduler-coop/black"]
+white = ["green-tea-bare/white", "green-tea-scheduler-coop/white"]
 board-pc = ["green-tea-bare/board-pc", "green-tea-scheduler-coop/board-pc"]
 
 [dependencies]
-green-tea-bare = { path = "../../green-tea-bare" }
+green-tea-bare = { path = "../../green-tea-bare", default-features = false }
 green-tea-region = { path = "../../allocators/region" }
-green-tea-scheduler-coop = { path = "../../schedulers/coop" }
+green-tea-scheduler-coop = { path = "../../schedulers/coop", default-features = false }

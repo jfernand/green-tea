@@ -24,6 +24,7 @@ use crate::platform::{Board, Platform, TimerInterrupt};
 use core::ops::Range;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 use green_tea_fit::pages::idle_ranges;
+use green_tea_memory::PhysicalRange;
 
 pub const PAGE: usize = 4096;
 
@@ -91,7 +92,14 @@ pub fn walk(addr: usize) -> impl Iterator<Item = Step> {
 
 /// The heap's addresses. Both ends are multiples of [`PAGE`].
 pub fn heap_range() -> Range<usize> {
-    core::hint::black_box(&raw const __heap_start as usize)..core::hint::black_box(&raw const __heap_end as usize)
+    heap_physical_range().as_range()
+}
+
+/// The checked physical range reserved for the heap by linker.ld.
+pub fn heap_physical_range() -> PhysicalRange {
+    let start = core::hint::black_box(&raw const __heap_start as usize);
+    let end = core::hint::black_box(&raw const __heap_end as usize);
+    PhysicalRange::from_bounds(start, end, PAGE).expect("linker heap range must be page-aligned and nonempty")
 }
 
 pub fn stats() -> Stats {

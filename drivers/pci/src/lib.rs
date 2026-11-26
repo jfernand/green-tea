@@ -140,8 +140,18 @@ impl Ecam {
         }
     }
 
-    /// Let the function answer at its memory BARs, and do DMA.
-    pub fn enable(&self, f: Function) {
+    /// Let the function answer at its memory BARs. This does not enable DMA.
+    pub fn enable_memory(&self, f: Function) {
+        let command = self.read_u16(f, COMMAND);
+        self.write_u16(f, COMMAND, command | COMMAND_MEMORY);
+    }
+
+    /// Allow the function to issue DMA transactions.
+    ///
+    /// # Safety
+    /// The caller must ensure this device is trusted to access all memory reachable by its
+    /// DMA addresses, or that an enabled IOMMU domain restricts it to owned mapped buffers.
+    pub unsafe fn enable_bus_master(&self, f: Function) {
         let command = self.read_u16(f, COMMAND);
         self.write_u16(f, COMMAND, command | COMMAND_MEMORY | COMMAND_BUS_MASTER);
     }
@@ -234,6 +244,15 @@ mod tests {
         let mut space = Space::new();
         space.set_u32(BAR0 + 4 * 6, 0xfe00_0000); // the CardBus CIS pointer
         assert_eq!(space.ecam().bar(F, 6), None);
+    }
+
+    #[test]
+    fn enabling_memory_does_not_enable_dma() {
+        let space = Space::new();
+        space.ecam().enable_memory(F);
+        let command = space.ecam().read_u16(F, COMMAND);
+        assert_ne!(command & COMMAND_MEMORY, 0);
+        assert_eq!(command & COMMAND_BUS_MASTER, 0);
     }
 
     #[test]
