@@ -1,0 +1,13 @@
+[package]
+name = "green-tea-dma"
+description = "Fail-closed DMA domain and buffer ownership contracts."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+[dependencies]
+green-tea-memory = { path = "../../green-tea-memory" }
