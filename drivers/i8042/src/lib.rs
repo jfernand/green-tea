@@ -13,6 +13,13 @@ pub struct Decoder {
     extended: bool,
 }
 
+/// A byte read from the shared controller output buffer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RawInput {
+    pub code: u8,
+    pub auxiliary: bool,
+}
+
 const RELEASE: u8 = 0x80;
 const EXTENDED: u8 = 0xe0;
 const LEFT_SHIFT: u8 = 0x2a;
@@ -143,18 +150,31 @@ mod port {
         /// The next character typed, if one has arrived.
         pub fn getc(&mut self) -> Option<u8> {
             loop {
-                let status = inb(STATUS);
-                if status == 0xff || status & OUTPUT_FULL == 0 {
-                    return None; // 0xff: no controller on this machine
-                }
-                let code = inb(DATA);
-                if status & FROM_AUX != 0 {
-                    continue;
-                }
-                if let Some(c) = self.0.feed(code) {
+                let input = self.read_raw()?;
+                if let Some(c) = self.decode(input) {
                     return Some(c);
                 }
             }
+        }
+
+        /// Read and acknowledge one byte from the shared output buffer without decoding it.
+        /// The caller must handle auxiliary (mouse/touchpad) bytes separately.
+        pub fn read_raw(&mut self) -> Option<super::RawInput> {
+            let status = inb(STATUS);
+            if status == 0xff || status & OUTPUT_FULL == 0 {
+                return None;
+            }
+            Some(super::RawInput { code: inb(DATA), auxiliary: status & FROM_AUX != 0 })
+        }
+
+        /// Apply the shared scan-code decoder to one controller byte.
+        pub fn decode(&mut self, input: super::RawInput) -> Option<u8> {
+            if input.auxiliary { None } else { self.0.feed(input.code) }
+        }
+
+        /// Read one controller byte and decode it, if it is keyboard input.
+        pub fn read_and_decode(&mut self) -> Option<u8> {
+            self.read_raw().and_then(|input| self.decode(input))
         }
     }
 }
