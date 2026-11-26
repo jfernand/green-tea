@@ -1,0 +1,22 @@
+[package]
+name = "green-tea-rt-bare"
+description = "Preallocated bare-metal runtime for the fixed-priority RT policy."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+[features]
+default = ["green"]
+green = ["green-tea-bare/green"]
+black = ["green-tea-bare/black"]
+white = ["green-tea-bare/white", "green-tea-bare/rt-runtime"]
+board-pc = ["green-tea-bare/board-pc"]
+
+[dependencies]
+green-tea-arch = { path = "../../green-tea-arch" }
+green-tea-bare = { path = "../../green-tea-bare", default-features = false }
+green-tea-rt = { path = "../rt" }
