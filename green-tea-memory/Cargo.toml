@@ -1,0 +1,13 @@
+[package]
+name = "green-tea-memory"
+description = "Checked physical-region ownership and access contracts for Green Tea backends."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+[dependencies]
+green-tea-capabilities = { path = "../green-tea-capabilities", default-features = false }

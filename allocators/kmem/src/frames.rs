@@ -14,6 +14,7 @@
 //! allocated is refused.
 
 use crate::{PAGE, PageSource};
+use green_tea_memory::PhysicalRange;
 
 /// How many orders there are: blocks of 1 page up to `2^MAX_ORDER`.
 pub const ORDERS: usize = 11;
@@ -111,7 +112,9 @@ impl<'a> Frames<'a> {
         assert!(table.len() < NONE as usize && reserved <= table.len(), "a table too large");
         assert!(table.is_empty() || base != 0, "frame 0 must have a nonzero address");
         let bytes = table.len().checked_mul(PAGE).expect("frame range overflows");
-        assert!(base.checked_add(bytes).is_some(), "frame range overflows");
+        if bytes != 0 {
+            PhysicalRange::new(base, bytes, PAGE).expect("frame range overflows");
+        }
         table.fill(Frame::NEW);
         let pages = table.len();
         let mut frames = Frames {
@@ -229,6 +232,15 @@ impl<'a> Frames<'a> {
         self.base
     }
 
+    /// The physical range managed by this allocator, or `None` when it has no frames.
+    pub fn range(&self) -> Option<PhysicalRange> {
+        let bytes = self.table.len().checked_mul(PAGE)?;
+        if bytes == 0 {
+            return None;
+        }
+        Some(PhysicalRange::new(self.base, bytes, PAGE).expect("frame range was checked at construction"))
+    }
+
     /// How many pages the allocator manages, the reserved ones included.
     pub fn pages(&self) -> usize {
         self.table.len()
@@ -338,6 +350,7 @@ mod tests {
     extern crate std;
     use super::{Frame, Frames, FreeError, MAX_ORDER, ORDERS};
     use crate::PAGE;
+    use green_tea_memory::PhysicalRange;
     use std::vec;
     use std::vec::Vec;
 
@@ -385,6 +398,13 @@ mod tests {
         // A region that isn't a power of two: 1,000 pages is 512 + 256 + 128 + 64 + 32 + 8.
         with_frames(1000, 0, |frames| {
             assert_eq!(frames.free_blocks(), by_order(&[(3, 1), (5, 1), (6, 1), (7, 1), (8, 1), (9, 1)]));
+        });
+    }
+
+    #[test]
+    fn reports_its_checked_physical_range() {
+        with_frames(32, 4, |frames| {
+            assert_eq!(frames.range(), Some(PhysicalRange::new(BASE, 32 * PAGE, PAGE).unwrap()));
         });
     }
 

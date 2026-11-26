@@ -1,0 +1,16 @@
+[package]
+name = "green-tea-capabilities"
+description = "Build-time Tea profiles and explicit platform capability contracts."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+[features]
+default = ["green"]
+green = []
+black = []
+white = []

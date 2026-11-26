@@ -9,5 +9,8 @@ repository.workspace = true
 homepage.workspace = true
 publish.workspace = true
 
-# no_std and dependency-free, so the bare-metal kernels can use it, and its tests run on
-# the host: cargo test -p green-tea-kmem
+# no_std, so the bare-metal kernels can use it, and its tests run on the host:
+# cargo test -p green-tea-kmem
+
+[dependencies]
+green-tea-memory = { path = "../../green-tea-memory" }
