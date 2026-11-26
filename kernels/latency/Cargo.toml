@@ -1,0 +1,25 @@
+[package]
+name = "green-tea-latency"
+description = "A bare-metal x86_64 timer latency measurement image."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "green-tea-latency"
+test = false
+bench = false
+
+[features]
+default = ["green"]
+green = ["green-tea-bare/green"]
+black = ["green-tea-bare/black"]
+white = ["green-tea-bare/white"]
+board-pc = ["green-tea-bare/board-pc"]
+
+[dependencies]
+green-tea-bare = { path = "../../green-tea-bare", default-features = false }
