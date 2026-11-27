@@ -5,7 +5,7 @@
 `green-tea-shard` allocates from several CPUs with no lock, after mimalloc. An `Arena` is a region cut into *pages* of 16 KiB. A page in use belongs to one `Heap`, holds blocks of one size class, and keeps its free blocks on three lists, one of which any CPU may push to with a compare-and-swap. The crate also holds a lock-free `Stack` of page indexes, and a `Queue` after snmalloc's message queue, built to be measured beside it.
 
 #spec(
-  ("Source", [#repo("green-tea-shard/src/"), 3 files, 763 lines without their tests]),
+  ("Source", [#repo("allocators/shard/src/"), 3 files, 763 lines without their tests]),
   ("Depends on", [`green-tea-fit` (`FreeError`), `green-tea-smp` (the size classes); `no_std`]),
   ("Used by", [`green-tea-coop` (the `shard` kernel), `green-tea-measure`]),
   ("Tests", [15 host tests on real threads, the `shard` kernel]),
@@ -45,7 +45,7 @@ The crate's atomics, what each operation orders, and why. In each row the synchr
 
 The headers of all pages are together at the start of the arena's region, and each is two cache lines:
 
-#srcfile("green-tea-shard/src/lib.rs", lines: ((48, 84),))[```rust
+#srcfile("allocators/shard/src/lib.rs", lines: ((48, 84),))[```rust
 #[repr(align(64))]
 struct Local {
     /// The blocks the owner allocates from, linked through their first words. 0 ends it.
@@ -97,7 +97,7 @@ Separating `free` from `local_free` is mimalloc's design. Allocation drains one 
 
 The block's page comes from its address, by arithmetic on `PAGE`, which is why `Heap::free` needs no size:
 
-#srcfile("green-tea-shard/src/lib.rs", lines: ((179, 182),))[```rust
+#srcfile("allocators/shard/src/lib.rs", lines: ((179, 182),))[```rust
 fn page_of(&self, addr: usize) -> Option<usize> {
     let index = addr.checked_sub(self.base)? >> SHIFT;
     (self.first..self.pages).contains(&index).then_some(index)
@@ -108,7 +108,7 @@ fn page_of(&self, addr: usize) -> Option<usize> {
 
 `Arena::new` takes a region, aligns it to pages, reserves the first `first` pages for headers and pushes the others on the stack of unused pages, top first, so the lowest is popped first:
 
-#srcfile("green-tea-shard/src/lib.rs", lines: ((134, 156),))[```rust
+#srcfile("allocators/shard/src/lib.rs", lines: ((134, 156),))[```rust
 let base = start.next_multiple_of(PAGE);
 let pages = (start + len).saturating_sub(base) >> SHIFT;
 let first = (pages * size_of::<Page>()).div_ceil(PAGE);
@@ -144,7 +144,7 @@ A page changes hands through two private methods, `claim` and `give_back`, which
 
 The fast path touches the first page of the class's list, and nothing another CPU writes:
 
-#srcfile("green-tea-shard/src/lib.rs", lines: ((267, 284),))[```rust
+#srcfile("allocators/shard/src/lib.rs", lines: ((267, 284),))[```rust
 pub fn allocate(&mut self, size: usize, align: usize) -> Option<usize> {
     let Some(class) = class(size, align) else {
         self.stats.refused += 1;
@@ -167,7 +167,7 @@ pub fn allocate(&mut self, size: usize, align: usize) -> Option<usize> {
 
 When `free` is empty, `generic` collects the class's pages in turn until one has a block, and moves that page to the front. If none has, it claims a new page:
 
-#srcfile("green-tea-shard/src/lib.rs", lines: ((288, 310),))[```rust
+#srcfile("allocators/shard/src/lib.rs", lines: ((288, 310),))[```rust
 fn generic(&mut self, class: usize) -> Option<usize> {
     self.stats.generic += 1;
     let mut at = self.lists[class] as usize;
@@ -195,7 +195,7 @@ fn generic(&mut self, class: usize) -> Option<usize> {
 
 `collect` takes the whole of `thread_free` with one swap and adds it to `local_free`. If `free` is empty, `local_free` becomes `free`:
 
-#srcfile("green-tea-shard/src/lib.rs", lines: ((322, 342),), notes: ((326, [A `Relaxed` load first: while there is nothing to take, the owner never writes the shared line.]), (327, [One swap takes every block, however many there are. `AcqRel` because the owner then follows their links.]), (335, [`used` counts a block as out until it is collected, so a page with blocks waiting on `thread_free` can't be given back.]),))[```rust
+#srcfile("allocators/shard/src/lib.rs", lines: ((322, 342),), notes: ((326, [A `Relaxed` load first: while there is nothing to take, the owner never writes the shared line.]), (327, [One swap takes every block, however many there are. `AcqRel` because the owner then follows their links.]), (335, [`used` counts a block as out until it is collected, so a page with blocks waiting on `thread_free` can't be given back.]),))[```rust
 fn collect(&mut self, index: usize) {
     let page = self.arena.page(index);
     // The load is a read of a line the owner may still have. The swap is a write, and
@@ -225,7 +225,7 @@ fn collect(&mut self, index: usize) {
 
 `free` is `free_with`, with an empty hook. `free_with` calls `between` after it has read the head and linked the block, which lets a test do at that moment what another CPU might:
 
-#srcfile("green-tea-shard/src/lib.rs", lines: ((407, 447),), notes: ((411, [An unowned page holds nothing allocated.]), (417, [The owner's path: no atomic write.]), (427, [An empty page goes back, unless that leaves fewer than `retain` of the class.]), (434, [The comment is the safety argument. The block is still counted in `used`, so the page can't change owner before the push completes.]), (439, [The push. A failed CAS gives the current head, and the block is relinked to it.]),))[```rust
+#srcfile("allocators/shard/src/lib.rs", lines: ((407, 447),), notes: ((411, [An unowned page holds nothing allocated.]), (417, [The owner's path: no atomic write.]), (427, [An empty page goes back, unless that leaves fewer than `retain` of the class.]), (434, [The comment is the safety argument. The block is still counted in `used`, so the page can't change owner before the push completes.]), (439, [The push. A failed CAS gives the current head, and the block is relinked to it.]),))[```rust
 pub unsafe fn free_with(&mut self, addr: usize, mut between: impl FnMut()) -> Result<(), FreeError> {
     let index = self.arena.page_of(addr).ok_or(FreeError::NotABlock)?;
     let page = self.arena.page(index);
@@ -282,7 +282,7 @@ The rest of the interface reports. `pages` is how many the heap owns, `used` how
 
 The tag solves the *ABA problem*. A pop reads the head and the top entry's link. Before its compare-and-swap, other CPUs can pop that entry, pop others, and push the first one back. The index on top is what the pop saw, and the link it read is stale. Every pop adds one to the tag, so a head that has been popped from no longer compares equal:
 
-#srcfile("green-tea-shard/src/stack.rs", lines: ((77, 95),), notes: ((86, [The table is never freed, so this read is always safe, and may be stale.]), (87, [`between` is a test hook, as in `free_with`.]), (88, [The new head: the tag plus one, and the link as the new top.]),))[```rust
+#srcfile("allocators/shard/src/stack.rs", lines: ((77, 95),), notes: ((86, [The table is never freed, so this read is always safe, and may be stale.]), (87, [`between` is a test hook, as in `free_with`.]), (88, [The new head: the tag plus one, and the link as the new top.]),))[```rust
 pub fn pop_with<L: Links + ?Sized>(&self, links: &L, mut between: impl FnMut()) -> Option<usize> {
     let mut head = self.head.load(Ordering::Acquire);
     loop {
@@ -310,7 +310,7 @@ A push doesn't change the tag. It can't invalidate anyone's read: for a head to 
 
 `Queue` is not part of the allocator. It is the queue snmalloc sends freed blocks home on: many CPUs add, one takes out. It adds a whole chain with one atomic exchange, and nothing is compared or retried:
 
-#srcfile("green-tea-shard/src/queue.rs", lines: ((65, 70),), notes: ((67, [The chain is now in the queue, but can't be reached from the front.]), (68, [A test hook, at the moment that matters.]), (69, [The chain is connected.]),))[```rust
+#srcfile("allocators/shard/src/queue.rs", lines: ((65, 70),), notes: ((67, [The chain is now in the queue, but can't be reached from the front.]), (68, [A test hook, at the moment that matters.]), (69, [The chain is connected.]),))[```rust
 pub unsafe fn add_with(&self, first: usize, last: usize, between: impl FnOnce()) {
     link(last).store(0, Ordering::Relaxed);
     let before = self.back.swap(last, Ordering::AcqRel);
@@ -321,7 +321,7 @@ pub unsafe fn add_with(&self, first: usize, last: usize, between: impl FnOnce())
 
 Between a sender's swap and its write, its chain and everything added after it are unreachable from the front. The owner sees them when the write is made. So a stalled sender holds up all the senders behind it. `add` never retries, and `take` can report nothing while blocks are in the queue. `take` uses no atomic exchange:
 
-#srcfile("green-tea-shard/src/queue.rs", lines: ((76, 84),))[```rust
+#srcfile("allocators/shard/src/queue.rs", lines: ((76, 84),))[```rust
 pub unsafe fn take(&self) -> Option<usize> {
     let oldest = self.front.get();
     let after = link(oldest).load(Ordering::Acquire);
@@ -400,8 +400,8 @@ All 38,400 blocks went home through `thread_free`, 135 CAS attempts failed, and 
 One owner per page, and a list for everyone else. @crate-smr deals with freeing what another thread may still be reading.
 // chapter-status:begin
 // stage: research-done
-// revision: 2
-// body: e078fe7f498b
+// revision: 3
+// body: 1d0b80bc9b1f
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

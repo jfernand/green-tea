@@ -175,29 +175,39 @@
 
 // Data table — black header, mono uppercase heads, steel hairlines
 #let dtable(columns: auto, align: auto, head, ..rows) = {
-  block(width: 100%, above: 13pt, below: 6pt)[
-    #table(
-      columns: columns,
-      align: align,
-      inset: (x: 7pt, y: 5.5pt),
-      stroke: (x, y) => (
-        top: if y == 0 { pv(none, 1.5pt + fg-primary) } else if y == 1 { 1.2pt + fg-primary }
-             else { 0.4pt + border-default },
-        bottom: none, left: none, right: none,
-      ),
-      fill: (x, y) => if y == 0 and not for-print { c-black } else { none },
-      // `set text` inside the header too, so that a header cell containing
-      // math is shrunk to label size rather than rendering at body size.
-      table.header(
-        ..head.map(h => {
-          set text(size: 6.2pt)
-          show math.equation: set text(size: 6.6pt, fill: pv(brand-primary, c-ink))
-          label(fill: pv(brand-primary, c-ink), size: 6.2pt, h)
-        })
-      ),
-      ..rows.pos().flatten().map(c => text(size: 8.3pt)[#c])
-    )
-  ]
+  let cells = rows.pos().flatten()
+  let make(columns) = table(
+    columns: columns,
+    align: align,
+    inset: (x: 7pt, y: 5.5pt),
+    stroke: (x, y) => (
+      top: if y == 0 { pv(none, 1.5pt + fg-primary) } else if y == 1 { 1.2pt + fg-primary }
+           else { 0.4pt + border-default },
+      bottom: none, left: none, right: none,
+    ),
+    fill: (x, y) => if y == 0 and not for-print { c-black } else { none },
+    // `set text` inside the header too, so that a header cell containing
+    // math is shrunk to label size rather than rendering at body size.
+    table.header(
+      ..head.map(h => {
+        set text(size: 6.2pt)
+        show math.equation: set text(size: 6.6pt, fill: pv(brand-primary, c-ink))
+        label(fill: pv(brand-primary, c-ink), size: 6.2pt, h)
+      })
+    ),
+    ..cells.map(c => text(size: 8.3pt)[#c])
+  )
+  if not for-print or type(columns) != array {
+    return block(width: 100%, above: 13pt, below: 6pt)[#make(columns)]
+  }
+  // Print's measure is narrower than A4's. An `auto` column whose widest cell would take
+  // more than 40% of it becomes a share of the width instead, so its cells wrap.
+  block(width: 100%, above: 13pt, below: 6pt, layout(size => {
+    let n = columns.len()
+    let widest(i) = calc.max(0pt, ..cells.enumerate().filter(((j, c)) => calc.rem(j, n) == i)
+      .map(((j, c)) => measure(text(size: 8.3pt)[#c]).width + 14pt))
+    make(columns.enumerate().map(((i, c)) => if c == auto and widest(i) > 0.4 * size.width { 1fr } else { c }))
+  }))
 }
 
 // Numbered equation block

@@ -5,7 +5,7 @@
 `green-tea-v1` runs cooperative tasks on one thread, on x86_64 under Linux. A task is a closure with a 32 KiB stack of its own, a function in assembly switches between stacks, and a round-robin loop decides who runs next. All its state is in two global variables, which is the main difference from @crate-v2.
 
 #spec(
-  ("Source", [#repo("green-tea-v1/src/"), 186 lines of Rust without their tests, 32 of assembly, and two demos]),
+  ("Source", [#repo("green-tea-v1/src/"), 201 lines of Rust without their tests, 32 of assembly, and two demos]),
   ("Depends on", [`libc`, `tracing`, `tracing-subscriber`; `test-log` for the tests]),
   ("Used by", [nothing; it is kept to compare with `green-tea-v2`]),
   ("Tests", [6 host tests, the `coop-2-v1` and `coop-n-v1` binaries]),
@@ -14,8 +14,8 @@
 #dtable(columns: (auto, 1fr), ("Item", "What it is"),
   [`context::Context`], [The seven registers a suspended task keeps: `rsp`, `r15`, `r14`, `r13`, `r12`, `rbx`, `rbp`],
   [`context::swap_context`], [Assembly: saves the current registers into `from`, loads those in `to`, returns on the new stack],
-  [`context::Task`], [A stack, a `Context`, the closure, and a public `done` flag],
-  [`context::spawn`], [Builds a boxed `Task` whose first switch starts the closure],
+  [`context::Task`], [A stack, a `Context`, the closure, and a `done` flag, read with `is_done`. It is `!Unpin`],
+  [`context::spawn`], [Builds a pinned, boxed `Task` whose first switch starts the closure],
   [`context::yield_now`], [Switches from the current task to the scheduler. Panics outside a task],
   [`context::run`], [Runs a set of tasks round-robin until all are done. A task may call it],
   [`context::MAIN`], [`static mut`: the scheduler's saved registers],
@@ -78,33 +78,34 @@ Both system calls are checked, and a failure panics with the error from the OS. 
 
 A task that has never run has no saved registers, so `spawn` writes the ones its first switch will load:
 
-#srcfile("green-tea-v1/src/context.rs", lines: ((55, 58), (60, 79),), notes: ((57, [24 bytes below a 16-byte boundary, so the slot is at an address ≡ 8 (mod 16).]), (70, [The slot holds the address `ret` will jump to.]), (75, [`r15` carries the task's address. The `Box` keeps it stable while the handle moves.]), (77, [`r14` carries the function the trampoline will call.]),))[```rust
+#srcfile("green-tea-v1/src/context.rs", lines: ((63, 66), (75, 93),), notes: ((65, [24 bytes below a 16-byte boundary, so the slot is at an address ≡ 8 (mod 16).]), (77, [`Box::pin`: the task never moves, so the addresses written below stay valid.]), (87, [The slot holds the address `ret` will jump to.]), (89, [`r15` carries the task's address.]), (90, [`r14` carries the function the trampoline will call.]),))[```rust
 fn initial_sp(stack: &Stack) -> *mut u64 {
     let top = (stack.top() as usize) & !0xF;
     (top - 24) as *mut u64
 }
 // …
-pub fn spawn(func: impl FnOnce() + 'static) -> Box<Task> {
+pub fn spawn(func: impl FnOnce() + 'static) -> Pin<Box<Task>> {
     let stack = Stack::new(32 * 1024);
-    let mut task = Box::new(Task {
+    let mut task = Box::pin(Task {
         stack,
         context: Context::default(),
         func: Some(Box::new(func)),
         done: false,
+        _pin: PhantomPinned,
     });
+    let task_ptr = unsafe { task.as_mut().get_unchecked_mut() as *mut Task };
     unsafe {
-        let sp = initial_sp(&task.stack);
+        let sp = initial_sp(&(*task_ptr).stack);
         sp.write(bootstrap_entry as *const () as usize as u64);
-        task.context
-            .rsp = sp as u64;
+        (*task_ptr).context.rsp = sp as u64;
+        (*task_ptr).context.r15 = task_ptr as usize as u64;
+        (*task_ptr).context.r14 = task_entry as *const () as usize as u64;
     }
-    task.context
-        .r15 = &raw mut *task as usize as u64; // the first switch "returns" here
-    task.context
-        .r14 = task_entry as *const () as usize as u64; // and then jumps here
     task
 }
 ```]
+
+The task's own address is in its saved registers, so the task must never move. `Task` holds a `PhantomPinned`, which makes it `!Unpin`, and `spawn` returns it as `Pin<Box<Task>>`. Safe code can then move the handle but not the task. A `compile_fail` doc test on `spawn` checks that moving the task out of its box doesn't compile.
 
 The first `swap_context` into this task loads `rsp`, `r15` and `r14`, and its `ret` pops the slot and arrives in `bootstrap_entry`:
 
@@ -118,7 +119,7 @@ bootstrap_entry:
 
 `task_entry` is the only Rust frame at the bottom of every task:
 
-#srcfile("green-tea-v1/src/context.rs", lines: ((31, 44),), notes: ((39, [The scheduler reads this flag after the switch below.]), (40, [The task will never run again, so its registers are saved into a local and forgotten.]),))[```rust
+#srcfile("green-tea-v1/src/context.rs", lines: ((39, 52),), notes: ((47, [The scheduler reads this flag after the switch below.]), (48, [The task will never run again, so its registers are saved into a local and forgotten.]),))[```rust
 extern "C" fn task_entry(task: *mut Task) -> ! {
     unsafe {
         if let Some(func) = (*task)
@@ -139,7 +140,7 @@ extern "C" fn task_entry(task: *mut Task) -> ! {
 
 `yield_now` checks that a task is running, and always goes to `MAIN`:
 
-#srcfile("green-tea-v1/src/context.rs", lines: ((85, 88),))[```rust
+#srcfile("green-tea-v1/src/context.rs", lines: ((99, 102),))[```rust
 pub fn yield_now() {
     assert!(unsafe { !CURRENT.is_null() }, "yield_now called outside a task");
     unsafe { swap_context(&raw mut (*CURRENT).context, &raw const MAIN) };
@@ -148,19 +149,20 @@ pub fn yield_now() {
 
 `run` holds the tasks in a `VecDeque`. It takes the one at the front, records it in `CURRENT`, and switches to it. Control comes back when the task yields or finishes. A finished task is dropped, which unmaps its stack; that is safe here because the code is on the thread's own stack by then. On entry `run` keeps the `MAIN` and `CURRENT` it found, and on the way out it puts them back, so a task can call `run` and yield afterwards.
 
-#srcfile("green-tea-v1/src/context.rs", lines: ((94, 110),), notes: ((95, [What an enclosing `run` needs back, kept on this stack.]), (102, [The scheduler's registers go into `MAIN`, where `yield_now` and `task_entry` find them.]), (103, [Back in the scheduler, which is the outer task, or no task at all.]), (109, [The outer scheduler's registers, for the outer task's next `yield_now`.]),))[```rust
-pub fn run(tasks: impl IntoIterator<Item = Box<Task>>) {
+#srcfile("green-tea-v1/src/context.rs", lines: ((108, 125),), notes: ((109, [What an enclosing `run` needs back, kept on this stack.]), (114, [The task's address, which the pin keeps fixed.]), (117, [The scheduler's registers go into `MAIN`, where `yield_now` and `task_entry` find them.]), (118, [Back in the scheduler, which is the outer task, or no task at all.]), (124, [The outer scheduler's registers, for the outer task's next `yield_now`.]),))[```rust
+pub fn run(tasks: impl IntoIterator<Item = Pin<Box<Task>>>) {
     let (outer_main, outer_current) = unsafe { ((&raw const MAIN).read(), CURRENT) };
-    let mut queue: VecDeque<Box<Task>> = tasks
+    let mut queue: VecDeque<Pin<Box<Task>>> = tasks
         .into_iter()
         .collect();
     while let Some(mut task) = queue.pop_front() {
+        let task_ptr = unsafe { task.as_mut().get_unchecked_mut() as *mut Task };
         unsafe {
-            CURRENT = &raw mut *task;
-            swap_context(&raw mut MAIN, &raw const task.context);
+            CURRENT = task_ptr;
+            swap_context(&raw mut MAIN, &raw const (*task_ptr).context);
             CURRENT = outer_current;
         }
-        if !task.done {
+        if !task.as_ref().is_done() {
             queue.push_back(task);
         }
     }
@@ -211,14 +213,14 @@ test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 - It builds only for x86_64: `lib.rs` includes `context.s` with no `cfg`, and the assembler rejects it on other targets.
 - `MAIN` and `CURRENT` are `static mut`, so two threads can't run tasks at the same time.
 - A panic in a task aborts the process, with exit status 134: `bootstrap_entry` has no unwind information, so the search for a handler reaches the end of the stack. @crate-v2 carries the panic back to the resumer.
-- A task can't spawn another: `spawn` returns a `Box<Task>`, and the queue is a local of `run`.
+- A task can't spawn another: `spawn` returns a `Pin<Box<Task>>`, and the queue is a local of `run`.
 - A task dropped before it finishes doesn't run the destructors of the locals on its stack.
 
 Fifteen instructions and a queue. @crate-arch takes the switch to three architectures.
 // chapter-status:begin
 // stage: research-done
-// revision: 2
-// body: e4bf03048a99
+// revision: 3
+// body: d6d43900a1b8
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

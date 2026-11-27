@@ -8,5 +8,5 @@ type `help` for the commands
 > irq
 keyboard 0, mouse 0, serial 0, backup timer 0, halts 0
 > irq test
-PASS: 2 serial interrupts woke the shell from 98 halts
+PASS: 7 serial interrupts woke the shell from 81 halts
 > 

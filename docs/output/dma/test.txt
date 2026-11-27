@@ -1,0 +1,8 @@
+test tests::device_ids_validate_pci_geometry ... ok
+test tests::failed_revoke_keeps_the_owned_mapping_for_retry ... ok
+test tests::mappings_can_be_revoked_only_after_quiescence ... ok
+test tests::mappings_require_page_geometry_and_nonempty_permissions ... ok
+test tests::overlaps_and_capacity_are_rejected_before_backend_mapping ... ok
+test tests::teardown_quiesces_revokes_and_detaches ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out

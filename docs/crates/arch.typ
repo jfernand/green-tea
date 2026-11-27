@@ -357,7 +357,7 @@ ok    aarch64-apple-darwin         release build lib
 ```
 ]
 
-The kernels call the same `Context::new` and `swap_context` (@crate-bare).
+The kernels' schedulers call the same `Context::new` and `swap_context` (@crate-scheduler-coop, @crate-rt-bare).
 
 == Limits
 
@@ -370,8 +370,8 @@ The kernels call the same `Context::new` and `swap_context` (@crate-bare).
 Three register sets, one contract. @crate-v2 builds tasks on it.
 // chapter-status:begin
 // stage: research-done
-// revision: 2
-// body: c4d72ee1fa32
+// revision: 3
+// body: e4bea2c62c93
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

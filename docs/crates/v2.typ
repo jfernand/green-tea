@@ -7,7 +7,7 @@
 #spec(
   ("Source", [#repo("green-tea-v2/src/"), 278 lines without their tests, and two demos]),
   ("Depends on", [`green-tea-arch`, `libc`, `tracing`, `tracing-subscriber`; `test-log` for the tests]),
-  ("Used by", [nothing links it; `green-tea-bare` ports its `Task` and scheduler (@crate-bare)]),
+  ("Used by", [nothing links it; `green-tea-scheduler-coop` ports its `Task` and scheduler to bare metal (@crate-scheduler-coop)]),
   ("Tests", [18 host tests, run on three architectures in two profiles by `cargo xtask test`; the `coop-2-v2` and `coop-n-v2` binaries]),
 )
 
@@ -315,11 +315,11 @@ exit status 101
 - `run` offers no way to wait, join or pass a value between tasks.
 - On aarch64, the floating-point status register `fpsr` is shared between tasks (@crate-arch).
 
-One switch, a coroutine and a queue. @crate-bare ports them to a machine with no operating system.
+One switch, a coroutine and a queue. @crate-scheduler-coop ports them to a machine with no operating system.
 // chapter-status:begin
 // stage: research-done
-// revision: 3
-// body: bc6683f5d81d
+// revision: 4
+// body: b44cb7902db0
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

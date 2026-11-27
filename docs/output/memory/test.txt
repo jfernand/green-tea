@@ -1,0 +1,9 @@
+test tests::ranges_check_alignment_bounds_and_overflow ... ok
+test tests::ranges_validate_containment ... ok
+test tests::resident_identity_regions_need_no_protection_backend ... ok
+test tests::subranges_cannot_escape_the_owned_range ... ok
+test tests::supported_requests_are_checked_against_exact_guarantees ... ok
+test tests::unavailable_mapping_and_permission_requests_fail_explicitly ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test green-tea-memory/src/lib.rs - OwnedRange (line 79) - compile fail ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out

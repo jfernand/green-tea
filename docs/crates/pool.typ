@@ -5,7 +5,7 @@
 A *pool* allocates blocks of one size from a region cut into equal *slots*, and its only state is which slots are free. `green-tea-pool` keeps that state in two ways behind one trait: `Bitmap`, one bit per slot, held apart from the slots, and `FreeList`, a linked list threaded through the free slots themselves. The kernels' task stacks come from a `FreeList`.
 
 #spec(
-  ("Source", [#repo("green-tea-pool/src/lib.rs"), 159 lines without its tests]),
+  ("Source", [#repo("allocators/pool/src/lib.rs"), 179 lines without its tests]),
   ("Depends on", [nothing; `no_std`]),
   ("Used by", [`green-tea-bare` (the `stack` module), `green-tea-measure`]),
   ("Tests", [9 host tests, the `interface` example, the `pool` kernel]),
@@ -13,7 +13,7 @@ A *pool* allocates blocks of one size from a region cut into equal *slots*, and 
 
 == The `Pool` trait
 
-#srcfile("green-tea-pool/src/lib.rs", lines: ((24, 24), (36, 36), (39, 39), (46, 46), (49, 50),))[```rust
+#srcfile("allocators/pool/src/lib.rs", lines: ((24, 24), (36, 36), (39, 39), (46, 46), (49, 50),))[```rust
 pub trait Pool: Sized {
 // …
     unsafe fn new(base: usize, slot_size: usize, slots: usize, link_at: usize) -> Self;
@@ -30,11 +30,13 @@ pub trait Pool: Sized {
 
 `give` is `unsafe` too, and returns a `GiveError`, either `NotASlot` or `NotTaken`. The contract says a pool reports the mistakes it can detect, and need not detect any. The two implementations sit at opposite ends of that sentence.
 
+Neither pool is `Clone` or `Copy`. A copy would be a second record of the same free slots, and the two copies could hand out one slot twice. A `compile_fail` doc test on `Bitmap` checks that using a pool after moving it doesn't compile.
+
 == `Bitmap`
 
 `Bitmap` holds up to 128 slots, one bit each in a `u128`, with 1 meaning free. `take` finds the lowest set bit:
 
-#srcfile("green-tea-pool/src/lib.rs", lines: ((73, 80),))[```rust
+#srcfile("allocators/pool/src/lib.rs", lines: ((85, 92),))[```rust
 fn take(&mut self) -> Option<usize> {
     if self.free == 0 {
         return None;
@@ -47,8 +49,11 @@ fn take(&mut self) -> Option<usize> {
 
 `give` works the index back out of the address, and so it can refuse an address that isn't the start of a slot, or a slot whose bit is already set:
 
-#srcfile("green-tea-pool/src/lib.rs", lines: ((83, 94),))[```rust
+#srcfile("allocators/pool/src/lib.rs", lines: ((95, 109),), notes: ((96, [A pool of no slots owns no addresses at all.]),))[```rust
 unsafe fn give(&mut self, slot: usize) -> Result<(), GiveError> {
+    if self.slots == 0 {
+        return Err(GiveError::NotASlot);
+    }
     let offset = slot.checked_sub(self.base).ok_or(GiveError::NotASlot)?;
     let index = offset / self.slot_size;
     if index >= self.slots || !offset.is_multiple_of(self.slot_size) {
@@ -68,7 +73,7 @@ The bitmap never touches the slots' memory. A program that writes to a free slot
 
 `FreeList` holds any number of slots, and all its state fits in seven words: the region's shape, the list's `head`, a counter `fresh` and the number free. A free slot's word at `link_at` holds the address of the next free slot, so the list is *intrusive*.
 
-#srcfile("green-tea-pool/src/lib.rs", lines: ((131, 145),), notes: ((137, [`fresh` counts the slots that were never taken. They aren't on the list, so `new` doesn't have to write a link into every slot, and making a pool touches none of its slots.]),))[```rust
+#srcfile("allocators/pool/src/lib.rs", lines: ((151, 165),), notes: ((157, [`fresh` counts the slots that were never taken. They aren't on the list, so `new` doesn't have to write a link into every slot, and making a pool touches none of its slots.]),))[```rust
 fn take(&mut self) -> Option<usize> {
     let slot = if self.head != 0 {
         let slot = self.head;
@@ -88,7 +93,7 @@ fn take(&mut self) -> Option<usize> {
 
 `give` is three lines, and checks nothing:
 
-#srcfile("green-tea-pool/src/lib.rs", lines: ((148, 153),))[```rust
+#srcfile("allocators/pool/src/lib.rs", lines: ((168, 173),))[```rust
 unsafe fn give(&mut self, slot: usize) -> Result<(), GiveError> {
     unsafe { ((slot + self.link_at) as *mut usize).write(self.head) };
     self.head = slot;
@@ -140,7 +145,7 @@ All 1,000 tasks had their locals at the same address, because each reused the st
 
 == Limits
 
-- `Bitmap` panics on more than 128 slots.
+- `Bitmap` panics on more than 128 slots. Both pools' `new` panic if the slots have no size, or if the region would run past the end of the address space.
 - `FreeList` can't tell a foreign address or a double give from a correct one.
 - Address 0 means an empty list, so a `FreeList` can't manage a region that starts at address 0.
 - Neither pool is thread-safe. The kernel's stack pool is used from the boot CPU only.
@@ -148,8 +153,8 @@ All 1,000 tasks had their locals at the same address, because each reused the st
 Two pools, and one difference: where the bookkeeping lives. @crate-fit drops the requirement that every block be the same size.
 // chapter-status:begin
 // stage: research-done
-// revision: 1
-// body: 25b781e1ffc8
+// revision: 2
+// body: 7871ab5ef4af
 // activity: 2026-11-22 | r1 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r1 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

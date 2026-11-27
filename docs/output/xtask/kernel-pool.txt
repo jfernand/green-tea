@@ -1,5 +1,5 @@
 === build green-tea-coop riscv64 debug
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.01s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s
 [pool-riscv64   ] green-tea-coop on riscv64
 [pool-riscv64   ] fw_cfg files:
 [pool-riscv64   ]   0x0020      0 bios-geometry

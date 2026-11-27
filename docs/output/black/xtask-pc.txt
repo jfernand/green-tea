@@ -1,0 +1,28 @@
+=== build green-tea-black x86_64 debug
+   Compiling green-tea-bare v0.1.0 (<work>/src/green-tea-bare)
+   Compiling green-tea-black v0.1.0 (<work>/src/kernels/black)
+   Compiling green-tea-scheduler-coop v0.1.0 (<work>/src/schedulers/coop)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.92s
+[protected-x86_64] green-tea-black on x86_64 (pc)
+[protected-x86_64] framebuffer: 1280x800 XRGB8888
+[protected-x86_64] user process: valid exit
+[protected-x86_64] user process: syscall validation
+[protected-x86_64] user process: kernel mapping denial
+[protected-x86_64] user process: port I/O denial
+[protected-x86_64] user process: sibling mapping denial
+[protected-x86_64] user keyboard: controller lease acquired
+[protected-x86_64] user keyboard: ungranted process denied
+[protected-x86_64] user keyboard: waiting for A scan code
+[protected-x86_64] sending PS/2 key A
+[protected-x86_64] user keyboard: decoded A, dropped scan codes 0
+[protected-x86_64] user driver fault contained; releasing controller lease
+[protected-x86_64] kernel keyboard: waiting for B
+[protected-x86_64] sending PS/2 key B
+[protected-x86_64] kernel keyboard fallback delivered B after lease cleanup
+[protected-x86_64] protected process checks completed; kernel task resumed after contained faults
+[protected-x86_64] kernel witness task continued after user faults
+[protected-x86_64] PASS: user exit, syscall checks, kernel/port/page isolation and fault cleanup
+
+=== summary
+ok    protected-x86_64 user exit, syscall checks, kernel/port/page isolation and fault cleanup
+serial logs: <work>/target/kernel

@@ -2,7 +2,7 @@
 
 = Every kernel <app-kernels>
 
-`cargo xtask kernel` runs 25 kernels, and a 26th on the `pc` board. Three binaries provide them: `green-tea-coop` selects a test through the fw_cfg file `opt/green-tea/test`, `green-tea-shell` is driven by what `xtask` types at its serial console, and `green-tea-preempt` has one behaviour. Each runs on all three architectures unless the table says otherwise, which makes 72 runs. `smp`, `shard` and `smr` get four CPUs and the rest get one.
+`cargo xtask kernel` runs 29 kernels, and a 30th on the `pc` board. Six binaries provide them: `green-tea-coop` selects a test through the fw_cfg file `opt/green-tea/test`, `green-tea-shell` is driven by what `xtask` types at its serial console, `green-tea-latency` reads its timer mode the same way, and `green-tea-preempt`, `green-tea-black` and `green-tea-rt-kernel` each have one behaviour. Each runs on all three architectures unless the table says otherwise, which makes 78 runs. `smp`, `shard` and `smr` get four CPUs and the rest get one.
 
 #dtable(columns: (auto, auto, 1fr), ("Kernel", "Binary", "What it checks"),
   [`coop`], [coop], [Tasks yield to each other, and the number of switches is as expected],
@@ -31,9 +31,13 @@
   [`gtt`], [shell], [A recording written as a trace file in both forms and read back],
   [`resident`], [shell], [The recording replayed on unmapped pages, counting pages touched. riscv64, x86_64],
   [`interrupts`], [shell], [Bytes at the serial port wake the halted shell through the IO APIC. `pc` only],
+  [`protected`], [black], [Ring-3 processes exit, have an unknown system call refused, and fault on kernel memory, a port and a sibling's page, while a kernel task carries on. On `pc`, the PS/2 keyboard is lent to a process and given back. x86_64],
+  [`rt`], [rt-kernel], [Fixed priorities, admission of a task set, a timed wakeup, and priority inheritance through a mutex],
+  [`latency`], [latency], [8192 timer interrupts at 1 ms, by APIC countdown, as a histogram of lateness. x86_64],
+  [`latency-deadline`], [latency], [The same, asking for TSC-deadline mode first and saying why it falls back. x86_64],
 )
 
-The whole suite, in release and headless, under the default limit of half the host's CPUs, passes all 72. The first lines of its summary:
+The whole suite, in release and headless, under the default limit of half the host's CPUs, passes 76 of the 78. `overflow` fails on riscv64 and x86_64: the kernel panics in `Global`'s borrow check after the overflow reaches the guard page. It passes in debug builds, which are what CI runs (@app-issues). The first lines of the summary:
 
 #output(title: "cargo xtask kernel --release --headless")[
 ```
@@ -41,12 +45,15 @@ The whole suite, in release and headless, under the default limit of half the ho
 ok    coop-riscv64    57 switches, as expected
 ok    coop-aarch64    57 switches, as expected
 ok    coop-x86_64     57 switches, as expected
+…
+FAIL  overflow-riscv64 kernel panicked: panicked at green-tea-bare/src/global.rs:73:9:
+FAIL  overflow-x86_64 kernel panicked: panicked at green-tea-bare/src/global.rs:73:9:
 ```
 ]
 
 == On the pc board
 
-`cargo xtask kernel --board pc` runs all 26 on x86_64, with `disk` on an NVMe drive. `smp`, `shard` and `smr` again get four CPUs. A test is named on the kernel's command line by GRUB, in place of the fw_cfg file, and the shell kernels get their input over a socket once the banner has appeared (@crate-xtask). All 26 pass, under QEMU with UEFI firmware. The first lines of the summary, in release and with one virtual CPU running at a time:
+`cargo xtask kernel --board pc` runs all 30 on x86_64, with `disk` on an NVMe drive. `smp`, `shard` and `smr` again get four CPUs. A test is named on the kernel's command line by GRUB, in place of the fw_cfg file, and the shell kernels get their input over a socket once the banner has appeared (@crate-xtask). 29 of the 30 pass, under QEMU with UEFI firmware, and `overflow` fails in release as it does on `q35`. The first lines of the summary, in release and with one virtual CPU running at a time:
 
 #output(title: "cargo xtask kernel --release --headless --board pc --jobs 1")[
 ```
@@ -55,11 +62,11 @@ ok    coop-x86_64     57 switches, as expected
 ```
 ]
 
-@crate-coop, @crate-preempt and @crate-shell describe each in detail.
+@crate-coop, @crate-preempt, @crate-shell, @crate-black, @crate-rt-kernel and @crate-latency describe each in detail.
 // chapter-status:begin
 // stage: research-done
-// revision: 4
-// body: 39b83381c276
+// revision: 5
+// body: 77488e09cfcc
 // activity: 2026-11-22 | r4 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r4 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

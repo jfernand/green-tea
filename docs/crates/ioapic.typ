@@ -63,7 +63,7 @@ The `interrupts` kernel (@bare-interrupts) boots the `pc` board in QEMU and type
 > irq
 keyboard 0, mouse 0, serial 0, backup timer 0, halts 0
 > irq test
-PASS: 2 serial interrupts woke the shell from 98 halts
+PASS: 7 serial interrupts woke the shell from 81 halts
 ```
 ]
 
@@ -77,8 +77,8 @@ PASS: 2 serial interrupts woke the shell from 98 halts
 Two registers, three writes, and a CPU that can sleep. @crate-i8042 is the first device to use it.
 // chapter-status:begin
 // stage: research-done
-// revision: 2
-// body: 0045c208b90f
+// revision: 3
+// body: 99c00d74e315
 // activity: 2026-11-22 | r1 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r1 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

@@ -5,7 +5,7 @@
 `green-tea-smp` makes an allocator usable from several CPUs at once. `SpinLock` is mutual exclusion with one atomic flag. `Cache` is one CPU's own stock of free blocks, by size class, which it allocates from and frees to without a lock. `Central` is what the caches share: the heap and a depot of spare batches, behind one `SpinLock`.
 
 #spec(
-  ("Source", [#repo("green-tea-smp/src/"), 3 files, 434 lines without their tests]),
+  ("Source", [#repo("allocators/smp/src/"), 3 files, 434 lines without their tests]),
   ("Depends on", [`green-tea-fit`; `no_std`]),
   ("Used by", [`green-tea-bare`, `green-tea-shard`, `green-tea-measure`]),
   ("Tests", [13 host tests on real threads, a doc test that must not compile, the `smp` kernel]),
@@ -35,7 +35,7 @@ A block's contents move between CPUs by the same route. A cache that frees a blo
 
 == `SpinLock`
 
-#srcfile("green-tea-smp/src/lock.rs", lines: ((30, 38), (41, 41), (56, 60),), notes: ((59, [A guard hands out the `T` as a `&mut T` would, so it is `Sync` only if `T` is.]),))[```rust
+#srcfile("allocators/smp/src/lock.rs", lines: ((30, 38), (41, 41), (56, 60),), notes: ((59, [A guard hands out the `T` as a `&mut T` would, so it is `Sync` only if `T` is.]),))[```rust
 pub struct SpinLock<T, R = Spin> {
     held: AtomicBool,
     /// Times the lock was taken. Written only by whoever holds the lock.
@@ -57,7 +57,7 @@ pub struct Guard<'a, T, R = Spin> {
 
 The lock is *test and test-and-set*. The first attempt is a swap. A CPU that loses waits by reading, which leaves the flag's cache line shared between the waiting CPUs, and swaps again only when it sees the flag clear:
 
-#srcfile("green-tea-smp/src/lock.rs", lines: ((75, 96),), notes: ((78, [The uncontended path: one atomic swap.]), (84, [`Relaxed` loads while waiting. A swap here would take the cache line exclusively on every iteration.]), (88, [Another waiter may win between the load and this swap, so it is in a loop.]), (94, [Not a `fetch_add`: the lock is held, so nobody else writes this count.]),))[```rust
+#srcfile("allocators/smp/src/lock.rs", lines: ((75, 96),), notes: ((78, [The uncontended path: one atomic swap.]), (84, [`Relaxed` loads while waiting. A swap here would take the cache line exclusively on every iteration.]), (88, [Another waiter may win between the load and this swap, so it is in a loop.]), (94, [Not a `fetch_add`: the lock is held, so nobody else writes this count.]),))[```rust
 pub fn lock(&self) -> Guard<'_, T, R> {
     // The swap writes `true` and returns what was there, in one step that no other
     // CPU can come between. If it returns `false`, the flag was clear and is now ours.
@@ -92,7 +92,7 @@ Between two looks, a waiter calls `R::relax(spins)`, from the `Relax` trait. `Sp
 
 `CLASSES` has twelve sizes from 16 to 1,024 bytes, and `class` picks the smallest that holds a request:
 
-#srcfile("green-tea-smp/src/cache.rs", lines: ((28, 28), (33, 38),))[```rust
+#srcfile("allocators/smp/src/cache.rs", lines: ((28, 28), (33, 38),))[```rust
 pub const CLASSES: [usize; 12] = [16, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024];
 // …
 pub fn class(size: usize, align: usize) -> Option<usize> {
@@ -109,7 +109,7 @@ A request larger than 1,024 bytes, or aligned to more than `ALIGN` (16), goes st
 
 A `Cache` has a list of free blocks for each class, threaded through the blocks' first words, as in @crate-pool. An allocation pops the first:
 
-#srcfile("green-tea-smp/src/cache.rs", lines: ((201, 223),), notes: ((215, [The lock is taken once, for a batch. The guard is a temporary and is dropped at the end of this statement.]), (219, [The heap had nothing, and `take` returned an empty list.]),))[```rust
+#srcfile("allocators/smp/src/cache.rs", lines: ((201, 223),), notes: ((215, [The lock is taken once, for a batch. The guard is a temporary and is dropped at the end of this statement.]), (219, [The heap had nothing, and `take` returned an empty list.]),))[```rust
 pub fn allocate<H: Heap, R: Relax>(
     &mut self,
     central: &SpinLock<Central<H>, R>,
@@ -137,7 +137,7 @@ pub fn allocate<H: Heap, R: Relax>(
 
 A free pushes the block at the front, so the block freed last, whose cache lines are the warmest, is the next one handed out. When a list grows past its *limit*, the first `batch` blocks are cut off *before* the lock is taken, and handed over in one acquisition:
 
-#srcfile("green-tea-smp/src/cache.rs", lines: ((243, 258),))[```rust
+#srcfile("allocators/smp/src/cache.rs", lines: ((243, 258),))[```rust
 let list = &mut self.lists[class];
 set_next(addr, list.head);
 (list.head, list.len) = (addr, list.len + 1);
@@ -162,7 +162,7 @@ So the lock is taken once per batch and not once per block. `flush_all` hands ev
 
 `Central` holds the heap and, for each class, a list of whole batches that caches handed back, in Bonwick's magazine-and-depot arrangement. A batch stays chained. Its first block has the next batch's address in its *second* word, because the first word is the chain inside the batch, so the smallest class, 16 bytes on a 64-bit machine, is exactly large enough:
 
-#srcfile("green-tea-smp/src/cache.rs", lines: ((99, 136),), notes: ((104, [A whole batch moves by changing two words: the depot's head and length.]), (111, [Only when the depot is empty does a refill go to the heap, and it may return fewer blocks than a batch.]), (129, [A partial chain, or a full depot, sends the blocks to the heap one at a time.]),))[```rust
+#srcfile("allocators/smp/src/cache.rs", lines: ((99, 136),), notes: ((104, [A whole batch moves by changing two words: the depot's head and length.]), (111, [Only when the depot is empty does a refill go to the heap, and it may return fewer blocks than a batch.]), (129, [A partial chain, or a full depot, sends the blocks to the heap one at a time.]),))[```rust
 fn take(&mut self, class: usize) -> List {
     self.stats.refills += 1;
     let depot = &mut self.depot[class];
@@ -261,8 +261,8 @@ The acquisitions are the same on every run. The waits and milliseconds are marke
 One flag, a list per class, and a lock taken 30 times less often. @crate-shard takes no lock at all.
 // chapter-status:begin
 // stage: research-done
-// revision: 2
-// body: d58a27d8dc70
+// revision: 3
+// body: 0e90bf0429d0
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

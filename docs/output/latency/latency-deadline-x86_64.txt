@@ -1,0 +1,17 @@
+green-tea-latency on x86_64
+timer capabilities: local_apic=true tsc_deadline=false invariant_tsc=false tsc_clock=false usable_tsc_deadline=false
+UNSUPPORTED: requested TscDeadline: the CPU does not support TSC-deadline mode; falling back to APIC countdown
+measurement: build=debug requested=TscDeadline active=ApicCountdown cpu=0 apic_id=0 samples=8192 interval_ms=1 clock_ticks_per_ms=100000 smi_counter=unavailable
+summary: samples=8192 late_samples=8192 overruns=498 missed_ticks=1304
+lateness: max_us=20209 gap_events=4581 gap_us=1508515
+unattributed_tsc_gaps=unavailable (platform timer clock is not the TSC)
+histogram: bins 0..62 are 1 us each; bin 63 is 63 us or more
+histogram_us[0..7]=0,0,0,0,0,0,0,0
+histogram_us[8..15]=0,0,0,0,0,0,0,0
+histogram_us[16..23]=0,0,0,0,0,0,0,0
+histogram_us[24..31]=0,0,0,0,0,0,0,0
+histogram_us[32..39]=0,0,0,0,0,0,0,0
+histogram_us[40..47]=0,0,0,0,0,0,0,0
+histogram_us[48..55]=0,0,1,0,0,0,0,0
+histogram_us[56..62,63+]=0,0,0,0,0,1,0,8190
+PASS: 8192 samples with requested TscDeadline, active ApicCountdown; histogram timings are measurements, not guaranteed bounds

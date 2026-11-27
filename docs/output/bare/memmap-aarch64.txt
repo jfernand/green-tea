@@ -15,25 +15,24 @@ fw_cfg files:
 ramfb: 640x480 XRGB8888
 kernel: 0x40200000..0x40c00000, 10240 KiB
   section      start        end      bytes    align
-  .text    0x40200000 0x403358e0   1267936        4
-  (gap)                                 32
-  .rodata  0x40335900 0x4035ef43    169539       16
-  (gap)                             224749
-  .data    0x40395d30 0x40395e30       256       16
-  (gap)                                464
-  .bss     0x40396000 0x404c5000   1241088       16
-  .stack   0x404c5000 0x404d5000     65536     4096
-  .heap    0x404d5000 0x408d5000   4194304     4096
-  (gap)                            1224704
+  .text    0x40200000 0x403399c0   1284544        4
+  .rodata  0x403399c0 0x40363f33    173427       16
+  (gap)                             228621
+  .data    0x4039bc40 0x4039bd50       272       16
+  (gap)                                688
+  .bss     0x4039c000 0x404cb000   1241088       16
+  .stack   0x404cb000 0x404db000     65536     4096
+  .heap    0x404db000 0x408db000   4194304     4096
+  (gap)                            1200128
   .stacks  0x40a00000 0x40c00000   2097152  2097152
   address    in       what
-  0x4023a91c .text    a function
-  0x403419dc .rodata  a constant static
-  0x40395d58 .data    an initialised static
-  0x40396098 .bss     a zeroed static
-  0x404d0fef .stack   a local of kmain's
-  0x404d5010 .heap    a Box<u64>
-  0x404d6000 .heap    a Box<Page>
+  0x40225d5c .text    a function
+  0x40343cd0 .rodata  a constant static
+  0x4039bc60 .data    an initialised static
+  0x4039c038 .bss     a zeroed static
+  0x404d6fef .stack   a local of kmain's
+  0x404db010 .heap    a Box<u64>
+  0x404dc000 .heap    a Box<Page>
   0x40a04f2e .stacks  a local of a task's
 PASS: 7 sections in order and aligned; 8 addresses where they should be
 halting

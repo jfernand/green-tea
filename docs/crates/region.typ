@@ -5,7 +5,7 @@
 `green-tea-region` allocates memory a block at a time and frees all of it at once. A `Region` is a bump allocator over a list of *chunks* from the global allocator, and the borrow checker enforces its lifetimes: an object allocated from a region can't be used after the region is reset or dropped. The shell's commands run in one.
 
 #spec(
-  ("Source", [#repo("green-tea-region/src/lib.rs"), 352 lines without its tests; #repo("green-tea-region/examples/cost.rs"), 115 lines]),
+  ("Source", [#repo("allocators/region/src/lib.rs"), 352 lines without its tests; #repo("allocators/region/examples/cost.rs"), 115 lines]),
   ("Depends on", [`alloc`; `no_std`. `green-tea-fit` for the `cost` example only]),
   ("Used by", [`green-tea-shell`]),
   ("Tests", [15 host tests, 5 doc tests that must fail to compile, the `cost` example, the `region` kernel]),
@@ -31,7 +31,7 @@
 
 `alloc` takes `&self` and returns a `&mut T` tied to that borrow:
 
-#srcfile("green-tea-region/src/lib.rs", lines: ((158, 166),), notes: ((159, [A *const* assertion, evaluated for each `T` when the program is built. A region drops nothing inside it, so a `String` here would leak its buffer, and the build fails instead.]),))[```rust
+#srcfile("allocators/region/src/lib.rs", lines: ((158, 166),), notes: ((159, [A *const* assertion, evaluated for each `T` when the program is built. A region drops nothing inside it, so a `String` here would leak its buffer, and the build fails instead.]),))[```rust
 pub fn alloc<T>(&self, value: T) -> &mut T {
     const { assert!(!mem::needs_drop::<T>(), "a region runs no destructors, and this type has one") };
     let block = self.block(Layout::new::<T>()).cast::<T>();
@@ -51,7 +51,7 @@ Three rules follow, and each is a `compile_fail` doc test in the crate:
 
 The two remaining doc tests refuse a `String` in `alloc`, and a value escaping from `scope`. `scope` is Tofte and Talpin's `letregion`, and its signature does the work:
 
-#srcfile("green-tea-region/src/lib.rs", lines: ((348, 351),), notes: ((348, [`for<'r>`: the body must work for a region of *any* lifetime, so its result type `R` can't mention this one.]),))[```rust
+#srcfile("allocators/region/src/lib.rs", lines: ((348, 351),), notes: ((348, [`for<'r>`: the body must work for a region of *any* lifetime, so its result type `R` can't mention this one.]),))[```rust
 pub fn scope<R>(chunk_size: usize, body: impl for<'r> FnOnce(&'r Region) -> R) -> R {
     let region = Region::new(chunk_size);
     body(&region)
@@ -62,7 +62,7 @@ pub fn scope<R>(chunk_size: usize, body: impl for<'r> FnOnce(&'r Region) -> R) -
 
 Every chunk starts with a header, which links it to the chunk filled before it:
 
-#srcfile("green-tea-region/src/lib.rs", lines: ((83, 86), (112, 121),))[```rust
+#srcfile("allocators/region/src/lib.rs", lines: ((83, 86), (112, 121),))[```rust
 struct Chunk {
     older: *mut Chunk,
     size: usize,
@@ -87,7 +87,7 @@ The fields are `Cell`s because allocation goes through `&self`. That also makes 
 
 An allocation rounds `next` up, and takes a new chunk if the block doesn't fit:
 
-#srcfile("green-tea-region/src/lib.rs", lines: ((221, 244),), notes: ((223, [A block of no size needs no memory: a dangling, aligned address serves, and the count of blocks doesn't move.]), (228, [After `take_chunk`, the second `fit` can fail only if the arithmetic overflowed.]),))[```rust
+#srcfile("allocators/region/src/lib.rs", lines: ((221, 244),), notes: ((223, [A block of no size needs no memory: a dangling, aligned address serves, and the count of blocks doesn't move.]), (228, [After `take_chunk`, the second `fit` can fail only if the arithmetic overflowed.]),))[```rust
 fn raw(&self, layout: Layout) -> Result<NonNull<u8>, AllocError> {
     if layout.size() == 0 {
         return Ok(layout.dangling_ptr()); // nothing to hand out: any aligned address will do
@@ -118,7 +118,7 @@ fn fit(&self, layout: Layout) -> Option<usize> {
 
 `reset` keeps the newest chunk and frees the rest:
 
-#srcfile("green-tea-region/src/lib.rs", lines: ((188, 204),))[```rust
+#srcfile("allocators/region/src/lib.rs", lines: ((188, 204),))[```rust
 pub fn reset(&mut self) {
     let newest = self.newest.get();
     let mut counts = self.counts.get();
@@ -144,7 +144,7 @@ pub fn reset(&mut self) {
 
 A region implements `core::alloc::Allocator`, so a collection can grow in one. Most frees do nothing, and the last block is a special case in both directions:
 
-#srcfile("green-tea-region/src/lib.rs", lines: ((323, 341),), notes: ((324, [Only the last block can be given back: `next` moves down again.]), (333, [The last block grows where it is, if its chunk has room. A `Vec` that is the most recent allocation pays no copy.]), (337, [Any other block is copied, and the old one stays until the region is freed.]),), size: 6.3pt)[```rust
+#srcfile("allocators/region/src/lib.rs", lines: ((323, 341),), notes: ((324, [Only the last block can be given back: `next` moves down again.]), (333, [The last block grows where it is, if its chunk has room. A `Vec` that is the most recent allocation pays no copy.]), (337, [Any other block is copied, and the old one stays until the region is freed.]),), size: 6.3pt)[```rust
 unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
     if self.is_last(ptr, layout.size()) {
         self.bump_to(ptr.as_ptr() as usize);
@@ -177,7 +177,7 @@ test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
 The `cost` example runs green-tea-shell's `echo` command, a copy of the line, a vector of its words and the text it prints, each in a growing `Vec`, with its memory from five places: `system` (the C library's `malloc`), `fit` (first fit, address order), `tlsf`, `region` (one region, reset after every command) and `scope` (a new region for every command).
 
-#srcfile("green-tea-region/examples/cost.rs", lines: ((59, 75),))[```rust
+#srcfile("allocators/region/examples/cost.rs", lines: ((59, 75),))[```rust
 fn command<A: Allocator + Copy>(text: &str, memory: A) -> usize {
     let mut line = Vec::new_in(memory);
     line.extend_from_slice(text.as_bytes());
@@ -245,8 +245,8 @@ Two regions turn 10,316 heap allocations into 16. The price is in the session's 
 Everything at once, and the types to prove it. @crate-smp makes an allocator usable from several CPUs.
 // chapter-status:begin
 // stage: research-done
-// revision: 2
-// body: 95916d5a98f8
+// revision: 3
+// body: 525d3dbf620d
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

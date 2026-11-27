@@ -2,12 +2,15 @@
 """Lists what the pinned commit has and the report doesn't name: crates, modules, public items,
 kernels, Lisp programs, xtask commands. Usage: python3 -I docs/tools/check-coverage.py [crate ...]"""
 import glob, os, re, subprocess, sys
-PIN = "aecf66f"
+PIN = "f2f11f5"
 docs = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 git = lambda *a: subprocess.run(["git", *a], capture_output=True, text=True, check=True, cwd=docs).stdout
 files = git("ls-tree", "-r", "--name-only", PIN, "--full-tree").split("\n")
 dirs = sorted({f.split("/Cargo.toml")[0] for f in files if f.endswith("/Cargo.toml")})
-short = lambda d: {"xtask": "xtask"}.get(d, d.split("/")[-1].removeprefix("green-tea-"))
+# A crate's chapter is named after its package, less the prefix: green-tea-rt-bare is rt-bare.
+def short(d):
+    m = re.search(r'^name\s*=\s*"([^"]+)"', git("show", f"{PIN}:{d}/Cargo.toml"), re.M)
+    return m.group(1).removeprefix("green-tea-") if m else d.split("/")[-1]
 only, missing, total = set(sys.argv[1:]), 0, 0
 ITEM = re.compile(r"^\s*pub\s+(?:unsafe\s+|const\s+(?=fn)|extern\s+\"C\"\s+)*(?:fn|struct|enum|trait|const|static|type|mod|union)\s+(?:mut\s+)?([A-Za-z_][A-Za-z0-9_]*)", re.M)
 for d in dirs:

@@ -5,14 +5,15 @@
 `green-tea-shell` is a kernel with a shell on the serial console. It is one task that reads a line, runs it as a command, and repeats, and it never stops allocating, which makes it the workspace's source of a real allocation trace. It can take each command's memory from the heap or from an arena, record every allocation and free, replay the recording against each allocator, and write it out as a trace file.
 
 #spec(
-  ("Source", [#repo("green-tea-shell/src/"), 8 files, 1,854 lines]),
-  ("Depends on", [`green-tea-bare` (@crate-bare), `green-tea-region` (@crate-region)]),
+  ("Source", [#repo("kernels/shell/src/"), 9 files, 1,951 lines]),
+  ("Depends on", [`green-tea-bare` (@crate-bare), `green-tea-scheduler-coop` (@crate-scheduler-coop), `green-tea-region` (@crate-region)]),
   ("Used by", [nothing: it is a binary. `cargo xtask trace` reads what it writes (@crate-xtask)]),
   ("Tests", [the `shell`, `trace`, `harden`, `region`, `gtt`, `resident` and `interrupts` kernels, which type at it]),
 )
 
 #dtable(columns: (auto, 1fr), ("Module", "What it holds"),
   [`main`], [`kmain`, the line reader, `Shell`, the commands that run from a command's memory],
+  [`dispatch`], [`Line`, `parse` and `is_whole_line_word`: which commands `Shell::line` runs itself],
   [`replay`], [`session`, `script`, `replay`, `TRACE_EVENTS`],
   [`harden`], [`harden`: the trace against `Hardened`, a defence at a time],
   [`region`], [`regions`: the script with its memory in two regions],
@@ -65,20 +66,20 @@ commands run: 10, now from the arena
 heap:     65952 of 4194288 bytes used; 1 free blocks, the largest 4128336 bytes
 arena:      296 of 65536 bytes used, peak 1373
 > heap
-0x803f7008       48 bytes allocated
-0x803f7038    65552 bytes allocated
-0x80407048       80 bytes allocated
-0x80407098       32 bytes allocated
-0x804070b8       32 bytes allocated
-0x804070d8      208 bytes allocated
-0x804071a8  4128336 bytes free
+0x803f9008       48 bytes allocated
+0x803f9038    65552 bytes allocated
+0x80409048       80 bytes allocated
+0x80409098       32 bytes allocated
+0x804090b8       32 bytes allocated
+0x804090d8      208 bytes allocated
+0x804091a8  4128336 bytes free
 > map
-.text    0x80200000..0x8027d8de    514270 bytes
-.rodata  0x8027d8e0..0x802907fb     77595 bytes
-.data    0x80291450..0x80291520       208 bytes
-.bss     0x80292000..0x803e7000   1396736 bytes
-.stack   0x803e7000..0x803f7000     65536 bytes
-.heap    0x803f7000..0x807f7000   4194304 bytes
+.text    0x80200000..0x80280264    524900 bytes
+.rodata  0x80280270..0x80294173     81667 bytes
+.data    0x80294dd0..0x80294ea0       208 bytes
+.bss     0x80295000..0x803e9000   1392640 bytes
+.stack   0x803e9000..0x803f9000     65536 bytes
+.heap    0x803f9000..0x807f9000   4194304 bytes
 .stacks  0x80800000..0x80a00000   2097152 bytes
 ```
 ]
@@ -89,7 +90,7 @@ The block of 65,552 bytes is the arena: 64 KiB and its two tags.
 
 `kmain` boots, blanks the display, and runs one task. The task's loop is the whole shell:
 
-#srcfile("green-tea-shell/src/main.rs", lines: ((118, 125),))[```rust
+#srcfile("kernels/shell/src/main.rs", lines: ((116, 123),))[```rust
 let mut line = [0u8; LINE_MAX];
 loop {
     print!("> ");
@@ -102,7 +103,7 @@ loop {
 
 `read_line` echoes what it reads into a buffer of `LINE_MAX` (120) bytes. Backspace works, bytes that aren't printable are ignored, and typing past the end does nothing:
 
-#srcfile("green-tea-shell/src/main.rs", lines: ((130, 150),))[```rust
+#srcfile("kernels/shell/src/main.rs", lines: ((128, 148),))[```rust
 fn read_line(line: &mut [u8]) -> usize {
     let mut len = 0;
     loop {
@@ -126,9 +127,31 @@ fn read_line(line: &mut [u8]) -> usize {
 }
 ```]
 
-`Shell::line` handles the commands that run whole commands or need the shell mutably (`repeat`, `test`, `trace`, `session`, `replay`, `harden`, `regions`, `pages`), and passes the rest to `command`, where the source of memory is chosen:
+`Shell::line` handles the commands that run whole commands or need the shell mutably (`repeat`, `test`, `trace`, `session`, `replay`, `harden`, `regions`, `pages`). Which those are is decided in one place, the `dispatch` module. `parse` turns a line into a `Line`, and `is_whole_line_word` answers the same question for one word, which is how `repeat` refuses them:
 
-#srcfile("green-tea-shell/src/main.rs", lines: ((187, 208),), notes: ((190, [`Global` here is `alloc::alloc::Global`, the heap.]), (193, [An arena gets all of a command's memory back by moving one pointer.]),))[```rust
+#srcfile("kernels/shell/src/dispatch.rs", lines: ((46, 62),), notes: ((47, [The first word decides; what follows is the argument.]), (59, [`pages` alone, or with an argument.]), (60, [Anything else, including `test` with an argument, is an ordinary command.]),),)[```rust
+pub fn parse(text: &str) -> Line<'_> {
+    let text = text.trim_ascii();
+    let (word, rest) = text
+        .split_once(' ')
+        .unwrap_or((text, ""));
+    match whole_line(word) {
+        Some(WholeLine::Repeat) if !rest.is_empty() => Line::Repeat(rest.trim_ascii_start()),
+        Some(WholeLine::Test) if rest.is_empty() => Line::Test,
+        Some(WholeLine::Trace) if !rest.is_empty() => Line::Trace(rest.trim_ascii()),
+        Some(WholeLine::Session) if rest.is_empty() => Line::Session,
+        Some(WholeLine::Replay) if rest.is_empty() => Line::Replay,
+        Some(WholeLine::Harden) if rest.is_empty() => Line::Harden,
+        Some(WholeLine::Regions) if rest.is_empty() => Line::Regions,
+        Some(WholeLine::Pages) => Line::Pages(rest.trim_ascii()),
+        _ => Line::Command(text),
+    }
+}
+```]
+
+A host test, `tests/dispatch.rs`, compiles the module on its own and checks the classification. `line` passes a `Line::Command` to `command`, where the source of memory is chosen:
+
+#srcfile("kernels/shell/src/main.rs", lines: ((191, 212),), notes: ((194, [`Global` here is `alloc::alloc::Global`, the heap.]), (197, [An arena gets all of a command's memory back by moving one pointer.]),))[```rust
 fn command(&mut self, text: &str) -> Next {
     self.commands += 1;
     let next = match self.source {
@@ -155,16 +178,16 @@ fn command(&mut self, text: &str) -> Next {
 
 `execute` is generic over the `Allocator`, so the same code runs both ways. It makes three allocations of its own before it looks at the command: a copy of the line, the list of words, and a buffer for what it prints.
 
-#srcfile("green-tea-shell/src/main.rs", lines: ((432, 443),), notes: ((432, [`Copy`: both the global allocator and `&Arena` are.]),))[```rust
-fn execute<A: Allocator + Copy>(text: &str, memory: A, shell: &Shell) -> Next {
-    let mut line = Vec::new_in(memory);
+#srcfile("kernels/shell/src/main.rs", lines: ((440, 451),), notes: ((440, [`Copy`: both the global allocator and `&Arena` are.]),),)[```rust
+fn execute<A: Allocator + Copy>(text: &str, allocator: A, shell: &Shell) -> Next {
+    let mut line = Vec::new_in(allocator);
     line.extend_from_slice(text.as_bytes());
     let line = core::str::from_utf8(&line).unwrap_or("");
 
-    let mut words = Vec::new_in(memory);
+    let mut words = Vec::new_in(allocator);
     words.extend(line.split_ascii_whitespace());
 
-    let mut out = Text(Vec::new_in(memory));
+    let mut out = Text(Vec::new_in(allocator));
     let mut next = Next::Prompt;
     // Writing to `out` can't fail: it only appends to a Vec.
     let _ = match words.as_slice() {
@@ -181,7 +204,7 @@ ran `echo a b c` 100 times from the arena: 0 heap allocations, 0 frees, heap +0 
 ```
 ]
 
-`repeat` runs one ordinary command at a time. The eight commands in `WHOLE_LINES`, which `line` handles around a command's memory, are refused, and `repeat 1 halt` halts:
+`repeat` runs one ordinary command at a time. The eight whole-line commands, which `line` handles around a command's memory, are refused, and `repeat 1 halt` halts:
 
 #output(title: "typed at the shell")[
 ```
@@ -207,7 +230,7 @@ PASS: 1000 commands made 8000 heap allocations and freed them all, or none from 
 
 `trace on` asks `green-tea-bare`'s heap to record into a buffer of `TRACE_EVENTS` (65,536) events, a mebibyte, taken from the heap *before* the recording starts. A recording already under way is stopped first, and its buffer freed, so that the free isn't in the new trace:
 
-#srcfile("green-tea-shell/src/main.rs", lines: ((261, 272),), notes: ((268, [The runtime allocates its list of sleepers the first time a task sleeps, which is whenever the console first has nothing to read. Sleeping here keeps that allocation out of the trace, so that a trace doesn't depend on timing.]), (269, [What the heap has counted so far. `replay` later checks the trace against the heap's own count.]),))[```rust
+#srcfile("kernels/shell/src/main.rs", lines: ((269, 280),), notes: ((276, [The scheduler (@crate-scheduler-coop) allocates its list of sleepers the first time a task sleeps, which is whenever the console first has nothing to read. Sleeping here keeps that allocation out of the trace, so that a trace doesn't depend on timing.]), (277, [What the heap has counted so far. `replay` later checks the trace against the heap's own count.]),),)[```rust
 "on" => {
     drop(heap::stop_recording()); // one under way: its buffer's free isn't in the new one
     self.trace = None; // frees the last trace's buffer
@@ -215,7 +238,7 @@ PASS: 1000 commands made 8000 heap allocations and freed them all, or none from 
     // The runtime allocates its list of sleeping tasks the first time a task
     // sleeps, which is whenever the console first has nothing to read. Sleep
     // now, so that it isn't sometimes in the trace and sometimes not.
-    green_tea_bare::task::sleep_ms(1);
+    task::sleep_ms(1);
     self.counted = heap::with(|fit| (fit.stats().allocations, fit.stats().frees));
     heap::record(buffer);
     println!("recording the heap's allocations and frees, up to {} of them", replay::TRACE_EVENTS);
@@ -224,7 +247,7 @@ PASS: 1000 commands made 8000 heap allocations and freed them all, or none from 
 
 `session` gives the recording something to record. `script` is a deterministic program of commands, driven by `Random` from a fixed `SEED`, in `ROUNDS` (12) rounds, as a person at a shell might work: set some variables, read them, change some, read them again, and unset all but one in eight:
 
-#srcfile("green-tea-shell/src/replay.rs", lines: ((112, 120), (135, 140),), notes: ((114, [16 to 63 variables in a round.]), (135, [One variable in eight survives its round. These are the long-lived blocks.]),))[```rust
+#srcfile("kernels/shell/src/replay.rs", lines: ((112, 120), (135, 140),), notes: ((114, [16 to 63 variables in a round.]), (135, [One variable in eight survives its round. These are the long-lived blocks.]),))[```rust
 let mut random = Random(SEED);
 for round in 0..ROUNDS {
     let count = 16 + random.below(48);
@@ -299,7 +322,7 @@ Separating the long-lived blocks takes first fit over LIFO from 83,968 bytes to 
 
 `regions` runs the session's script four times with the heap recording, and compares what each way asked of the heap. There are two regions from `green-tea-region` (@crate-region), and the lifetime of each is a type. The *session's* region holds the variables, and the *command's* region holds what one command works with:
 
-#srcfile("green-tea-shell/src/region.rs", lines: ((33, 37), (47, 53),), notes: ((34, [`'s`: a `Var` can hold only references that live as long as the session, so a command's words can't be stored here. The compiler refuses it, and `set` has to copy them.]),))[```rust
+#srcfile("kernels/shell/src/region.rs", lines: ((33, 37), (47, 53),), notes: ((34, [`'s`: a `Var` can hold only references that live as long as the session, so a command's words can't be stored here. The compiler refuses it, and `set` has to copy them.]),))[```rust
 struct Var<'s> {
     name: &'s str,
     value: Cell<&'s str>,
@@ -317,7 +340,7 @@ struct Session<'s> {
 
 The script with both regions is a few lines. The command's region is reset after each command:
 
-#srcfile("green-tea-shell/src/region.rs", lines: ((366, 373),))[```rust
+#srcfile("kernels/shell/src/region.rs", lines: ((366, 373),))[```rust
 fn in_two_regions() -> (Ending, Regions) {
     let session_region = Region::new(CHUNK);
     let mut command_region = Region::new(CHUNK);
@@ -362,7 +385,7 @@ Regions asked the heap for 16 blocks where the heap alone took 10,316, and paid 
 
 `harden` replays the recording against `green-tea-fit`'s `Hardened` allocator (@crate-fit), adding one defence each time, and then with quarantines of different lengths:
 
-#srcfile("green-tea-shell/src/harden.rs", lines: ((78, 85),))[```rust
+#srcfile("kernels/shell/src/harden.rs", lines: ((78, 85),))[```rust
 let rows = [
     replayed::<0>(base, events, 16, "no defence")?,
     replayed::<L1>(base, events, 16, "+ safe unlinking")?,
@@ -406,7 +429,7 @@ aarch64 runs with the MMU off: all 1024 pages of the heap are there, always
 
 `pages replay` measures a trace's footprint in *pages touched*. An allocator alone touches only the pages its tags are on, so `Written` wraps it and fills every block it hands out, as a program would:
 
-#srcfile("green-tea-shell/src/pages.rs", lines: ((42, 50),))[```rust
+#srcfile("kernels/shell/src/pages.rs", lines: ((42, 50),))[```rust
 impl<H: Heap> Heap for Written<'_, H> {
     fn allocate(&mut self, size: usize, align: usize) -> Option<usize> {
         let addr = self
@@ -442,7 +465,7 @@ Trimming saves little here. The 149 survivors are spread over the pages, and a p
 
 The kernel has no disk to write a file to, so `trace dump` writes the trace to the serial console in `green-tea-fit`'s text form, for `cargo xtask trace` to keep:
 
-#srcfile("green-tea-shell/src/dump.rs", lines: ((23, 32),))[```rust
+#srcfile("kernels/shell/src/dump.rs", lines: ((23, 32),))[```rust
 pub fn dump(&self) {
     let Some(events) = self.recorded() else { return };
     // Writing to the console can't fail.
@@ -457,7 +480,7 @@ pub fn dump(&self) {
 
 `trace check` proves the round trip without the serial port. `round_trip` writes the events in both forms, `CHUNK` (2,048) at a time, since a whole trace in both forms would need more of the heap than the buffer leaves, and reads each back:
 
-#srcfile("green-tea-shell/src/dump.rs", lines: ((65, 81),))[```rust
+#srcfile("kernels/shell/src/dump.rs", lines: ((65, 81),))[```rust
 for chunk in events.chunks(CHUNK) {
     let records: Vec<Record> = chunk.iter().map(|&event| event.into()).collect();
     text.clear();
@@ -494,8 +517,8 @@ The binary form is 3.75 times smaller than the text.
 One task, twenty commands, and a trace of 20,483 events. @crate-trace does the same with programs from outside the kernel.
 // chapter-status:begin
 // stage: research-done
-// revision: 3
-// body: 39ca63452cd2
+// revision: 4
+// body: 7bfdbf15758b
 // activity: 2026-11-22 | r3 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r3 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

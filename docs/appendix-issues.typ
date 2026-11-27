@@ -8,7 +8,7 @@ This appendix has two parts: what is open at commit #raw(pinned), and the 73 def
 
 === The two defects left
 
-- *A port to other physical hardware is mostly unproven.* The `pc` board is written for physical x86_64 PCs. All 26 of its kernels pass in QEMU under OVMF (@app-kernels), which shows the code works against QEMU's firmware and devices. On a physical machine, the shell has booted once, on the Clevo laptop, with its keyboard interrupts and the lights' mailbox working. QEMU's own boards keep their assumptions on purpose, and on aarch64 a CPU's number is still the low byte of `MPIDR_EL1`.
+- *A port to other physical hardware is mostly unproven.* The `pc` board is written for physical x86_64 PCs. All 30 of its kernels pass in QEMU under OVMF (@app-kernels), which shows the code works against QEMU's firmware and devices. On a physical machine, the shell has booted once, on the Clevo laptop, with its keyboard interrupts and the lights' mailbox working. QEMU's own boards keep their assumptions on purpose, and on aarch64 a CPU's number is still the low byte of `MPIDR_EL1`.
 - *`lisp instructions` measures each heap against its own floor.* The floor of a garbage-collected heap is that heap with room never to collect, and the mark-sweep floor is 2.1 to 2.4 times the explicit one across the five programs, because `MarkHeap` checks every object and field access and a release `Explicit` doesn't. The columns over the floor therefore compare the cost of reclamation, and not the cost of running a program on each heap (@crate-measure).
 
 === Limits of the pc board and USB
@@ -41,6 +41,24 @@ Writing the sections on the `pc` board turned up these problems in the code at `
 
 *What hasn't run.* None of this has run on physical hardware: the laptop run used its built-in PS/2 keyboard. The xHCI firmware handoff, the scratchpad pages and endpoint recovery have run only in host tests, against fake registers and a fake controller, because QEMU's controller exercises none of them. The NVMe driver has run on QEMU's device and a fake one.
 
+=== Found while describing the protection and realtime crates
+
+Writing the chapters on the crates added since `aecf66f` turned up these problems in the code at #raw(pinned). All are open, and each chapter's Limits has the detail. The ones marked _from reading_ were found by reading the code and haven't been reproduced.
+
+- *`green-tea-rt-bare` can spin forever when every task sleeps* (from reading). With no task ready, `run` waits with interrupts off, and on QEMU's three boards that wait is a spin that never lets the timer in. The `rt` kernel never gets there, because its main task stays ready (@crate-rt-bare).
+- *A realtime sleeper on `pc` can wake late* (from reading). The board's idle wait arms its own backup timer, 2 ms with a USB keyboard and 50 ms without, over the runtime's deadline (@crate-rt-bare).
+- *`green-tea-rt` is constant-time only in choosing the next task.* Registering a task, signalling an event and recomputing priorities scan every slot, some of them with interrupts off (@crate-rt).
+- *The `rt` kernel's `PASS` line says "transitive inheritance"*, but the kernel exercises one level of it. The chain is checked only by host tests (@crate-rt-kernel).
+- *The `overflow` kernel fails in release builds on riscv64 and x86_64.* The task overflows its stack into the guard page, as it should, but on the way to reporting it the kernel panics with "a Global was borrowed reentrantly or concurrently", from the borrow check that `7ae7dbc` added. Debug builds pass, and CI runs only debug builds, so CI didn't see it (@app-kernels).
+- *`Global`'s borrow check can fire under preemption* (from reading). The `preempt` kernel reads a `Global` from a task with interrupts on, and the timer's hook uses the same one. A tick inside that read would make the hook's access panic. The window is a few instructions in each 100 ms slice, and no recorded run has hit it (@crate-scheduler-preempt).
+- *Two host tests of `green-tea-bare` never run.* The crate is `test = false`, so the tests in `timer_caps.rs` aren't built.
+- *The latency histogram's tests never run.* `kernels/latency` is a binary with `test = false`, so its three tests aren't built. Every TSC gap counts, with no threshold, and the SMI counter isn't read (@crate-latency).
+- *TSC-deadline mode has never been active.* QEMU's CPU doesn't offer it, and the kernels haven't run on the laptop (@crate-latency).
+- *A user process runs with interrupts off*, so one that loops forever hangs the kernel. Isolation rests on the page tables' user bit alone: the kernel is mapped, supervisor-only, in every process, with no SMEP, SMAP or no-execute (@crate-black).
+- *No IOMMU backend exists*, so a `black` build refuses every DMA device, and a `DmaDomain` that can't unmap a buffer when dropped forgets its token without stopping the memory from being freed (@crate-dma).
+- *`validate_kernel_regions` makes ownership claims that overlap the heap and the stack pool*, which its `unsafe` contract forbids (@crate-memory).
+- *The 8042 broker bypasses the scan-code decoder*, so a Shift or Ctrl pressed during a lease is seen in its old state afterwards (@crate-black).
+
 === Smaller items
 
 - *The guard-page regression has no test that CI can run.* The fix for a heap starting on a 2 MiB boundary (`7646655`) was checked with the `pages` and `overflow` kernels in a private build with `.heap` aligned to 2 MiB, on riscv64 and x86\_64. No shipped build has that layout, and CI builds only the shipped ones.
@@ -49,6 +67,19 @@ Writing the sections on the `pc` board turned up these problems in the code at `
 - *`green-tea-measure --region-kib` has no upper limit.* A region of 5,000,000 KiB with `buddy` among the allocators panics in `Buddy::new` (@crate-measure). `green-tea-trace` refuses the same value.
 - *Four driver tests allocate an untouched 4 GiB `Vec`*, to check that a length of 4 GiB or more is refused: one in `green-tea-fw-cfg`, two in `green-tea-virtio`'s `queue.rs` and one in `green-tea-virtio-blk`. The memory is zeroed on demand and never touched, so it isn't resident, but the tests need 4 GiB of address space.
 - *`cargo xtask --help` doesn't mention `--board`.* `cargo xtask kernel --help` does (@crate-xtask).
+
+=== Fixed since `aecf66f`
+
+Six commits after the report's previous version repaired problems that no list here had recorded. Each chapter describes the code as it is now.
+
+#dtable(columns: (auto, 1fr), ("Commit", "What changed"),
+  [`7ae7dbc`], [`Global`, the kernel's stand-in for thread-local state, has an atomic borrow flag. An access while a value is borrowed, from an interrupt handler or by reentry, panics instead of racing (@crate-bare).],
+  [`50d79b9`], [The pools are no longer `Copy`, so a copy can't hand out a slot that the original also hands out, and `new` refuses a region that wraps the address space (@crate-pool).],
+  [`9e8f4c8`], [`PageSource` is an `unsafe` trait, and a slab cache's calls that take one are `unsafe`, or go through a `BoundCache` that keeps the one source (@crate-kmem).],
+  [`f12a496`], [A Lisp evaluation that fails pops the roots it pushed, so a caller's own roots survive the error (@crate-lisp).],
+  [`76ab391`], [`green-tea-v1` tasks are pinned, so a task whose address is in its saved registers can't move (@crate-v1).],
+  [`2c427fb`], [The page-fault handlers on riscv64 and x86_64 work the heap's first page table out of the heap's range, instead of reading a `Global` that the interrupted code might be holding.],
+)
 
 == Found at `7898396`, and how each was resolved
 
@@ -193,8 +224,8 @@ Writing the first version of this report turned up these 73 defects, from unsoun
 )
 // chapter-status:begin
 // stage: research-done
-// revision: 5
-// body: 186d730e00a8
+// revision: 6
+// body: abb7b6cf13f5
 // activity: 2026-11-22 | r4 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r4 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

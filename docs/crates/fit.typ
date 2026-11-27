@@ -5,7 +5,7 @@
 `green-tea-fit` allocates blocks of any size from one region of memory. It holds four allocators: `Fit`, a free list searched by first, next or best fit; `Buddy`, a binary buddy system; `Tlsf`, two-level segregated fit, which is the kernels' heap; and `Hardened`, `Fit` with five switchable defences. Around them are the tools that measure them: trace replay, a trace file format, a page accounting module, and an adversary program written to fragment a heap.
 
 #spec(
-  ("Source", [#repo("green-tea-fit/src/"), 8 files, 2,786 lines without their tests]),
+  ("Source", [#repo("allocators/fit/src/"), 8 files, 2,786 lines without their tests]),
   ("Depends on", [nothing; `no_std`. `trace`, `tracefile` and `adversary` need `alloc`]),
   ("Used by", [`green-tea-bare`, `green-tea-smp`, `green-tea-shard`, `green-tea-trace`, `green-tea-measure`]),
   ("Tests", [75 host tests, the `interface` example, the `fit`, `frag`, `tlsf` and `safety` kernels]),
@@ -26,7 +26,7 @@
 
 All four allocators implement `Heap`, which is what a replay needs from an allocator:
 
-#srcfile("green-tea-fit/src/lib.rs", lines: ((130, 130), (132, 132), (137, 137), (139, 139), (142, 143), (145, 146),))[```rust
+#srcfile("allocators/fit/src/lib.rs", lines: ((130, 130), (132, 132), (137, 137), (139, 139), (142, 143), (145, 146),))[```rust
 pub trait Heap {
 // …
     fn allocate(&mut self, size: usize, align: usize) -> Option<usize>;
@@ -57,7 +57,7 @@ Every block starts with a word, its *header*, and ends with a word, its *footer*
 #bytefield(caption: [A free block],
   ("size", "8", 1), ("next", "8", 1), ("prev", "8", 1), ("unused", "size − 32", 2), ("size", "8", 1))
 
-#srcfile("green-tea-fit/src/lib.rs", lines: ((55, 55), (57, 57), (59, 59),))[```rust
+#srcfile("allocators/fit/src/lib.rs", lines: ((55, 55), (57, 57), (59, 59),))[```rust
 pub const ALIGN: usize = 2 * WORD;
 // …
 pub const OVERHEAD: usize = 2 * WORD;
@@ -69,7 +69,7 @@ Addresses handed out are multiples of 16, so a header sits 8 bytes past a multip
 
 === Allocation
 
-#srcfile("green-tea-fit/src/lib.rs", lines: ((213, 213), (216, 216), (218, 253),), notes: ((216, [What the block must hold: the request and two tags, rounded up to 16, at least 32. `checked_add` makes a request near `usize::MAX` fail instead of wrapping.]), (229, [If what is left couldn't be a block, the new block takes it, as internal fragmentation.]), (237, [Only for an alignment above 16: the start of the free block stays free, in its place on the list.]),))[```rust
+#srcfile("allocators/fit/src/lib.rs", lines: ((213, 213), (216, 216), (218, 253),), notes: ((216, [What the block must hold: the request and two tags, rounded up to 16, at least 32. `checked_add` makes a request near `usize::MAX` fail instead of wrapping.]), (229, [If what is left couldn't be a block, the new block takes it, as internal fragmentation.]), (237, [Only for an alignment above 16: the start of the free block stays free, in its place on the list.]),))[```rust
 pub fn allocate(&mut self, size: usize, align: usize) -> Option<usize> {
 // …
     let need = size.checked_add(OVERHEAD + ALIGN - 1).map(|n| (n & !(ALIGN - 1)).max(MIN_BLOCK));
@@ -114,7 +114,7 @@ pub fn allocate(&mut self, size: usize, align: usize) -> Option<usize> {
 
 `find` picks the free block according to the `Policy`. First fit stops at the first block with room. Next fit does the same starting from a *rover*, the place the last search stopped, and wraps around once. Best fit goes through the list keeping the smallest block with room, and stops early on an exact match:
 
-#srcfile("green-tea-fit/src/lib.rs", lines: ((433, 449),))[```rust
+#srcfile("allocators/fit/src/lib.rs", lines: ((433, 449),))[```rust
 Policy::BestFit => {
     let (mut block, mut best) = (self.head, None);
     while block != 0 {
@@ -136,7 +136,7 @@ Policy::BestFit => {
 
 `place` answers "does it fit here, and where". For an alignment above 16 the start may have to move up, and the bytes it leaves behind must be a block themselves, at least 32 bytes:
 
-#srcfile("green-tea-fit/src/lib.rs", lines: ((554, 560),))[```rust
+#srcfile("allocators/fit/src/lib.rs", lines: ((554, 560),))[```rust
 pub(crate) fn place(block: usize, size: usize, need: usize, align: usize) -> Option<usize> {
     let mut start = (block + WORD).next_multiple_of(align) - WORD;
     if start != block && start - block < MIN_BLOCK {
@@ -150,7 +150,7 @@ pub(crate) fn place(block: usize, size: usize, need: usize, align: usize) -> Opt
 
 `free` trusts nothing it can check. The address must be a multiple of 16 inside the region, the block must be allocated, its size must make sense, and its two tags must agree. Then the footer of the block before it and the header of the block after it, each one word away, say whether a neighbour is free:
 
-#srcfile("green-tea-fit/src/lib.rs", lines: ((281, 300),), notes: ((281, [The block is marked free before merging, so that a second `free` of the same address finds a free tag for as long as nothing overwrites it.]), (283, [One word below this block is the previous block's footer: its size, and whether it is free.]),))[```rust
+#srcfile("allocators/fit/src/lib.rs", lines: ((281, 300),), notes: ((281, [The block is marked free before merging, so that a second `free` of the same address finds a free tag for as long as nothing overwrites it.]), (283, [One word below this block is the previous block's footer: its size, and whether it is free.]),))[```rust
 self.set_block(block, size, false);
 
 let (before, before_used) = self.tag(block - WORD); // the footer of the block before
@@ -183,7 +183,7 @@ Every block in `Buddy` is a power of two, from `MIN_BLOCK` (32 bytes) up, and is
 
 `order_for` rounds a request up:
 
-#srcfile("green-tea-fit/src/buddy.rs", lines: ((60, 63),))[```rust
+#srcfile("allocators/fit/src/buddy.rs", lines: ((60, 63),))[```rust
 pub fn order_for(size: usize) -> Option<usize> {
     let block = size.checked_add(WORD)?.checked_next_power_of_two()?.max(MIN_BLOCK);
     Some((block / MIN_BLOCK).ilog2() as usize)
@@ -192,7 +192,7 @@ pub fn order_for(size: usize) -> Option<usize> {
 
 Allocation takes the smallest non-empty list at or above that order, and halves the block until it is the right size, leaving each upper half free:
 
-#srcfile("green-tea-fit/src/buddy.rs", lines: ((84, 97),))[```rust
+#srcfile("allocators/fit/src/buddy.rs", lines: ((84, 97),))[```rust
 let block = self.heads[at];
 self.unlink(block, at);
 // Halve it until it is the size wanted. The upper half of each cut stays free.
@@ -211,7 +211,7 @@ Some(block + WORD)
 
 A block of size $s$ is at an offset that is a multiple of $s$, so its buddy is at that offset with one bit flipped. Freeing finds the only block it could merge with by an exclusive or, and reads one word:
 
-#srcfile("green-tea-fit/src/buddy.rs", lines: ((123, 135),))[```rust
+#srcfile("allocators/fit/src/buddy.rs", lines: ((123, 135),))[```rust
 while order < self.top {
     let buddy = self.base + ((block - self.base) ^ (MIN_BLOCK << order));
     // The buddy can be merged only if it is free and hasn't been split.
@@ -235,7 +235,7 @@ The comparison on line 126 tests two facts at once. A buddy's first word equals 
 
 `Tlsf` has `Fit`'s blocks and replaces the single list with a table of lists and two bitmaps. Sizes below `SMALL` (256) have a list each. From 256 up, each power of two is a row, cut into `RANGES` (16) equal columns: 256–271, 272–287, up to 511, then 512–543, and so on. With `ROWS` (25) rows the table holds 400 lists, and the largest block is a little under 4 GiB.
 
-#srcfile("green-tea-fit/src/tlsf.rs", lines: ((30, 37),))[```rust
+#srcfile("allocators/fit/src/tlsf.rs", lines: ((30, 37),))[```rust
 pub fn class(size: usize) -> (usize, usize) {
     if size < SMALL {
         (0, size / ALIGN)
@@ -248,7 +248,7 @@ pub fn class(size: usize) -> (usize, usize) {
 
 `class` says which list a free block belongs on. `class_for` rounds a request up to the *start* of a range, so that every block on the chosen list is large enough and none has to be examined:
 
-#srcfile("green-tea-fit/src/tlsf.rs", lines: ((41, 43),))[```rust
+#srcfile("allocators/fit/src/tlsf.rs", lines: ((41, 43),))[```rust
 pub fn class_for(need: usize) -> (usize, usize) {
     if need < SMALL { class(need) } else { class(need + (1 << (need.ilog2() - RANGE_BITS)) - 1) }
 }
@@ -256,7 +256,7 @@ pub fn class_for(need: usize) -> (usize, usize) {
 
 `find` is two masks and two counts of trailing zeros:
 
-#srcfile("green-tea-fit/src/tlsf.rs", lines: ((186, 201),), notes: ((191, [The lists in this row at or after the wanted column.]), (193, [None: take the first non-empty row above this one, and its first column.]),))[```rust
+#srcfile("allocators/fit/src/tlsf.rs", lines: ((188, 203),), notes: ((193, [The lists in this row at or after the wanted column.]), (195, [None: take the first non-empty row above this one, and its first column.]),))[```rust
 fn find(&self, room: usize) -> Option<usize> {
     let (mut row, column) = class_for(room);
     if row >= ROWS {
@@ -327,7 +327,7 @@ Buddy
 
 Encoding and validating a link happen in one place:
 
-#srcfile("green-tea-fit/src/hardened.rs", lines: ((567, 576),))[```rust
+#srcfile("allocators/fit/src/hardened.rs", lines: ((567, 576),))[```rust
 fn link(&self, slot: usize) -> Result<usize, Fault> {
     let mut link = self.read(slot);
     if Self::has(ENCODE) {
@@ -342,7 +342,7 @@ fn link(&self, slot: usize) -> Result<usize, Fault> {
 
 Safe unlinking is the check that the blocks on either side point back:
 
-#srcfile("green-tea-fit/src/hardened.rs", lines: ((519, 529),))[```rust
+#srcfile("allocators/fit/src/hardened.rs", lines: ((519, 529),))[```rust
 fn neighbours(&self, block: usize) -> Result<(usize, usize), Fault> {
     let (prev, next) = (self.link(block + 2 * WORD)?, self.link(block + WORD)?);
     if Self::has(UNLINK) {
@@ -358,7 +358,7 @@ fn neighbours(&self, block: usize) -> Result<(usize, usize), Fault> {
 
 A block leaving quarantine is verified word by word:
 
-#srcfile("green-tea-fit/src/hardened.rs", lines: ((444, 462),))[```rust
+#srcfile("allocators/fit/src/hardened.rs", lines: ((444, 462),))[```rust
     let tag = self.read(block);
     let size = tag & !FLAGS;
     if tag & FLAGS != USED | HELD
@@ -418,7 +418,7 @@ A trace is a list of `Event`s, each an address, a size and an alignment. A size 
 
 `replay` runs a trace against any `Heap` and returns a `Report`:
 
-#srcfile("green-tea-fit/src/trace.rs", lines: ((76, 76), (82, 100),), notes: ((84, [A free the trace never allocated is counted as `unmatched` and skipped.]), (94, [An allocation the region can't hold is counted as `failed`, and the replay goes on.]),))[```rust
+#srcfile("allocators/fit/src/trace.rs", lines: ((76, 76), (82, 100),), notes: ((84, [A free the trace never allocated is counted as `unmatched` and skipped.]), (94, [An allocation the region can't hold is counted as `failed`, and the replay goes on.]),))[```rust
 pub fn replay(events: &[Event], fit: &mut (impl Heap + ?Sized)) -> Report {
 // …
     for event in events {
@@ -450,7 +450,7 @@ Three functions transform a trace. `lifetimes` gives each allocation's lifetime,
 
 A trace file holds `Record`s: `Allocate`, `Free` or `Reallocate`. It has a text form and a binary form with the same records and the same checksum. The text form is one record per line:
 
-#srcfile("green-tea-fit/src/tracefile.rs", lines: ((13, 18),))[```rust
+#srcfile("allocators/fit/src/tracefile.rs", lines: ((13, 18),))[```rust
 //! gtt 1                       the first line: the format, and its version
 //! # recorded by ...           a line that starts with # is a comment
 //! a 80212340 64 8             allocated: address, size, alignment
@@ -461,7 +461,7 @@ A trace file holds `Record`s: `Allocate`, `Free` or `Reallocate`. It has a text 
 
 The binary form starts with `MAGIC`, the bytes `GTT\x01`. Each record's first byte holds its kind in the two low bits and the base-2 logarithm of its alignment in the six high bits. Addresses are stored as differences from the last address, *zigzagged* so that small negative numbers stay small, and then written as LEB128 varints:
 
-#srcfile("green-tea-fit/src/tracefile.rs", lines: ((296, 308),))[```rust
+#srcfile("allocators/fit/src/tracefile.rs", lines: ((296, 308),))[```rust
 fn varint(out: &mut Vec<u8>, mut n: u64) {
     while n >= 0x80 {
         out.push(n as u8 | 0x80);
@@ -485,7 +485,7 @@ The checksum is FNV-1a over every field, kept by `Checksum`, which takes a recor
 
 An allocator works in bytes and a kernel reclaims whole pages. `idle` finds the whole pages inside a free block that hold neither its header, its links nor its footer, which are the pages that could be given back without losing anything the allocator will read:
 
-#srcfile("green-tea-fit/src/pages.rs", lines: ((17, 23),))[```rust
+#srcfile("allocators/fit/src/pages.rs", lines: ((17, 23),))[```rust
 pub fn idle(block: Block, page: usize) -> Range<usize> {
     debug_assert!(page.is_power_of_two() && !block.used);
     // The header and the links are the block's first three words; the footer is its last.
@@ -501,7 +501,7 @@ pub fn idle(block: Block, page: usize) -> Range<usize> {
 
 `adversary::run` is J. M. Robson's lower-bound argument run as a program. It never holds more than a `budget` of bytes, and asks for blocks of doubling sizes. Before each doubling it looks at where the allocator put its blocks and frees as many as it can without leaving a hole big enough for the next size:
 
-#srcfile("green-tea-fit/src/adversary.rs", lines: ((44, 56),))[```rust
+#srcfile("allocators/fit/src/adversary.rs", lines: ((44, 56),))[```rust
 for (i, &(addr, held_size)) in held.iter().enumerate() {
     let block = addr - OVERHEAD / 2;
     // Without this block, the hole would run to the next block we hold.
@@ -554,8 +554,8 @@ Next fit over a LIFO list used the whole 1,024 KiB region for a program that nev
 Four allocators, one interface, and the instruments to compare them. @crate-kmem applies the buddy idea to page frames.
 // chapter-status:begin
 // stage: research-done
-// revision: 2
-// body: 974a7bb876f8
+// revision: 3
+// body: 026ee5a0d2ad
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

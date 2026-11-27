@@ -1,0 +1,20 @@
+green-tea-rt on aarch64
+fw_cfg files:
+  0x0020      0 bios-geometry
+  0x0021      0 bootorder
+  0x0022     36 etc/acpi/rsdp
+  0x0023 131072 etc/acpi/tables
+  0x0024      4 etc/boot-fail-wait
+  0x0025     28 etc/ramfb
+  0x0026     24 etc/smbios/smbios-anchor
+  0x0027    299 etc/smbios/smbios-tables
+  0x0028   3072 etc/table-loader
+  0x0029      0 etc/tpm/log
+  0x002a  28672 vgaroms/vgabios-ramfb.bin
+ramfb: 640x480 XRGB8888
+rt: synthetic admission accepted/rejected and deadline miss reported
+rt: low priority holds mutex and sleeps
+rt: medium-priority interferer started
+rt: high-priority waiter completed
+rt: inherited owner released mutex
+PASS: fixed priorities, admission, timer wakeup, transitive inheritance; max interrupts-off 79486 ticks

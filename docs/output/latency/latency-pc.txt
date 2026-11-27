@@ -1,0 +1,19 @@
+[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01HBdsDxe: loading Boot0001 "UEFI Misc Device" from PciRoot(0x0)/Pci(0x3,0x0)
+BdsDxe: starting Boot0001 "UEFI Misc Device" from PciRoot(0x0)/Pci(0x3,0x0)
+usb: keyboard on port 5
+green-tea-latency on x86_64 (pc)
+timer capabilities: local_apic=true tsc_deadline=false invariant_tsc=false tsc_clock=true usable_tsc_deadline=false
+measurement: build=debug requested=ApicCountdown active=ApicCountdown cpu=0 apic_id=0 samples=8192 interval_ms=1 clock_ticks_per_ms=2886110 smi_counter=unavailable
+summary: samples=8192 late_samples=8192 overruns=295 missed_ticks=580
+lateness: max_us=65530 gap_events=4141 gap_us=790472
+unattributed_tsc_gaps=4141 accumulated_gap_us=790472 (a gap is not proof of an SMI)
+histogram: bins 0..62 are 1 us each; bin 63 is 63 us or more
+histogram_us[0..7]=0,0,0,0,0,0,0,0
+histogram_us[8..15]=0,0,0,0,0,0,0,0
+histogram_us[16..23]=0,0,0,0,0,0,0,0
+histogram_us[24..31]=1,0,0,0,2,1,3,2
+histogram_us[32..39]=3,3,7,5,11,13,34,80
+histogram_us[40..47]=104,150,163,159,164,204,194,191
+histogram_us[48..55]=228,207,206,212,200,218,198,205
+histogram_us[56..62,63+]=193,177,186,179,188,179,191,3731
+PASS: 8192 samples with requested ApicCountdown, active ApicCountdown; histogram timings are measurements, not guaranteed bounds

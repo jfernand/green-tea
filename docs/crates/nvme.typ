@@ -155,7 +155,7 @@ test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
 The `disk` kernel on the `pc` board runs the same checks as on virtio (@crate-coop), on QEMU's `nvme` device. That test overwrites a sector, and this board can meet a disk that holds someone's data. So `Pc::find_nvme` takes the serial number it wants, starts each controller on the bus to ask it, and turns off the ones that don't match. No block of any of them is read or written:
 
-#srcfile("green-tea-coop/src/main.rs", lines: ((312, 322),), size: 6.4pt, notes: ((312, [`DISK_ID` is the serial `xtask` gives its test image. A drive with any other serial is turned off, and nothing has been read or written.]),))[```rust
+#srcfile("kernels/coop/src/main.rs", lines: ((314, 324),), size: 6.4pt, notes: ((314, [`DISK_ID` is the serial `xtask` gives its test image. A drive with any other serial is turned off, and nothing has been read or written.]),))[```rust
 let mut disk = match Board::find_nvme(DISK_ID) {
     Ok(Some(disk)) => disk,
     Ok(None) => return println!("FAIL: no NVMe disk is the test disk, so none was touched"),
@@ -200,8 +200,8 @@ the disk's 32 KiB are unchanged
 One queue pair, one page, one guard. @crate-bare is what puts these drivers on a machine.
 // chapter-status:begin
 // stage: research-done
-// revision: 2
-// body: 3ae0c85797bf
+// revision: 3
+// body: 61099342a613
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

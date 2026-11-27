@@ -8,7 +8,7 @@
   ("Source", [#repo("green-tea-lisp/src/"), 11 files, 3,658 lines without their tests; 9 programs in #repo("green-tea-lisp/programs/"); 4 examples, 804 lines]),
   ("Depends on", [`alloc`; `no_std`]),
   ("Used by", [`green-tea-coop` (the `lisp`, `gc`, `gen` and `incremental` kernels), `green-tea-measure`]),
-  ("Tests", [165 host tests, the examples `heaps`, `generations`, `incremental` and `store_cost`, four kernels]),
+  ("Tests", [166 host tests, the examples `heaps`, `generations`, `incremental` and `store_cost`, four kernels]),
 )
 
 #dtable(columns: (auto, 1fr), ("Module", "What it holds"),
@@ -187,9 +187,9 @@ pub enum Error {
 
 === `eval` and tail calls
 
-`eval` takes an expression and an environment in the top two root slots and leaves the value in their place. It nests at most `MAX_DEPTH` (32) calls, because the kernels run the interpreter on their boot stack. Calls in tail position don't nest:
+`eval`, private to the crate, takes an expression and an environment in the top two root slots and leaves the value in their place. On an error it pops whatever it pushed, so the root stack is as deep as before the call, and the caller abandons the two slots. It nests at most `MAX_DEPTH` (32) calls, because the kernels run the interpreter on their boot stack. Calls in tail position don't nest:
 
-#srcfile("green-tea-lisp/src/eval.rs", lines: ((172, 206),), notes: ((177, [The test nests. The branch doesn't: `choose` puts it in slot `base` and the loop goes round.]), (190, [`operand` pushes one element of the call and the environment, and `eval` replaces them with its value.]), (194, [`apply` replaces the expression and environment in slots `base` and `base + 1` with the callee's: a tail call.]), (199, [All but the last expression of a body are evaluated and dropped. The last goes round the loop.]),))[```rust
+#srcfile("green-tea-lisp/src/eval.rs", lines: ((181, 215),), notes: ((186, [The test nests. The branch doesn't: `choose` puts it in slot `base` and the loop goes round.]), (199, [`operand` pushes one element of the call and the environment, and `eval` replaces them with its value.]), (203, [`apply` replaces the expression and environment in slots `base` and `base + 1` with the callee's: a tail call.]), (208, [All but the last expression of a body are evaluated and dropped. The last goes round the loop.]),))[```rust
 fn eval_at(&mut self, base: usize) -> Result<(), Error> {
     loop {
         match self.classify(base)? {
@@ -231,7 +231,7 @@ fn eval_at(&mut self, base: usize) -> Result<(), Error> {
 
 === `apply`
 
-#srcfile("green-tea-lisp/src/eval.rs", lines: ((277, 313),), notes: ((289, [The callee's environment is built in a root slot.]), (293, [The closure is read again from its slot on every round, because the `alloc` below may have moved it.]), (307, [Body and environment replace the caller's: no root slot and no Rust frame is left behind.]),))[```rust
+#srcfile("green-tea-lisp/src/eval.rs", lines: ((286, 322),), notes: ((298, [The callee's environment is built in a root slot.]), (302, [The closure is read again from its slot on every round, because the `alloc` below may have moved it.]), (316, [Body and environment replace the caller's: no root slot and no Rust frame is left behind.]),))[```rust
 fn apply(&mut self, base: usize, arguments: usize) -> Result<Applied, Error> {
     let function = base + 2;
     let closure = match self.heap.root(function).decode() {
@@ -778,12 +778,12 @@ One collection, timed on the host, shows what each heap's work depends on. Copyi
 #output(title: "the same run; the last column is a time, and varies from run to run")[
 ```
   heap             live  garbage   traced   walked  words moved  microseconds
-  mark-sweep       1000   100000     1000   101000            0           267
-  mark-compact     1000   100000     1000   303000         3000           351
-  copying          1000   100000     1000        0         3000            14
-  mark-sweep     100000     1000   100000   101000            0           804
-  mark-compact   100000     1000   100000   303000       300000          1520
-  copying        100000     1000   100000        0       300000           644
+  mark-sweep       1000   100000     1000   101000            0           922
+  mark-compact     1000   100000     1000   303000         3000          1573
+  copying          1000   100000     1000        0         3000            21
+  mark-sweep     100000     1000   100000   101000            0          2052
+  mark-compact   100000     1000   100000   303000       300000          3579
+  copying        100000     1000   100000        0       300000          2286
 ```
 ]
 
@@ -948,15 +948,15 @@ the write barrier, in 4096 words with a nursery of 256:
 ```
 ]]
 
-A minor collection doesn't depend on the size of the old space. With 100,000 objects kept, it took 129 nanoseconds in this run, and a collection of the whole heap more than a millisecond:
+A minor collection doesn't depend on the size of the old space. With 100,000 objects kept, it took 616 nanoseconds in this run, and a collection of the whole heap more than a millisecond:
 
 #output(title: "the same run; the last column is a time", size: 6.5pt)[
 ```
 one collection with a list that is kept and a nursery of 1024 words of garbage, run 1; the last column is a time:
   kept objects  collection          traced   walked  words moved  nanoseconds
-        100000  minor                    0        0            0          129
-        100000  minor and major     100000   300000            0      1190707
-        100000  copying             100000        0       300000      1623463
+        100000  minor                    0        0            0          616
+        100000  minor and major     100000   300000            0      4173797
+        100000  copying             100000        0       300000      3774553
 ```
 ]
 
@@ -964,14 +964,14 @@ The example `store_cost` counts what the barrier costs in instructions, under `v
 
 #output(title: "valgrind --tool=callgrind target/release/examples/store_cost store <case> <count>; instructions")[
 ```
-plain 0 388842
-plain 1000000 48388946
-old-integer 0 389483
-old-integer 1000000 61389586
-old-young 0 389627
-old-young 1000000 69390078
-every-old-young 0 389660
-every-old-young 1000000 62460327
+plain 0 388937
+plain 1000000 48389069
+old-integer 0 389606
+old-integer 1000000 61389688
+old-young 0 389750
+old-young 1000000 69390180
+every-old-young 0 389762
+every-old-young 1000000 62460429
 ```
 ]
 
@@ -1166,7 +1166,7 @@ The tests are in four files: `tests` for the language and `RcHeap`, `gc_tests` f
 
 #output(title: "cargo test -p green-tea-lisp")[
 ```
-test result: ok. 165 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 166 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 ]
 
@@ -1191,8 +1191,8 @@ PASS: five programs on three heaps that trace: 160 collections traced 25698 obje
 One language, six heaps, and the numbers to compare them. @crate-io starts the drivers.
 // chapter-status:begin
 // stage: research-done
-// revision: 3
-// body: d2889da28d85
+// revision: 4
+// body: 91a0c4a78734
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

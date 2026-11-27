@@ -11,8 +11,12 @@ sets how many virtual CPUs may run at once, with or without windows; a kernel wi
 counts as four.
 
   coop      green-tea-coop: tasks yield to each other (riscv64, aarch64, x86_64)
+  protected green-tea-black: x86_64 ring-3 process, mediated exit, and contained fault checks
+  rt        green-tea-rt: fixed-priority preemption, timed wakeups, inheritance and bounded locks
   preempt   green-tea-preempt: a timer interrupt preempts tasks that never yield, and one
             that sleeps between steps (riscv64, aarch64, x86_64)
+  latency   green-tea-latency: an 8192-sample APIC-countdown timer latency histogram (x86_64)
+  latency-deadline  the same histogram using capability-checked TSC-deadline mode (x86_64)
   overflow  green-tea-coop's test that a task overflowing its stack hits its guard page
             (riscv64, x86_64: the boards that page)
   disk      green-tea-coop's test of the virtio-blk driver: reads back a disk image made

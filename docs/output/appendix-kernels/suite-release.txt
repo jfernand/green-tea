@@ -2,11 +2,17 @@
 ok    coop-riscv64    57 switches, as expected
 ok    coop-aarch64    57 switches, as expected
 ok    coop-x86_64     57 switches, as expected
-ok    preempt-riscv64 41 preemptions; every busy worker ran in several slices, and the sleeper used 4 ms of CPU in 70 wakeups
-ok    preempt-aarch64 41 preemptions; every busy worker ran in several slices, and the sleeper used 6 ms of CPU in 70 wakeups
-ok    preempt-x86_64  38 preemptions; every busy worker ran in several slices, and the sleeper used 4 ms of CPU in 70 wakeups
-ok    overflow-riscv64 overflowed after 56 frames, into the task's guard page at 0x80805f88
-ok    overflow-x86_64 overflowed after 56 frames, into the task's guard page at 0x805f98
+ok    protected-x86_64 user exit, syscall checks, kernel/port/page isolation and fault cleanup
+ok    rt-riscv64      fixed priorities, admission, timer wakeup, transitive inheritance; max interrupts-off 5209 ticks
+ok    rt-aarch64      fixed priorities, admission, timer wakeup, transitive inheritance; max interrupts-off 41730 ticks
+ok    rt-x86_64       fixed priorities, admission, timer wakeup, transitive inheritance; max interrupts-off 90642 ticks
+ok    preempt-riscv64 39 preemptions; every busy worker ran in several slices, and the sleeper used 3 ms of CPU in 70 wakeups
+ok    preempt-aarch64 42 preemptions; every busy worker ran in several slices, and the sleeper used 8 ms of CPU in 70 wakeups
+ok    preempt-x86_64  38 preemptions; every busy worker ran in several slices, and the sleeper used 3 ms of CPU in 70 wakeups
+ok    latency-x86_64  8192 samples with requested ApicCountdown, active ApicCountdown; histogram timings are measurements, not guaranteed bounds
+ok    latency-deadline-x86_64 8192 samples with requested TscDeadline, active ApicCountdown; histogram timings are measurements, not guaranteed bounds
+FAIL  overflow-riscv64 kernel panicked: panicked at green-tea-bare/src/global.rs:73:9:
+FAIL  overflow-x86_64 kernel panicked: panicked at green-tea-bare/src/global.rs:73:9:
 ok    disk-riscv64    read 64 sectors over virtio-MMIO, and wrote one back
 ok    disk-aarch64    read 64 sectors over virtio-MMIO, and wrote one back
 ok    disk-x86_64     read 64 sectors over virtio-PCI, and wrote one back
@@ -25,9 +31,9 @@ ok    frag-x86_64     an adversary holding 65536 bytes made every policy need 38
 ok    tlsf-riscv64    with 8000 holes first fit looked at 8001 blocks for one allocation, and TLSF at 1; the kernel's heap never looked at more than 1 in 6622 allocations
 ok    tlsf-aarch64    with 8000 holes first fit looked at 8001 blocks for one allocation, and TLSF at 1; the kernel's heap never looked at more than 1 in 6622 allocations
 ok    tlsf-x86_64     with 8000 holes first fit looked at 8001 blocks for one allocation, and TLSF at 1; the kernel's heap never looked at more than 1 in 6622 allocations
-ok    slab-riscv64    4084 pages freed one by one merged 4074 times into the blocks they came from; 40 objects allocated twice were constructed 57 times; 1000 tasks took 8 stacks from the pool, and 96 ran at once
+ok    slab-riscv64    4084 pages freed one by one merged 4074 times into the blocks they came from; 40 objects allocated twice were constructed 57 times; 1000 tasks took 7 stacks from the pool, and 98 ran at once
 ok    slab-aarch64    4084 pages freed one by one merged 4074 times into the blocks they came from; 40 objects allocated twice were constructed 57 times; 1000 tasks took 9 stacks from the pool, and 99 ran at once
-ok    slab-x86_64     4084 pages freed one by one merged 4074 times into the blocks they came from; 40 objects allocated twice were constructed 57 times; 1000 tasks took 20 stacks from the pool, and 100 ran at once
+ok    slab-x86_64     4084 pages freed one by one merged 4074 times into the blocks they came from; 40 objects allocated twice were constructed 57 times; 1000 tasks took 18 stacks from the pool, and 90 ran at once
 ok    pages-riscv64   of 1024 pages reserved, 290 were the most mapped at once; 813 page faults, 779 pages released
 ok    pages-x86_64    of 1024 pages reserved, 290 were the most mapped at once; 813 page faults, 779 pages released
 ok    smp-riscv64     4 CPUs made 80128 allocations and frees each way: the heap's lock was taken 80128 times, and the lock behind a cache per CPU 2680 times
@@ -48,9 +54,9 @@ ok    smr-x86_64      an interrupted pop corrupted its stack when nodes were fre
 ok    gen-riscv64     seven programs on two generations: 7632 of 47009 objects left the nursery alive, and nothing was left
 ok    gen-aarch64     seven programs on two generations: 7632 of 47009 objects left the nursery alive, and nothing was left
 ok    gen-x86_64      seven programs on two generations: 7632 of 47009 objects left the nursery alive, and nothing was left
-ok    incremental-riscv64 212 cycles in 61497 steps of at most 28 units lost nothing; then 1494 ticks of the timer
-ok    incremental-aarch64 212 cycles in 61497 steps of at most 28 units lost nothing; then 1542 ticks of the timer
-ok    incremental-x86_64 212 cycles in 61497 steps of at most 28 units lost nothing; then 1492 ticks of the timer
+ok    incremental-riscv64 212 cycles in 61497 steps of at most 28 units lost nothing; then 985 ticks of the timer
+ok    incremental-aarch64 212 cycles in 61497 steps of at most 28 units lost nothing; then 889 ticks of the timer
+ok    incremental-x86_64 212 cycles in 61497 steps of at most 28 units lost nothing; then 1330 ticks of the timer
 ok    shell-riscv64   1000 commands made 8000 heap allocations and freed them all, or none from an arena that peaked at 368
 ok    shell-aarch64   1000 commands made 8000 heap allocations and freed them all, or none from an arena that peaked at 368
 ok    shell-x86_64    1000 commands made 8000 heap allocations and freed them all, or none from an arena that peaked at 368

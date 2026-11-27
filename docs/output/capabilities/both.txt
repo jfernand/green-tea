@@ -1,0 +1,2 @@
+error: Green and Black are mutually exclusive base profiles
+error: could not compile `green-tea-capabilities` (lib) due to 1 previous error

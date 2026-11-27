@@ -5,16 +5,16 @@
 `green-tea-virtio` implements the virtio device model: the status handshake, feature negotiation, split virtqueues, and the two transports, MMIO on `riscv64` and `aarch64` `virt` and PCI on `x86_64` `q35`. A device driver such as @crate-virtio-blk is written once against the `Transport` trait and runs on all three. Only modern virtio (1.0 and later) is implemented, so everything on the wire is little-endian and the `VERSION_1` feature is required.
 
 #spec(
-  ("Source", [#repo("drivers/virtio/src/"), 4 files, 991 lines]),
+  ("Source", [#repo("drivers/virtio/src/"), 4 files, 1,020 lines]),
   ("Depends on", [`green-tea-io`, `green-tea-pci`, and `alloc`: a queue is heap-allocated]),
   ("Used by", [`green-tea-virtio-blk`, `green-tea-bare` (each QEMU board's `for_each_virtio`)]),
-  ("Tests", [15 host tests, on fake devices in memory; the `disk` kernel, on all three architectures]),
+  ("Tests", [16 host tests, on fake devices in memory; the `disk` kernel, on all three architectures]),
 )
 
 #dtable(columns: (auto, 1fr), ("Module", "What it holds"),
   [crate root], [`Transport`, `negotiate`, `failed`, `driver_ok`, `AnyTransport`, `Device`, `device_name`, the `ID_*`, `STATUS_*` and `F_VERSION_1` constants],
   [`mmio`], [`MmioTransport`, and `probe` for one slot],
-  [`pci`], [`PciTransport`, and `probe` for one PCI function],
+  [`pci`], [`PciTransport` and its `enable_dma`, and `probe` for one PCI function],
   [`queue`], [`Queue`, `Buffer`, `SIZE`],
 )
 
@@ -145,7 +145,7 @@ On PCI, a virtio device is a function with vendor `0x1af4`. Its id comes from th
 
 The driver uses three of the structures: type 1 (`CFG_COMMON`), type 2 (`CFG_NOTIFY`) and type 4 (`CFG_DEVICE`). It ignores the ISR status, since it polls.
 
-#srcfile("drivers/virtio/src/pci.rs", lines: ((74, 93),), size: 6.8pt, notes: ((79, [`bar < 6` guards the index, and `ecam.bar` returns `None` for an I/O BAR, so such a capability is skipped.]), (92, [A device without common and notify structures is refused here, and stays off.]), (93, [The device needs memory decoding and DMA from here on.]),))[```rust
+#srcfile("drivers/virtio/src/pci.rs", lines: ((78, 97),), size: 6.8pt, notes: ((83, [`bar < 6` guards the index, and `ecam.bar` returns `None` for an I/O BAR, so such a capability is skipped.]), (96, [A device without common and notify structures is refused here, and stays off.]), (97, [Memory decoding only, so the driver can reach the registers. The device can't do DMA yet.]),))[```rust
 ecam.for_each_capability(f, |cap, cap_id| {
     if cap_id != CAPABILITY_VENDOR {
         return;
@@ -165,12 +165,27 @@ ecam.for_each_capability(f, |cap, cap_id| {
     }
 });
 let (common, notify) = (common?, notify?);
-ecam.enable(f);
+ecam.enable_memory(f);
 ```]
+
+Bus mastering, which lets the device read the rings and buffers on its own, is a separate grant. `PciTransport` keeps the `Ecam` and the `Function` it came from, and a `dma_enabled` flag that starts `false`. `enable_dma` is `unsafe` for the reason `Ecam::enable_bus_master` is (@crate-pci): the device will be able to reach any physical address, and only the caller can vouch for it:
+
+#srcfile("drivers/virtio/src/pci.rs", lines: ((119, 123), (178, 179),), notes: ((121, [Sets the command register's bus-master bit, through @crate-pci.]), (179, [The first use of a queue checks the grant, so a driver whose board never authorized DMA panics before it hands the device an address.]),))[```rust
+pub unsafe fn enable_dma(&mut self) {
+    // SAFETY: this method's caller upholds the bus-master authorization contract.
+    unsafe { self.ecam.enable_bus_master(self.function) };
+    self.dma_enabled = true;
+}
+// …
+fn setup_queue(&mut self, queue: u16, size: u16, descriptors: u64, driver: u64, device: u64) {
+    assert!(self.dma_enabled, "PCI virtio bus mastering was not authorized");
+```]
+
+The `q35` board's `for_each_virtio` calls `enable_dma` on every transport `probe` returns, with the comment that Green runs these drivers as trusted code. In a Black build it refuses to scan at all, with `virtio PCI assignment refused: no IOMMU DMA isolation backend`. The MMIO transport has no such grant: a virtio-mmio device on `virt` can do DMA from the moment it exists.
 
 The common configuration structure has its fields at fixed offsets, of mixed widths, so `PciTransport` has generic `read<T>` and `write<T>` over it. A queue's setup looks like the MMIO one, with one addition:
 
-#srcfile("drivers/virtio/src/pci.rs", lines: ((168, 170),), size: 6.1pt, notes: ((169, [Each queue has its own notification address: the notify structure, plus `queue_notify_off` times the capability multiplier. It is saved in an array of `MAX_QUEUES` (4), so that `notify` needn't reselect the queue. An address of 0 there means the queue was never set up.]),))[```rust
+#srcfile("drivers/virtio/src/pci.rs", lines: ((186, 188),), size: 6.1pt, notes: ((187, [Each queue has its own notification address: the notify structure, plus `queue_notify_off` times the capability multiplier. It is saved in an array of `MAX_QUEUES` (4), so that `notify` needn't reselect the queue. An address of 0 there means the queue was never set up.]),))[```rust
 let offset: u16 = self.read(QUEUE_NOTIFY_OFF);
 self.queue_notify[usize::from(queue)] = self.notify + usize::from(offset) * self.notify_multiplier as usize;
 self.write(QUEUE_ENABLE, 1u16);
@@ -303,11 +318,11 @@ Since a finished chain goes back to the front of the free list in its original o
 
 == Exercised by
 
-The host tests run the negotiation, both transports and the buffers against fake devices in ordinary memory: a refused feature set keeps the status bits, a queue in use isn't reported as missing, an incomplete PCI device stays off, and a notification for a queue that was never set up panics.
+The host tests run the negotiation, both transports and the buffers against fake devices in ordinary memory: a refused feature set keeps the status bits, a queue in use isn't reported as missing, an incomplete PCI device stays off, a complete one gets memory decoding but not bus mastering until `enable_dma`, and a notification for a queue that was never set up panics.
 
 #output(title: "cargo test -p green-tea-virtio")[
 ```
-test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 ]
 
@@ -335,15 +350,15 @@ PASS: read 64 sectors over virtio-PCI, and wrote one back
 
 - Split virtqueues only, with no packed rings, indirect descriptors or `EVENT_IDX`. The driver polls, and no transport sets up interrupts.
 - A device whose largest queue is under 16 is refused, although a smaller queue would serve a three-descriptor request.
-- `pci::probe` enables memory decoding and bus mastering on every complete virtio function a scan finds, including those nobody goes on to drive.
+- `pci::probe` enables memory decoding on every complete virtio function a scan finds, and the `q35` board then grants each one bus mastering, including those nobody goes on to drive. Nothing confines that DMA (@crate-dma).
 - The PCI transport handles four queues, `MAX_QUEUES`. Past them, `max_queue_size` says 0 and `setup_queue` panics.
 - The waits have no timeout: the reset loop in `negotiate` spins until the device answers.
 
 One device model, two transports, three machines. @crate-virtio-blk puts a disk on it.
 // chapter-status:begin
 // stage: research-done
-// revision: 2
-// body: c1287b826d3d
+// revision: 3
+// body: 8373ba26ad32
 // activity: 2026-11-22 | r2 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r2 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

@@ -35,15 +35,15 @@
 
 With `--board pc`, `kernel` makes a UEFI boot directory for each job, `target/kernel/pc/<kernel>-x86_64`, whose `EFI/BOOT/BOOTX64.EFI` is a GRUB built by `grub-mkstandalone` with its configuration and the kernel inside it. Copying that `EFI` directory to a FAT-formatted USB stick boots the kernel on a machine with Secure Boot off. The command needs `grub-mkstandalone` and the `ovmf` package.
 
-Its QEMU run differs from a default one in five ways: OVMF is the firmware, with a private copy of its variables; the boot directory is a read-only FAT drive; the machine has 512 MiB and a standard VGA; an xHCI controller with a USB keyboard is attached; and serial input goes through a socket, sent after the kernel's banner, since the firmware and GRUB read the serial port too.
+Its QEMU run differs from a default one in five ways: OVMF is the firmware, with a private copy of its variables; the boot directory is a read-only FAT drive; the machine has 512 MiB and a standard VGA; an xHCI controller is attached, with a USB keyboard for every kernel but `protected`, which tests the PS/2 keyboard; and serial input goes through a socket, sent after the kernel's banner, since the firmware and GRUB read the serial port too.
 
 == The environment
 
 `GREEN_TEA_MAX_CPUS` sets `cpus::MAX`, the most CPUs a kernel will start, at build time: a number from 1 to 256, and 8 if it isn't set. `green-tea-bare`'s build script checks it.
 // chapter-status:begin
 // stage: research-done
-// revision: 3
-// body: ff91049841ea
+// revision: 4
+// body: 5d9b347cf704
 // activity: 2026-11-22 | r3 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r3 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

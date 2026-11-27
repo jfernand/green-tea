@@ -1,0 +1,8 @@
+test tests::black_white_checks_process_isolation_before_realtime ... ok
+test tests::cargo_selects_a_static_profile ... ok
+test tests::dma_isolation_is_requested_separately ... ok
+test tests::green_profile_needs_no_protection_backend ... ok
+test tests::page_tables_do_not_imply_protected_address_spaces ... ok
+test tests::white_requires_the_realtime_runtime ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out

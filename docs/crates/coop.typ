@@ -5,15 +5,15 @@
 `green-tea-coop` is one kernel binary that holds eighteen kernels: a demo of cooperative tasks on the display, and seventeen tests. Each test exercises a crate of the workspace on the bare machine, prints what it measured, and ends with a line that starts `PASS:` or `FAIL:`, which is what `cargo xtask kernel` looks for.
 
 #spec(
-  ("Source", [#repo("green-tea-coop/src/"), 14 files, 6,050 lines]),
-  ("Depends on", [`green-tea-bare` (@crate-bare), `green-tea-lisp` (@crate-lisp), `green-tea-shard` (@crate-shard), `green-tea-smr` (@crate-smr)]),
+  ("Source", [#repo("kernels/coop/src/"), 14 files, 6,135 lines]),
+  ("Depends on", [`green-tea-bare` (@crate-bare), `green-tea-scheduler-coop` (@crate-scheduler-coop), `green-tea-lisp` (@crate-lisp), `green-tea-shard` (@crate-shard), `green-tea-smr` (@crate-smr)]),
   ("Used by", [nothing: it is a binary, run by `cargo xtask kernel` (@crate-xtask)]),
   ("Tests", [it is the tests. All recordings below are from riscv64 unless they say otherwise]),
 )
 
 The choice of kernel is made outside the binary. `xtask` passes the name in a `fw_cfg` file, `opt/green-tea/test`, or on the `pc` board as `test=` on GRUB's command line. `Board::test_name` reads it, and `kmain` matches it:
 
-#srcfile("green-tea-coop/src/main.rs", lines: ((54, 64), (76, 80),), notes: ((58, [No name means the demo.]), (60, [virtio-blk on the QEMU boards, NVMe on `pc`: two functions of this name, chosen at build time.]), (76, [A name the binary doesn't know is a panic, which `xtask` reports as a failure.]),))[```rust
+#srcfile("kernels/coop/src/main.rs", lines: ((54, 64), (76, 80),), notes: ((58, [No name means the demo.]), (60, [virtio-blk on the QEMU boards, NVMe on `pc`: two functions of this name, chosen at build time.]), (76, [A name the binary doesn't know is a panic, which `xtask` reports as a failure.]),))[```rust
     let fb = boot("green-tea-coop");
     let mut test = [0u8; 16];
     let len = Board::test_name(&mut test);
@@ -58,9 +58,9 @@ Each of the thirteen files after `main.rs` has one public function, `test`, whic
 
 == `coop`: tasks that yield
 
-Five workers each grow a bar, one step per turn, and yield. The scheduler's hook moves the highlight to the task about to run and waits 150 ms, so that the switches can be watched. Worker 0 spawns worker 4 during its third turn:
+Five workers each grow a bar, one step per turn, and yield. `run`, `spawn` and `yield_now` come from @crate-scheduler-coop. The scheduler's hook moves the highlight to the task about to run and waits 150 ms, so that the switches can be watched. Worker 0 spawns worker 4 during its third turn:
 
-#srcfile("green-tea-coop/src/main.rs", lines: ((131, 143),), notes: ((134, [The only way a task gives up the CPU here.]),))[```rust
+#srcfile("kernels/coop/src/main.rs", lines: ((131, 143),), notes: ((134, [The only way a task gives up the CPU here.]),))[```rust
 fn worker(mut painter: Painter, column: usize) {
     for turn in 1..=TURNS[column] {
         if turn > 1 {
@@ -90,7 +90,7 @@ PASS: 57 switches, as expected
 
 A task recurses with a frame of 256 bytes, well under a page, so that it can't skip the guard:
 
-#srcfile("green-tea-coop/src/main.rs", lines: ((191, 199),))[```rust
+#srcfile("kernels/coop/src/main.rs", lines: ((193, 201),))[```rust
 #[inline(never)]
 fn recurse(depth: u64) -> u64 {
     DEPTH.set(depth);
@@ -107,7 +107,7 @@ The test replaces the overflow reaction with `stack::on_overflow`. It passes onl
 #output(title: "cargo xtask kernel --kernel overflow --target riscv64")[
 ```
 overflowing a 16 KiB task stack
-PASS: overflowed after 26 frames, into the task's guard page at 0x80a05ff0
+PASS: overflowed after 26 frames, into the task's guard page at 0x80a05fe0
 ```
 ]
 
@@ -115,7 +115,7 @@ PASS: overflowed after 26 frames, into the task's guard page at 0x80a05ff0
 
 `xtask` attaches a 64-sector image in which every byte is a function of where it is, so a sector read from the wrong place doesn't match:
 
-#srcfile("green-tea-coop/src/main.rs", lines: ((208, 210),))[```rust
+#srcfile("kernels/coop/src/main.rs", lines: ((210, 212),))[```rust
 fn pattern(sector: u64, offset: usize) -> u8 {
     (sector as u8).wrapping_mul(31) ^ (offset as u8) ^ (offset >> 8) as u8
 }
@@ -134,7 +134,7 @@ PASS: read 64 sectors over virtio-PCI, and wrote one back
 
 The checks are written once, in `check_disk`, against a small trait that both drivers implement:
 
-#srcfile("green-tea-coop/src/main.rs", lines: ((260, 268),),)[```rust
+#srcfile("kernels/coop/src/main.rs", lines: ((262, 270),),)[```rust
 trait Disk {
     type Error: core::fmt::Display + PartialEq;
     const OUT_OF_RANGE: Self::Error;
@@ -152,7 +152,7 @@ On `pc` the same checks run on NVMe, behind a guard, since that board can meet a
 
 `memmap_test` prints each section (the output is in @crate-bare), and `check_memmap` verifies that each starts on its alignment, that they are in order without overlap, and that the ones the script sizes have that size. Then eight *witnesses*, one address of each kind, must be where they belong:
 
-#srcfile("green-tea-coop/src/main.rs", lines: ((422, 431),))[```rust
+#srcfile("kernels/coop/src/main.rs", lines: ((424, 433),))[```rust
 let witnesses = [
     ("a function", memmap_test as fn(Framebuffer) as usize, ".text", 1),
     ("a constant static", &raw const CONSTANT as usize, ".rodata", 1),
@@ -168,13 +168,13 @@ let witnesses = [
 #output(title: "cargo xtask kernel --kernel memmap --target riscv64")[
 ```
   address    in       what
-  0x802950ea .text    a function
-  0x803058b0 .rodata  a constant static
-  0x8031bd98 .data    an initialised static
-  0x8031da78 .bss     a zeroed static
-  0x8047cfef .stack   a local of kmain's
-  0x80482010 .heap    a Box<u64>
-  0x80483000 .heap    a Box<Page>
+  0x802814ea .text    a function
+  0x80308bc0 .rodata  a constant static
+  0x80322698 .data    an initialised static
+  0x80324af0 .bss     a zeroed static
+  0x80483fef .stack   a local of kmain's
+  0x80489010 .heap    a Box<u64>
+  0x8048a000 .heap    a Box<Page>
   0x80a04f46 .stacks  a local of a task's
 PASS: 7 sections in order and aligned; 8 addresses where they should be
 ```
@@ -184,7 +184,7 @@ PASS: 7 sections in order and aligned; 8 addresses where they should be
 
 The same takes and gives go to both of `green-tea-pool`'s pools (@crate-pool). A slot given back twice breaks `give`'s contract on purpose:
 
-#srcfile("green-tea-coop/src/main.rs", lines: ((529, 532),))[```rust
+#srcfile("kernels/coop/src/main.rs", lines: ((531, 534),))[```rust
 let slot = base + 7 * POOL_SLOT;
 let _ = unsafe { pool.give(slot) };
 let second_give = unsafe { pool.give(slot) };
@@ -214,12 +214,12 @@ The free list has no way to notice a second give, and then hands slot 7 to two c
 #output(title: "cargo xtask kernel --kernel fit --target riscv64")[
 ```
 after free(a), a's block:
-  0x80482018  0x0000000000000030
-  0x80482020  0x0000000080482078
-  0x80482028  0x0000000000000000
-  0x80482030  0x6161616161616161
-  0x80482038  0x0000000000000000
-  0x80482040  0x0000000000000030
+  0x80489018  0x0000000000000030
+  0x80489020  0x0000000080489078
+  0x80489028  0x0000000000000000
+  0x80489030  0x6161616161616161
+  0x80489038  0x0000000000000000
+  0x80489040  0x0000000000000030
 a request for 64 bytes, which takes a block of 80:
   first fit  looked at 2 free blocks: (64) 32 80 (176) 32 (96) 32 (3568)
   next fit   looked at 1 free blocks: (64) 32 (256) 32 (96) 32 80 (3488)
@@ -233,7 +233,7 @@ The tags now read `0x30` where they read `0x31`, the first word of the caller's 
 
 `holes` shows the problem in a kilobyte: eight blocks of 128 bytes, every other one freed, and a request for 200 bytes refused with 512 free. `adversaries` runs `green-tea-fit`'s adversary against all six policies, and `random_workload` replays `random_trace` against them:
 
-#srcfile("green-tea-coop/src/frag.rs", lines: ((63, 71),))[```rust
+#srcfile("kernels/coop/src/frag.rs", lines: ((63, 71),))[```rust
 while let Some(addr) = fit.allocate(100, 8) {
     blocks.push(addr);
 }
@@ -262,7 +262,7 @@ PASS: an adversary holding 65536 bytes made every policy need 388384 bytes, 5.93
 
 `buddies` draws a buddy system splitting and merging, `blocks` shows the block each allocator makes for a request, and `lists` shows which TLSF list a free block goes on. `long_searches` builds the worst case for a search, thousands of small holes in front of the one block that fits, and times 100 allocations and frees:
 
-#srcfile("green-tea-coop/src/tlsf.rs", lines: ((227, 233),))[```rust
+#srcfile("kernels/coop/src/tlsf.rs", lines: ((227, 233),))[```rust
 let before = heap.stats();
 let start = Board::ticks();
 for _ in 0..PAIRS {
@@ -275,10 +275,10 @@ let ticks = Board::ticks() - start;
 #output(title: "cargo xtask kernel --kernel tlsf --target riscv64")[
 ```
   holes  allocator               looked at  walked past  microseconds
-   1000  first fit, by address        1001         1000       1114.8
-   1000  best fit, by address         1001         1000       1510.3
-   1000  buddy system                    5            0         19.4
-   1000  TLSF                            1            0         18.7
+   1000  first fit, by address        1001         1000       1052.4
+   1000  best fit, by address         1001         1000       1474.2
+   1000  buddy system                    5            0         15.1
+   1000  TLSF                            1            0         14.4
 ```
 ]
 
@@ -297,15 +297,15 @@ a slab is a page: 19 buffers, a record of 40 bytes at the end, and 104 bytes to 
   all 40 freed                  0       0     3       0          57         0     3       4081
   40 objects again              2       1     0      40          57         0     3       4081
   all freed, and reaped         0       0     0       0          57        57     0       4084
-the kernel's cache of task records: a record is 488 bytes, a buffer 496, and a slab holds 8
+the kernel's cache of task records: a record is 512 bytes, a buffer 520, and a slab holds 7
 1000 tasks, one after another, every one with its locals at 0x80a09f2e:
-  1001 records allocated, 8 constructed, in 1 slab; 8 stacks taken from the pool
+  1001 records allocated, 7 constructed, in 1 slab; 7 stacks taken from the pool
 ```
 ]
 
 Objects freed stay constructed: forty allocated twice were constructed 57 times, once per buffer of three slabs. `pinned` keeps ten objects out of 190, once one per slab and once all in one slab. The first keeps ten pages and the second keeps one:
 
-#srcfile("green-tea-coop/src/slab.rs", lines: ((434, 442),))[```rust
+#srcfile("kernels/coop/src/slab.rs", lines: ((437, 445),))[```rust
 // Keep ten: the first of each slab, or the first ten of the first slab.
 let mut kept = Vec::new();
 for (index, object) in objects.into_iter().enumerate() {
@@ -330,7 +330,7 @@ for (index, object) in objects.into_iter().enumerate() {
 
 `run` follows a megabyte through allocation, writing, freeing and trimming (the table is in @crate-bare). `walks` prints the page-table entries for six addresses. `boundary` is the delicate case: a free block whose header is the last word of a page, so that its links are on the next page, which `trim` must not release:
 
-#srcfile("green-tea-coop/src/pages.rs", lines: ((163, 166),), notes: ((164, [A filler that ends on the last word of a page, so that the next block's header does too.]),))[```rust
+#srcfile("kernels/coop/src/pages.rs", lines: ((163, 166),), notes: ((164, [A filler that ends on the last word of a page, so that the next block's header does too.]),))[```rust
 let probe = alloc(layout(PAGE)) as usize;
 let filler_size = (PAGE - probe % PAGE) % PAGE + PAGE;
 let filler = alloc(layout(filler_size));
@@ -357,7 +357,7 @@ With one block kept in 64, 12,288 live bytes would fill 4 pages and hold 256.
 
 The kernel starts the other three CPUs (QEMU is given `-smp 4`), and all four do the same work. First, an addition without a lock and with one:
 
-#srcfile("green-tea-coop/src/smp.rs", lines: ((180, 187),), notes: ((184, [A load and a store, as `counter += 1` compiles to. Another CPU's store can come between them, and is then overwritten.]),))[```rust
+#srcfile("kernels/coop/src/smp.rs", lines: ((184, 191),), notes: ((188, [A load and a store, as `counter += 1` compiles to. Another CPU's store can come between them, and is then overwritten.]),))[```rust
 cpus::run(|_| {
     for _ in 0..ADDS {
         // A load and a store, as `counter += 1` compiles to. Another CPU's store can
@@ -373,12 +373,12 @@ cpus::run(|_| {
 4 CPUs are running: the one that booted, and 3 it started
 each CPU adds 1 to a counter 1000000 times:
   with a lock: the counter is 4000000, and the lock was taken 4000000 times
-  this run: without a lock the counter is 1878532; with one, 3898024 acquisitions waited
+  this run: without a lock the counter is 1711858; with one, 3503034 acquisitions waited
 each CPU makes 20000 allocations and frees, of 1 to 512 bytes, holding up to 96:
   the kernel's heap, behind its lock:  80128 operations, and the lock was taken 80128 times
-  this run: 64003 of those waited for another CPU; 522 ms
+  this run: 55276 of those waited for another CPU; 1378 ms
   a cache for each CPU:                80128 operations, and the lock was taken 2680 times
-  this run: 754 of those waited for another CPU; 337 ms
+  this run: 646 of those waited for another CPU; 838 ms
 ```
 ]
 
@@ -410,7 +410,7 @@ A recursive free of a list needs 288 bytes of stack per pair, so a 16 KiB task s
 
 All four CPUs do the same work twice: through a cache each in front of a locked heap, and through a heap of pages each (@crate-shard). The second kind of work is the hard one, where every block a CPU allocates is freed by another:
 
-#srcfile("green-tea-coop/src/shard.rs", lines: ((188, 195),), notes: ((189, [Of the blocks `from` left, the third that belongs to this CPU.]), (192, [`inspect` checks that the block still holds `from`'s bytes.]),))[```rust
+#srcfile("kernels/coop/src/shard.rs", lines: ((194, 201),), notes: ((195, [Of the blocks `from` left, the third that belongs to this CPU.]), (198, [`inspect` checks that the block still holds `from`'s bytes.]),))[```rust
 for from in (0..CPUS).filter(|&from| from != cpu) {
     for j in (0..PASSED).filter(|j| (from + 1 + j % 3) % CPUS == cpu) {
         let addr = LEFT[before][from][j].load(Ordering::Acquire);
@@ -448,7 +448,7 @@ a list of 4 pairs, made after 4 pairs of garbage, in a heap of 64 words: where i
 
 `missed_root` shows what a tracing heap demands of its user. A reference is kept in a Rust variable, where the heap can't see it, across a collection:
 
-#srcfile("green-tea-coop/src/gc.rs", lines: ((341, 348),))[```rust
+#srcfile("kernels/coop/src/gc.rs", lines: ((341, 348),))[```rust
 let borrowed: Obj = heap.top().as_obj().ok_or("no pair")?;
 let before = (heap.field(borrowed, 0), heap.field(borrowed, 1));
 heap.pop(); // the variable is now the only reference
@@ -470,7 +470,7 @@ a reference to the pair (1 . 2), kept in a variable across a collection and one 
 
 A lock-free stack (@crate-smr) is stopped in the middle of a pop, between reading the head and its compare-and-swap, and another thread does what it could do there:
 
-#srcfile("green-tea-coop/src/smr.rs", lines: ((126, 135),))[```rust
+#srcfile("kernels/coop/src/smr.rs", lines: ((126, 135),))[```rust
 let popped = stack.pop_paused(mine, || {
     rounds += 1;
     if rounds == 1 {
@@ -527,7 +527,7 @@ PASS: seven programs on two generations: 7632 of 47009 objects left the nursery 
 
 A minor collection traces nothing of the 10,000 old pairs. `missed_store` writes an old-to-young reference with the barrier and without it:
 
-#srcfile("green-tea-coop/src/generations.rs", lines: ((355, 361),), notes: ((358, [The store the minor collection won't hear about.]),))[```rust
+#srcfile("kernels/coop/src/generations.rs", lines: ((355, 361),), notes: ((358, [The store the minor collection won't hear about.]),))[```rust
 if barrier {
     heap.set_field(old, 0, heap.top());
 } else {
@@ -566,7 +566,7 @@ The heap marks and sweeps a few objects at a time, between the program's steps. 
 
 This is the only test that takes interrupts. A timer every 200 µs sets a flag, and `alloc` does a step when it finds the flag set. The handler touches nothing of the heap, which the interrupted code may be half way through changing:
 
-#srcfile("green-tea-coop/src/incremental.rs", lines: ((281, 289),))[```rust
+#srcfile("kernels/coop/src/incremental.rs", lines: ((281, 289),))[```rust
 fn on_tick() {
     TICKS.set(TICKS.get() + 1);
     let now = Board::ticks();
@@ -582,8 +582,8 @@ fn on_tick() {
 ```
   a time, not a count: whole                   59 cycles,    59 steps of at most  922 units,  0 stalls of at most    0 units
   a time, not a count: 4 units an allocation   58 cycles, 14798 steps of at most   14 units,  0 stalls of at most    0 units
-  a time, not a count:   6747 ticks, 6610 found by an allocation, after 66 us on average and 579 us at most
-PASS: 212 cycles in 61497 steps of at most 28 units lost nothing; then 13505 ticks of the timer
+  a time, not a count:   17580 ticks, 11728 found by an allocation, after 252 us on average and 5161 us at most
+PASS: 212 cycles in 61497 steps of at most 28 units lost nothing; then 35462 ticks of the timer
 ```
 ]
 
@@ -593,12 +593,12 @@ The longest step falls from 922 units to 14.
 
 First the bug, in two tasks that share a `Fit`. One writes to a block after freeing it, with a value that reads as a link to a forged free block inside its own buffer:
 
-#srcfile("green-tea-coop/src/safety.rs", lines: ((110, 120),), notes: ((119, [`forge` lays out what looks like a free block, inside the buffer.]), (120, [The write after the free: the freed block's first word is the allocator's link.]),))[```rust
-let line = shared().allocate(48, 8).unwrap();
-let buffer = shared().allocate(96, 8).unwrap();
+#srcfile("kernels/coop/src/safety.rs", lines: ((113, 123),), notes: ((113, [`with_shared` lends the shared `Fit` to a closure that doesn't yield, so the two tasks never hold it at once.]), (122, [`forge` lays out what looks like a free block, inside the buffer.]), (123, [The write after the free: the freed block's first word is the allocator's link.]),))[```rust
+let line = with_shared(|fit| fit.allocate(48, 8).unwrap());
+let buffer = with_shared(|fit| fit.allocate(96, 8).unwrap());
 LOGGER.set([line, buffer]);
 println!("  logger: a line at {line:#x}, and a buffer of 96 bytes at {buffer:#x}");
-unsafe { shared().free(line).unwrap() };
+with_shared(|fit| unsafe { fit.free(line).unwrap() });
 // The write after the free. The line's first word is now where the allocator keeps
 // its link to the next free block, and what is written there is the address of the
 // buffer's second word. The buffer's contents are the worst they could be: they read
@@ -611,8 +611,8 @@ The other task then allocates, and is handed memory that belongs to the first:
 
 #output(title: "cargo xtask kernel --kernel safety --target riscv64")[
 ```
-  logger: frees the line, then writes 0x80482068 to its first word
-  clerk:  a record at 0x80482020 holding 1000, and one at 0x80482070 holding 2000
+  logger: frees the line, then writes 0x80489068 to its first word
+  clerk:  a record at 0x80489020 holding 1000, and one at 0x80489070 holding 2000
   logger: fills its buffer with the letter a
   clerk:  its records now hold 1000 and 0x6161616161616161
 the clerk's second record is inside the logger's buffer: true
@@ -630,8 +630,8 @@ the clerk's second record is inside the logger's buffer: true
 Eighteen kernels, one binary, and a line that says `PASS`. @crate-preempt takes the `yield_now` away.
 // chapter-status:begin
 // stage: research-done
-// revision: 4
-// body: c30df18eb324
+// revision: 5
+// body: d3d5fdffa046
 // activity: 2026-11-22 | r4 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r4 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end
