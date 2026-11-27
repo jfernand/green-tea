@@ -90,10 +90,10 @@ PASS: 57 switches, as expected
 
 A task recurses with a frame of 256 bytes, well under a page, so that it can't skip the guard:
 
-#srcfile("kernels/coop/src/main.rs", lines: ((193, 201),))[```rust
+#srcfile("kernels/coop/src/main.rs", lines: ((196, 204),), notes: ((198, [An atomic, not a `Global`: the fault can come while a borrow is held.]),))[```rust
 #[inline(never)]
 fn recurse(depth: u64) -> u64 {
-    DEPTH.set(depth);
+    DEPTH.store(depth, Ordering::Relaxed);
     let frame = core::hint::black_box([depth as u8; 256]);
     if depth == u64::MAX {
         return 0;
@@ -104,10 +104,12 @@ fn recurse(depth: u64) -> u64 {
 
 The test replaces the overflow reaction with `stack::on_overflow`. It passes only if the fault's address is inside *this* task's guard page. Without guard pages the recursion would run on into the next slot, silently, so the kernel doesn't run on aarch64.
 
+The fault handler reads the depth, so the depth can't live in a `Global`. Until `673716c` it did, and release builds failed. There, the first write to each new frame is the borrow guard of `DEPTH.set`, saved after the borrow flag is set. That write is the one that hits the guard page, so the task died holding the borrow, and the handler's read panicked with "a Global was borrowed reentrantly or concurrently". Debug builds touch the frame before taking the borrow, and passed. An atomic has no borrow to leave behind.
+
 #output(title: "cargo xtask kernel --kernel overflow --target riscv64")[
 ```
 overflowing a 16 KiB task stack
-PASS: overflowed after 26 frames, into the task's guard page at 0x80a05fe0
+PASS: overflowed after 26 frames, into the task's guard page at 0x80a05fb0
 ```
 ]
 
@@ -115,7 +117,7 @@ PASS: overflowed after 26 frames, into the task's guard page at 0x80a05fe0
 
 `xtask` attaches a 64-sector image in which every byte is a function of where it is, so a sector read from the wrong place doesn't match:
 
-#srcfile("kernels/coop/src/main.rs", lines: ((210, 212),))[```rust
+#srcfile("kernels/coop/src/main.rs", lines: ((213, 215),))[```rust
 fn pattern(sector: u64, offset: usize) -> u8 {
     (sector as u8).wrapping_mul(31) ^ (offset as u8) ^ (offset >> 8) as u8
 }
@@ -134,7 +136,7 @@ PASS: read 64 sectors over virtio-PCI, and wrote one back
 
 The checks are written once, in `check_disk`, against a small trait that both drivers implement:
 
-#srcfile("kernels/coop/src/main.rs", lines: ((262, 270),),)[```rust
+#srcfile("kernels/coop/src/main.rs", lines: ((265, 273),),)[```rust
 trait Disk {
     type Error: core::fmt::Display + PartialEq;
     const OUT_OF_RANGE: Self::Error;
@@ -152,7 +154,7 @@ On `pc` the same checks run on NVMe, behind a guard, since that board can meet a
 
 `memmap_test` prints each section (the output is in @crate-bare), and `check_memmap` verifies that each starts on its alignment, that they are in order without overlap, and that the ones the script sizes have that size. Then eight *witnesses*, one address of each kind, must be where they belong:
 
-#srcfile("kernels/coop/src/main.rs", lines: ((424, 433),))[```rust
+#srcfile("kernels/coop/src/main.rs", lines: ((427, 436),))[```rust
 let witnesses = [
     ("a function", memmap_test as fn(Framebuffer) as usize, ".text", 1),
     ("a constant static", &raw const CONSTANT as usize, ".rodata", 1),
@@ -184,7 +186,7 @@ PASS: 7 sections in order and aligned; 8 addresses where they should be
 
 The same takes and gives go to both of `green-tea-pool`'s pools (@crate-pool). A slot given back twice breaks `give`'s contract on purpose:
 
-#srcfile("kernels/coop/src/main.rs", lines: ((531, 534),))[```rust
+#srcfile("kernels/coop/src/main.rs", lines: ((534, 537),))[```rust
 let slot = base + 7 * POOL_SLOT;
 let _ = unsafe { pool.give(slot) };
 let second_give = unsafe { pool.give(slot) };
@@ -630,8 +632,8 @@ the clerk's second record is inside the logger's buffer: true
 Eighteen kernels, one binary, and a line that says `PASS`. @crate-preempt takes the `yield_now` away.
 // chapter-status:begin
 // stage: research-done
-// revision: 5
-// body: d3d5fdffa046
+// revision: 6
+// body: f6a8fd657633
 // activity: 2026-11-22 | r4 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r4 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

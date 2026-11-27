@@ -112,15 +112,15 @@ host tests: 605 passed, 0 failed, 0 ignored
 ```
 ]
 
-The kernels judge themselves. Each prints a line starting with `PASS:` or `FAIL:`, and `xtask` reads it from the serial log. @app-kernels lists all 30. Twenty-nine of them make 78 runs across the three architectures, and all 30 run on the `pc` board. In release builds, `overflow` fails on riscv64 and x86_64 at #raw(pinned) (@app-issues).
+The kernels judge themselves. Each prints a line starting with `PASS:` or `FAIL:`, and `xtask` reads it from the serial log. @app-kernels lists all 30. Twenty-nine of them make 78 runs across the three architectures, and all 30 run on the `pc` board.
 
 == Conventions in this report
 
 Every listing is from commit #raw(pinned), with its file and line numbers in the bar above it. Lines may be cut, which is marked `// …`, and nothing else is changed. Numbered badges refer to the notes under a listing. Every output is from a recorded run, and lines may be left out of it. @app-method says how both are checked.
 // chapter-status:begin
 // stage: research-done
-// revision: 6
-// body: 8d46ba866b37
+// revision: 7
+// body: 1f4a65ea42fe
 // activity: 2026-11-22 | r4 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r4 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

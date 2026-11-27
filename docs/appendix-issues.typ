@@ -49,7 +49,6 @@ Writing the chapters on the crates added since `aecf66f` turned up these problem
 - *A realtime sleeper on `pc` can wake late* (from reading). The board's idle wait arms its own backup timer, 2 ms with a USB keyboard and 50 ms without, over the runtime's deadline (@crate-rt-bare).
 - *`green-tea-rt` is constant-time only in choosing the next task.* Registering a task, signalling an event and recomputing priorities scan every slot, some of them with interrupts off (@crate-rt).
 - *The `rt` kernel's `PASS` line says "transitive inheritance"*, but the kernel exercises one level of it. The chain is checked only by host tests (@crate-rt-kernel).
-- *The `overflow` kernel fails in release builds on riscv64 and x86_64.* The task overflows its stack into the guard page, as it should, but on the way to reporting it the kernel panics with "a Global was borrowed reentrantly or concurrently", from the borrow check that `7ae7dbc` added. Debug builds pass, and CI runs only debug builds, so CI didn't see it (@app-kernels).
 - *`Global`'s borrow check can fire under preemption* (from reading). The `preempt` kernel reads a `Global` from a task with interrupts on, and the timer's hook uses the same one. A tick inside that read would make the hook's access panic. The window is a few instructions in each 100 ms slice, and no recorded run has hit it (@crate-scheduler-preempt).
 - *Two host tests of `green-tea-bare` never run.* The crate is `test = false`, so the tests in `timer_caps.rs` aren't built.
 - *The latency histogram's tests never run.* `kernels/latency` is a binary with `test = false`, so its three tests aren't built. Every TSC gap counts, with no threshold, and the SMI counter isn't read (@crate-latency).
@@ -70,7 +69,7 @@ Writing the chapters on the crates added since `aecf66f` turned up these problem
 
 === Fixed since `aecf66f`
 
-Six commits after the report's previous version repaired problems that no list here had recorded. Each chapter describes the code as it is now.
+Six commits after the report's previous version repaired problems that no list here had recorded, and a seventh repaired one that this version found. Each chapter describes the code as it is now.
 
 #dtable(columns: (auto, 1fr), ("Commit", "What changed"),
   [`7ae7dbc`], [`Global`, the kernel's stand-in for thread-local state, has an atomic borrow flag. An access while a value is borrowed, from an interrupt handler or by reentry, panics instead of racing (@crate-bare).],
@@ -79,6 +78,7 @@ Six commits after the report's previous version repaired problems that no list h
   [`f12a496`], [A Lisp evaluation that fails pops the roots it pushed, so a caller's own roots survive the error (@crate-lisp).],
   [`76ab391`], [`green-tea-v1` tasks are pinned, so a task whose address is in its saved registers can't move (@crate-v1).],
   [`2c427fb`], [The page-fault handlers on riscv64 and x86_64 work the heap's first page table out of the heap's range, instead of reading a `Global` that the interrupted code might be holding.],
+  [`673716c`], [The `overflow` test keeps its depth in an atomic. In release builds the task faulted on its guard page while holding `DEPTH`'s borrow, and the handler's read of it panicked (@crate-coop).],
 )
 
 == Found at `7898396`, and how each was resolved
@@ -224,8 +224,8 @@ Writing the first version of this report turned up these 73 defects, from unsoun
 )
 // chapter-status:begin
 // stage: research-done
-// revision: 6
-// body: abb7b6cf13f5
+// revision: 7
+// body: f3c32fc901d4
 // activity: 2026-11-22 | r4 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r4 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

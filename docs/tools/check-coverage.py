@@ -2,7 +2,7 @@
 """Lists what the pinned commit has and the report doesn't name: crates, modules, public items,
 kernels, Lisp programs, xtask commands. Usage: python3 -I docs/tools/check-coverage.py [crate ...]"""
 import glob, os, re, subprocess, sys
-PIN = "f2f11f5"
+PIN = "673716c"
 docs = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 git = lambda *a: subprocess.run(["git", *a], capture_output=True, text=True, check=True, cwd=docs).stdout
 files = git("ls-tree", "-r", "--name-only", PIN, "--full-tree").split("\n")

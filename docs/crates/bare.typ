@@ -469,7 +469,7 @@ A fault in a guard page reaches `stack::overflowed`, which panics, or calls what
 #output(title: "cargo xtask kernel --kernel overflow --target riscv64")[
 ```
 overflowing a 16 KiB task stack
-PASS: overflowed after 26 frames, into the task's guard page at 0x80a05fe0
+PASS: overflowed after 26 frames, into the task's guard page at 0x80a05fb0
 ```
 ]
 
@@ -1044,8 +1044,8 @@ The profile also closes doors that a protected kernel can't keep shut without an
 Four boards, one trait, and the parts of a kernel. @crate-scheduler-coop builds tasks out of them.
 // chapter-status:begin
 // stage: research-done
-// revision: 7
-// body: 257f231c57a1
+// revision: 8
+// body: 7497a98f0279
 // activity: 2026-11-22 | r4 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r4 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end

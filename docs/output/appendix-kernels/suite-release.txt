@@ -3,16 +3,16 @@ ok    coop-riscv64    57 switches, as expected
 ok    coop-aarch64    57 switches, as expected
 ok    coop-x86_64     57 switches, as expected
 ok    protected-x86_64 user exit, syscall checks, kernel/port/page isolation and fault cleanup
-ok    rt-riscv64      fixed priorities, admission, timer wakeup, transitive inheritance; max interrupts-off 5209 ticks
-ok    rt-aarch64      fixed priorities, admission, timer wakeup, transitive inheritance; max interrupts-off 41730 ticks
-ok    rt-x86_64       fixed priorities, admission, timer wakeup, transitive inheritance; max interrupts-off 90642 ticks
-ok    preempt-riscv64 39 preemptions; every busy worker ran in several slices, and the sleeper used 3 ms of CPU in 70 wakeups
-ok    preempt-aarch64 42 preemptions; every busy worker ran in several slices, and the sleeper used 8 ms of CPU in 70 wakeups
-ok    preempt-x86_64  38 preemptions; every busy worker ran in several slices, and the sleeper used 3 ms of CPU in 70 wakeups
+ok    rt-riscv64      fixed priorities, admission, timer wakeup, transitive inheritance; max interrupts-off 12500 ticks
+ok    rt-aarch64      fixed priorities, admission, timer wakeup, transitive inheritance; max interrupts-off 411950 ticks
+ok    rt-x86_64       fixed priorities, admission, timer wakeup, transitive inheritance; max interrupts-off 630960 ticks
+ok    preempt-riscv64 43 preemptions; every busy worker ran in several slices, and the sleeper used 9 ms of CPU in 70 wakeups
+ok    preempt-aarch64 42 preemptions; every busy worker ran in several slices, and the sleeper used 14 ms of CPU in 70 wakeups
+ok    preempt-x86_64  40 preemptions; every busy worker ran in several slices, and the sleeper used 9 ms of CPU in 70 wakeups
 ok    latency-x86_64  8192 samples with requested ApicCountdown, active ApicCountdown; histogram timings are measurements, not guaranteed bounds
 ok    latency-deadline-x86_64 8192 samples with requested TscDeadline, active ApicCountdown; histogram timings are measurements, not guaranteed bounds
-FAIL  overflow-riscv64 kernel panicked: panicked at green-tea-bare/src/global.rs:73:9:
-FAIL  overflow-x86_64 kernel panicked: panicked at green-tea-bare/src/global.rs:73:9:
+ok    overflow-riscv64 overflowed after 56 frames, into the task's guard page at 0x80805fa8
+ok    overflow-x86_64 overflowed after 56 frames, into the task's guard page at 0x805f88
 ok    disk-riscv64    read 64 sectors over virtio-MMIO, and wrote one back
 ok    disk-aarch64    read 64 sectors over virtio-MMIO, and wrote one back
 ok    disk-x86_64     read 64 sectors over virtio-PCI, and wrote one back
@@ -54,9 +54,9 @@ ok    smr-x86_64      an interrupted pop corrupted its stack when nodes were fre
 ok    gen-riscv64     seven programs on two generations: 7632 of 47009 objects left the nursery alive, and nothing was left
 ok    gen-aarch64     seven programs on two generations: 7632 of 47009 objects left the nursery alive, and nothing was left
 ok    gen-x86_64      seven programs on two generations: 7632 of 47009 objects left the nursery alive, and nothing was left
-ok    incremental-riscv64 212 cycles in 61497 steps of at most 28 units lost nothing; then 985 ticks of the timer
-ok    incremental-aarch64 212 cycles in 61497 steps of at most 28 units lost nothing; then 889 ticks of the timer
-ok    incremental-x86_64 212 cycles in 61497 steps of at most 28 units lost nothing; then 1330 ticks of the timer
+ok    incremental-riscv64 212 cycles in 61497 steps of at most 28 units lost nothing; then 1525 ticks of the timer
+ok    incremental-aarch64 212 cycles in 61497 steps of at most 28 units lost nothing; then 1332 ticks of the timer
+ok    incremental-x86_64 212 cycles in 61497 steps of at most 28 units lost nothing; then 1490 ticks of the timer
 ok    shell-riscv64   1000 commands made 8000 heap allocations and freed them all, or none from an arena that peaked at 368
 ok    shell-aarch64   1000 commands made 8000 heap allocations and freed them all, or none from an arena that peaked at 368
 ok    shell-x86_64    1000 commands made 8000 heap allocations and freed them all, or none from an arena that peaked at 368

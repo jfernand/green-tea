@@ -3,7 +3,7 @@
 # docs/output/<crate>/. Usage: docs/record.sh [crate ...] (default: every docs/record.d/*.sh)
 # REPORT_WORK is a private directory for the export and the build (default: a new temp dir).
 set -euo pipefail
-PIN=f2f11f5
+PIN=673716c
 DOCS=$(cd "$(dirname "$0")" && pwd)
 WORK=${REPORT_WORK:-$(mktemp -d)}
 export SRC=$WORK/src

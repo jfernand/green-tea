@@ -37,7 +37,7 @@
   [`latency-deadline`], [latency], [The same, asking for TSC-deadline mode first and saying why it falls back. x86_64],
 )
 
-The whole suite, in release and headless, under the default limit of half the host's CPUs, passes 76 of the 78. `overflow` fails on riscv64 and x86_64: the kernel panics in `Global`'s borrow check after the overflow reaches the guard page. It passes in debug builds, which are what CI runs (@app-issues). The first lines of the summary:
+The whole suite, in release and headless, under the default limit of half the host's CPUs, passes all 78. Until `673716c`, `overflow` failed in release on riscv64 and x86_64, and passed in debug builds, which are what CI runs (@crate-coop, @app-issues). The first lines of the summary:
 
 #output(title: "cargo xtask kernel --release --headless")[
 ```
@@ -45,15 +45,12 @@ The whole suite, in release and headless, under the default limit of half the ho
 ok    coop-riscv64    57 switches, as expected
 ok    coop-aarch64    57 switches, as expected
 ok    coop-x86_64     57 switches, as expected
-…
-FAIL  overflow-riscv64 kernel panicked: panicked at green-tea-bare/src/global.rs:73:9:
-FAIL  overflow-x86_64 kernel panicked: panicked at green-tea-bare/src/global.rs:73:9:
 ```
 ]
 
 == On the pc board
 
-`cargo xtask kernel --board pc` runs all 30 on x86_64, with `disk` on an NVMe drive. `smp`, `shard` and `smr` again get four CPUs. A test is named on the kernel's command line by GRUB, in place of the fw_cfg file, and the shell kernels get their input over a socket once the banner has appeared (@crate-xtask). 29 of the 30 pass, under QEMU with UEFI firmware, and `overflow` fails in release as it does on `q35`. The first lines of the summary, in release and with one virtual CPU running at a time:
+`cargo xtask kernel --board pc` runs all 30 on x86_64, with `disk` on an NVMe drive. `smp`, `shard` and `smr` again get four CPUs. A test is named on the kernel's command line by GRUB, in place of the fw_cfg file, and the shell kernels get their input over a socket once the banner has appeared (@crate-xtask). All 30 pass, under QEMU with UEFI firmware. The first lines of the summary, in release and with one virtual CPU running at a time:
 
 #output(title: "cargo xtask kernel --release --headless --board pc --jobs 1")[
 ```
@@ -65,8 +62,8 @@ ok    coop-x86_64     57 switches, as expected
 @crate-coop, @crate-preempt, @crate-shell, @crate-black, @crate-rt-kernel and @crate-latency describe each in detail.
 // chapter-status:begin
 // stage: research-done
-// revision: 5
-// body: 77488e09cfcc
+// revision: 6
+// body: 04a2001dc1ca
 // activity: 2026-11-22 | r4 | stage | green-tea | note | tracking started at early-draft
 // activity: 2026-11-23 | r4 | stage | green-tea | note | early-draft -> research-done: not yet reviewed by Javier
 // chapter-status:end
