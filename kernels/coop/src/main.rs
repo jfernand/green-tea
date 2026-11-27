@@ -46,7 +46,7 @@ mod tlsf;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec;
-use core::sync::atomic::AtomicUsize;
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 /// Called by the platform's `_start`, on the boot stack, with .bss zeroed.
 #[unsafe(no_mangle)]
@@ -148,9 +148,12 @@ fn worker(mut painter: Painter, column: usize) {
 // until its stack runs out. Passing needs the fault, and at an address in that task's
 // own guard page: without guard pages it would run on into the next slot down, silently.
 
-/// The overflowing task's guard page, and how deep it got.
+/// The overflowing task's guard page, and how deep it got. The depth is an atomic, not a
+/// `Global`: the fault can come at any instruction of `recurse`. In a release build the
+/// first write to a new frame is the borrow guard of `DEPTH.set`, made after the borrow
+/// flag is set, so the handler would find `DEPTH` still borrowed.
 static GUARD: Global<(usize, usize)> = Global::new((0, 0));
-static DEPTH: Global<u64> = Global::new(0);
+static DEPTH: AtomicU64 = AtomicU64::new(0);
 
 fn overflow_test(fb: Framebuffer) {
     if !Board::GUARD_PAGES {
@@ -161,7 +164,7 @@ fn overflow_test(fb: Framebuffer) {
     SCREEN.set(GlobalPtr::new(&fb as *const Framebuffer as *mut Framebuffer));
     stack::on_overflow(|addr| {
         let (start, end) = GUARD.get();
-        let depth = DEPTH.get();
+        let depth = DEPTH.load(Ordering::Relaxed);
         // SAFETY: `overflow_test`'s boot-stack frame remains active until `run` returns or
         // this handler halts, and the framebuffer handle isn't mutated concurrently.
         if let Some(fb) = unsafe { SCREEN.get().as_ptr().as_ref() } {
@@ -192,7 +195,7 @@ fn overflow_test(fb: Framebuffer) {
 /// that stays live across the call, so the recursion can't become a loop.
 #[inline(never)]
 fn recurse(depth: u64) -> u64 {
-    DEPTH.set(depth);
+    DEPTH.store(depth, Ordering::Relaxed);
     let frame = core::hint::black_box([depth as u8; 256]);
     if depth == u64::MAX {
         return 0;
